@@ -4,7 +4,7 @@
 
 > **먼저 알아둘 점**
 > - 홈택스 명령은 현재 버전에서 **실서버 검증 전**입니다. 조회는 결과를 직접 대조하며 쓰고, 세금계산서 **발급은 실제 발급**이므로 특히 주의하세요.
-> - 하나은행은 **로그인·조회·이체를 지원하지 않습니다.** 지금 가능한 것은 오프라인 계약 변환과 로그인 nonce 서명뿐입니다. → [하나은행](#하나은행)
+> - 하나은행은 공동인증서 로그인과 **읽기 전용 조회**(계좌·거래내역·보안매체 상태)를 지원합니다. 이체, OneSign(하나인증서) 로그인, 인증서 발급·등록은 아직 `fin`에 이전되지 않았습니다. → [하나은행](#하나은행)
 
 ## 목차
 
@@ -42,7 +42,7 @@ fin cert joint import --name personal --cert /path/to/signCert.der --key /path/t
 - `--name`은 별칭입니다. 영문자·숫자로 시작하고 `_ . -`를 쓸 수 있으며 64자까지입니다. **인증서마다 다른 별칭**을 씁니다. 같은 별칭이나 이미 가져온 같은 인증서는 거부됩니다(`credential_name_exists`, `certificate_already_imported`).
 - PFX 안에 서명용 인증서가 여러 개면 `--pfx-index 0`처럼 번호(0부터)를 지정합니다. 번호는 금고에 기록되어 이후 다시 지정하지 않습니다.
 - NPKI의 암호 규칙은 `--compatibility hana`(기본) 또는 `hometax`로 고릅니다. 홈택스에서 쓸 인증서면 `hometax`를 붙입니다. 가져올 때 복호화를 검증하므로 잘못 고르면 저장 없이 오류가 납니다.
-- 가져올 때 인증서와 개인키가 서로 맞는지 로컬에서 확인합니다. 서버와는 통신하지 않습니다. **유효기간은 확인하지 않습니다.** 원본 파일은 수정하지 않습니다.
+- 가져올 때 인증서와 개인키가 서로 맞는지 로컬에서 확인합니다. 서버와는 통신하지 않습니다. **유효기간은 확인하지 않습니다.** 가져온 파일은 수정하지 않습니다.
 
 ### 확인
 
@@ -59,7 +59,7 @@ fin cert show personal     # 비밀번호로 열어 인증서 정보와 유효�
 fin cert export personal --output /path/to/new-export
 ```
 
-가져온 파일을 **없는 새 디렉터리**에 원본 그대로 복원합니다. NPKI는 `signCert.der`와 `signPri.key`, PFX는 `certificate.pfx`가 만들어지며 PFX 내부 보호 형식도 그대로입니다. 복원된 파일은 개인키가 들어 있으니 용도가 끝나면 안전하게 지우세요.
+가져온 파일을 **없는 새 디렉터리**에 가져온 그대로(바이트 단위로) 복원합니다. NPKI는 `signCert.der`와 `signPri.key`, PFX는 `certificate.pfx`가 만들어지며 PFX 내부 보호 형식도 그대로입니다. 복원된 파일은 개인키가 들어 있으니 용도가 끝나면 안전하게 지우세요.
 
 ### 프로필: 기관별 인증서 선택
 
@@ -78,26 +78,117 @@ fin profile list
 
 ## 하나은행
 
-**로그인·조회·이체는 지원하지 않습니다.** 서버에 접속하는 하나은행 명령은 이 패키지에 없습니다. 기존 업무 실행기(로그인·계좌·이체·OTP·인증서 발급)는 연구 저장소의 고정 기준본에 보관되어 있고 `fin hana`에 이전되지 않았습니다. 지금 `fin hana`는 서버와 통신하지 않는 오프라인 도구만 제공합니다.
+`fin hana`는 공동인증서로 로그인해 계좌·거래내역·보안매체 상태를 읽는 **읽기 전용 조회**와 서버와 통신하지 않는 오프라인 도구를 제공합니다.
 
-| 명령 | 입력 | 하는 일 |
+| 기능 | 명령 | 통신 |
 | --- | --- | --- |
-| `fin hana plan` | 없음 | 로그인 계약(요청 순서·헤더·본문 필드)과 이전 범위를 출력합니다. 분석 자료이며 실서버 검증 전입니다. |
-| `fin hana sign-login` | `--nonce`, `--output`, `--profile` 또는 `--credential` | 금고의 인증서로 서버 nonce를 CMS 서명해 DER 파일로 저장합니다. |
-| `fin hana joint-cert-tbs` | stdin JSON `{"nnce": "..."}` | 서명할 문자열(`delfinoNonce=...&login=true`)을 만듭니다. |
-| `fin hana joint-cert-body` | stdin JSON `signed_data`, `push_token`, `fakefinder_install_id` | 공동인증서 로그인 요청 본문을 만듭니다. |
-| `fin hana login-body` | stdin JSON `user_id`, `password_enc`, `push_token`, `fakefinder_install_id` | 아이디·비밀번호 로그인 요청 본문을 만듭니다. |
-| `fin hana encode-header` / `decode-header` | stdin | 하나은행 요청 헤더 JSON ↔ 인코딩 문자열 변환. |
+| 세션 만들기 | `session new` | 없음 |
+| 앱 인증 | `session authenticate` | `--send` |
+| 공동인증서 로그인 | `login` | `--send` |
+| 메인 계좌 목록 | `accounts` | `--send` |
+| 이체 내역·상세·원장 | `inquiry history` / `detail` / `ledger` | `--send` |
+| 일반 원화 계좌 거래내역 | `history clock` / `account` / `page` / `detail` / `export` | `detail`·`export`는 없음, 나머지 `--send` |
+| 한도·보안매체·OTP 상태 | `security` + `limits`, `limit-exception`, `security-media`, `otp`, `otp-accident`, `mobile-otp` | `--send` |
+| 로그인 연장 | `session extend` | `--send` |
+| 오프라인 도구 | `plan`, `sign-login`, `encode-header`, `decode-header`, `joint-cert-tbs`, `joint-cert-body`, `login-body` | 없음 |
 
-### 로그인 nonce 서명
+**이 패키지에 없는 것:** 이체(송금), OneSign(하나인증서) 로그인·가입, 인증서 발급·등록·복사, 금융인증서 발급, OTP·한도 변경입니다. 이 명령들은 이전 전의 개인용 하나은행 CLI(`hana`)에 있으며 `fin hana`로 아직 옮기지 않았습니다.
+
+**검증 상태:** 이 패키지의 테스트는 합성 자료와 가짜 전송 계층만 사용하므로 서버에는 접속하지 않습니다. 같은 절차는 이전 전의 CLI에서 실서버로 확인한 기록이 있습니다(로그인 연장은 서버 수락을 확인하지 못했습니다). `fin hana`로 하는 첫 실행은 결과를 직접 대조하며 진행하세요.
+
+### 원칙
+
+- 은행에 연결하는 명령은 `--send` 없이 실행하면 **준비만** 하고 접속하지 않습니다(`network_used: false`). 같은 명령에 `--send`를 붙여야 전송합니다. 준비 후 입력이 바뀌었으면 전송하지 않습니다.
+- 요청은 **한 번만** 보냅니다. 자동 재시도, 자동 페이지 넘김, 로그인 갱신이 없습니다. 시도한 요청은 기록이 남아 같은 요청을 다시 보내지 않으며, 응답을 받지 못한 경우도 결과를 추정하지 않고 `failure.json`으로 남깁니다.
+- 결과의 `accepted`는 서비스가 그 요청을 받아들였는지를 뜻합니다. 저장된 로그인이 지금도 유효한지는 확인하지 않습니다(`session_current_validity: unverified`).
+- 종료코드는 `0`(준비 또는 서비스 수락), `1`(보낸 요청을 서비스가 받아들이지 않음), `2`(입력·기록 오류)입니다.
+- 세션과 요청·응답 원문은 `fin paths`의 데이터 위치 아래 `hana/sessions/<이름>/`에 `0600` 권한으로 저장됩니다. 조회의 실행 기록은 `hana/runs/<이름>/`에 남습니다. 세션 하나는 로그인 하나에 대응하며, 만료되면 새 세션을 만들어 처음부터 진행합니다.
+
+### 준비물
+
+1. **금고의 공동인증서:** [인증서 관리](#인증서-관리)로 가져오고 `fin profile set personal --service hana --cert personal`로 연결합니다.
+2. **앱 인증 프로필 파일:** 앱 인증 요청의 헤더 값을 담은 JSON입니다. 네 필드가 정확히 있어야 합니다.
+   ```json
+   {"system_header": {"CHNL_SYS_HDPT": {"...": "..."}},
+    "channel_header": {"CNL_HDPT": {"...": "..."}},
+    "secure_token": "앱 설정의 문자열",
+    "profile_provenance": {"source": "값을 얻은 곳"}}
+   ```
+   `system_header`는 서비스 전문 공통 필드(`TRMS_SYS_CD`, `CHNL_TYP_CD` 등), `channel_header`는 단말·앱 정보(OS 버전, 모델명, 화면 크기, User-Agent, 앱 이름·버전, 시간대 등), `secure_token`은 앱 설정에 들어 있는 상수입니다. 이 값들은 패키지에 들어 있지 않고 추측해서 채우지도 않으므로, 앱 인증에 성공했던 프로필을 그대로 지정합니다. 인증 자료가 들어 있으니 Git 저장소 밖에 두세요.
+3. **로그인 입력 파일:** `{"push_token": "...", "fakefinder_install_id": "...", "input_provenance": {"source": "..."}}`.
+
+### 로그인부터 계좌 조회까지
 
 ```sh
+fin hana session new --session main
+fin hana session authenticate --session main --profile-file /path/to/app-profile.json
+fin hana session authenticate --session main --profile-file /path/to/app-profile.json --send
+fin hana login --session main --profile personal --login-input /path/to/login-input.json
+fin hana login --session main --profile personal --login-input /path/to/login-input.json --send
+fin hana accounts --session main
+fin hana accounts --session main --send
+fin hana session list
+```
+
+- `session authenticate --send`는 register → first-access → access-token을 차례로 보내며, 서비스가 받아들이지 않은 단계에서 멈춥니다(`stopped_at`).
+- `login --send`는 nonce 요청 → 금고 인증서로 로컬 서명 → 로그인을 차례로 보냅니다. 인증서 비밀번호는 전송 직전에 물어보며(`--password-stdin` 가능) nonce를 요청하기 전에 인증서를 먼저 열어 확인합니다. 로그인이 수락되면 세션에 로그인 기록이 저장됩니다.
+- `accounts --send`는 메인 계좌 목록을 조회해 `account-selection.json`을 만듭니다. 이후 조회는 이 목록의 `index`(1부터)로 계좌를 고릅니다.
+- `session list`는 세션 이름과 앱 인증·로그인 기록 여부만 보여 줍니다(토큰은 출력하지 않음).
+
+### 거래내역 조회
+
+조회 조건 파일(`query.json`)을 만듭니다.
+
+```json
+{"account_index": 1, "start_date": "20260901", "end_date": "20260929"}
+```
+
+**이체 내역 (`inquiry`)** — 기간은 오늘(KST) 기준 최근 2년 이내여야 합니다.
+
+```sh
+fin hana inquiry history --session main --input query.json
+fin hana inquiry history --session main --input query.json --send
+fin hana inquiry history --session main --input query.json --previous <이전 기록 이름>   # 다음 페이지 준비
+fin hana inquiry detail  --session main --input query.json --previous <history 기록 이름> --row 1
+```
+
+**일반 원화 계좌 거래내역 (`history`)** — 서버 시각과 계좌 정보를 먼저 조회한 뒤 페이지를 넘깁니다. 조건 파일에 `direction`(`all`, `deposit`, `withdrawal`), `order`(`desc`, `asc`), `search`(25자 이내)를 더할 수 있습니다.
+
+```sh
+fin hana history clock   --session main --input query.json --send
+fin hana history account --session main --input query.json --send
+fin hana history page    --session main --input query.json --clock <clock 기록> --account-info <account 기록> --send
+fin hana history page    --session main --input query.json --clock <clock 기록> --account-info <account 기록> --previous <page 기록> --send
+fin hana history detail  --session main --input query.json --clock <clock 기록> --account-info <account 기록> --previous <page 기록> --row 1
+fin hana history export  --session main --previous <마지막 page 기록> --output /path/to/new-history.json
+```
+
+- 각 명령은 먼저 `--send` 없이 실행해 준비 결과를 확인하고, 출력의 `receipt_directory`가 다음 명령의 `--clock`, `--account-info`, `--previous`에 넣는 **기록 이름**입니다.
+- 다음 페이지는 저장된 응답의 커서에서만 만들어집니다. 마지막 페이지이거나 커서가 이상하면 준비 단계에서 멈춥니다.
+- `history detail`은 저장된 행에서 은행 조회 없이 상세를 만들 수 있는 경우가 있고, 그때는 통신하지 않습니다.
+- `history export`는 통신 없이 저장된 페이지를 `.json`과 같은 이름의 `.csv`로 내보냅니다. 중복 행은 지우지 않고, 수식으로 읽힐 수 있는 문자열 셀에는 `'`를 붙입니다. 한 시점의 스냅샷임을 보장하지는 않습니다(`atomic_snapshot_verified: false`).
+
+### 보안매체·한도 상태와 로그인 연장
+
+```sh
+fin hana security limits --session main --run limits-1
+fin hana security limits --session main --run limits-1 --send
+fin hana session extend --session main --run extend-1 --send
+```
+
+- `security`는 `limits`(이체한도), `limit-exception`, `security-media`, `otp`, `otp-accident`, `mobile-otp` 중 하나를 조회하며 상태를 바꾸지 않습니다. `--run` 이름은 준비와 전송에 같은 값을 쓰고, 결과는 `hana/runs/<이름>/observation.json`에 저장됩니다.
+- `session extend`는 저장된 로그인의 연장을 한 번 요청합니다. 새 `--run`에 `--send`를 붙이면 준비와 전송을 한 번에 합니다. 서버의 만료 시각은 추정하지 않으며 저장된 로그인 기록을 바꾸지 않습니다.
+
+### 오프라인 도구
+
+```sh
+fin hana plan
 fin hana sign-login --profile personal --nonce SERVER_NONCE --output /path/to/new-signature.der
 ```
 
-- nonce는 직접 확보한 값을 넣습니다. 자동으로 가져오지 않습니다.
-- 결과는 `signed: true`, `network_used: false`, `bank_accepted: null`입니다. **은행이 이 서명을 받아들였는지는 확인하지 않습니다.**
-- 서명 파일을 은행에 전송하거나 로그인을 완료하는 기능은 없습니다.
+- `plan`은 로그인 요청 순서와 이 패키지에 없는 항목을 출력합니다(접속 없음). 출력의 `live_verified: false`는 오프라인 조립 결과에 붙는 표시입니다.
+- `sign-login`은 사용자가 직접 확보한 nonce를 금고 인증서로 CMS 서명해 DER 파일로 저장합니다. 결과는 `signed: true`, `network_used: false`, `bank_accepted: null`이며 은행이 받아들였는지는 확인하지 않습니다.
+- `encode-header`, `decode-header`, `joint-cert-tbs`, `joint-cert-body`, `login-body`는 표준입력의 JSON·문자열을 요청 헤더·본문 형식으로 바꿉니다.
 
 ## 홈택스
 
@@ -112,7 +203,7 @@ fin runtime install hometax   # 고정된 npm 의존성을 사용자 데이터 �
 
 - Node.js 22.22.2 이상(22.x), 24.15 이상(24.x), 또는 26 이상과 npm.
 - 세금계산서 발급에는 JDK 17 이상.
-- Chromium은 필요하지 않습니다. `--cdp`는 이미 떠 있는 브라우저에 붙는 선택 옵션입니다.
+- 브라우저(Chromium 등)는 사용하지 않습니다. 로그인은 Node HTTP와 jsdom으로 처리합니다.
 
 ### 로그인
 
@@ -124,7 +215,8 @@ fin hometax login --profile personal --output /path/to/new-session.json --send
 - 인증서 비밀번호를 물어봅니다(`--password-stdin` 가능). `--timeout`(기본 180초)으로 대기 시간을 조절합니다.
 - 표준출력에는 요약(`branch`, `session_file`, `session_binding_observed`, `session_file_saved`)만 나오고, 세션은 `--output` 파일에 저장됩니다.
 - 판정은 서비스 응답 그대로입니다. 로그인이 `success`여도 후속 세션 바인딩을 관찰하지 못하면 경고가 붙습니다. 자동 재시도는 하지 않습니다.
-- 접속 없이 서명 요청만 미리 만들어 보려면 `fin hometax auth prepare-cert --profile personal --output /path/to/new-preparation.json`을 씁니다(`--send` 불필요, 네트워크 요청 0건).
+- 접속 없이 서명 요청만 미리 만들어 보려면 `fin hometax auth prepare-cert --profile personal --output /path/to/new-preparation.json`을 씁니다(`--send` 불필요, 네트워크 요청 0건). 두 명령 모두 `--app-version`(기본 `14.3`)으로 서비스에 알리는 앱 버전을 바꿀 수 있습니다.
+- 서버와 통신하지 않고 로그인 흐름을 검토하는 도구도 있습니다. `fin hometax auth replay {cert-register|cert-login|logout|qr-confirm|fido-auth} --input 응답.json`은 저장해 둔 응답 JSON에서 서비스의 성공·실패 분기를 재현하고, `auth encode-cert-callback`, `auth fido-context`, `auth cert-request`는 각각 `--input` JSON을 콜백 문자열·FIDO context·논리 요청으로 변환합니다(`--input` 생략 시 stdin).
 
 ### 세션 재사용
 
@@ -253,7 +345,7 @@ fin hometax invoice prepare --session S.json --input /path/to/draft.json --outpu
 fin hometax invoice amend --session S.json --approval-number 승인번호 --reason amount-change --input /path/to/changes.json --output /path/to/new-amend.json --send
 ```
 
-- `--reason`: `correction`(01), `amount-change`(02), `return`(03), `cancellation`(04), `local-credit`(05), `duplicate`(06). 서비스 코드도 허용합니다. `--approval-number`는 수정할 원본의 승인번호입니다.
+- `--reason`: `correction`(01), `amount-change`(02), `return`(03), `cancellation`(04), `local-credit`(05), `duplicate`(06). 서비스 코드도 허용합니다. `--approval-number`는 수정할 당초 계산서의 승인번호입니다.
 - `--input`은 선택 사항이며 `prepare`와 같은 형식에서 바꿀 항목만 넣습니다. 서비스 화면에서 잠긴 항목은 바꾸지 않고 경고를 남깁니다.
 - 이 명령도 미리보기에서 멈추며 발급하지 않습니다. `correction`(01)과 `local-credit`(05)은 서비스가 두 건(취소·재발급)으로 진행하며 결과 파일의 `document_count`가 `2`입니다. 발급하면 결과에 `cancellation_approval_number`와 `replacement_approval_number`가 나옵니다. 나머지는 한 건입니다.
 
@@ -281,6 +373,19 @@ fin hometax invoice issue --prepared /path/to/new-prepared.json --profile tax --
 | `issuance_completion_unobserved` | 발급 완료 여부를 관찰하지 못함. 실패로 단정하지 않음 |
 
 `issuance_completion_unobserved`처럼 결과가 불확실하면 **다시 발급하지 말고** `invoice list`나 `invoice detail`로 승인번호가 생겼는지 먼저 확인하세요. 같은 초안을 다시 시도하려 해도 표시 파일 때문에 막히며, 새 초안을 `prepare`로 다시 만들면 중복 발급될 수 있습니다.
+
+### 지원 범위와 검증 상태
+
+| 기능 | 상태 |
+| --- | --- |
+| 공동인증서 로그인 | RSA 인증서의 PFX 경로로 실서버 로그인에 성공했습니다. NPKI 파일 경로는 로컬 TLS 서버로만 검증했습니다. ID/비밀번호, 간편인증, FIDO, RSA가 아닌 인증서는 지원하지 않습니다. |
+| 세션 확인·갱신, 사용자·사업장, 세금 조회 | 실서버에서 성공을 확인했습니다. |
+| 신고 조회·접수증·신고서 저장 | 개인 종합소득세(2026년 6월 신고)에서만 실서버로 확인했습니다. 다른 세목과 서식은 확인 전입니다. |
+| 세금계산서 조회 | 실서버에서 성공을 확인했습니다(매출·매입). |
+| 세금계산서 초안·수정·발급 | 로컬 TLS 서버로만 검증했고 **실서버 발급은 검증하지 않았습니다.** 일반 과세, 사업자 간 거래, 공동인증서 경로만 다룹니다. 영세율·면세, 위수탁, 종사업장 선택, 휴폐업 구매자 안내, 개인 구매자, 금융인증서·간편인증 발급은 지원하지 않습니다. 수정 발급도 일반 과세·사업자 거래의 여섯 사유만 다루며, 서비스가 품목 4개 초과와 위수탁 거래의 수정을 막습니다. |
+| 신고·납부·현금영수증 | 지원하지 않습니다. |
+
+`tax dues`는 서비스 중지 시간대(00:00–06:59, 23:30–23:59)에 서비스가 중지 응답을 보내며, 업무 조회 전에 멈춥니다. 이는 로그인 실패나 납부 대상 0건이 아닙니다. 세션은 유지되므로 시간대를 피해 다시 실행하세요.
 
 ### 문제 해결
 
