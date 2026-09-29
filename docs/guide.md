@@ -90,7 +90,10 @@ fin profile list
 | 일반 원화 계좌 거래내역 | `history clock` / `account` / `page` / `detail` / `export` | `detail`·`export`는 없음, 나머지 `--send` |
 | 한도·보안매체·OTP 상태 | `security` + `limits`, `limit-exception`, `security-media`, `otp`, `otp-accident`, `mobile-otp` | `--send` |
 | 로그인 연장 | `session extend` | `--send` |
+| 하나인증서 vault 번들 | `onesign import` / `export` / `show` / `list` | 없음 |
 | 오프라인 도구 | `plan`, `sign-login`, `encode-header`, `decode-header`, `joint-cert-tbs`, `joint-cert-body`, `login-body` | 없음 |
+
+**하나인증서 vault 번들:** 다른 도구가 암호로 잠가 내보낸 하나인증서 vault 파일을 검증해 보관합니다. 로그인·서명에는 아직 쓰지 않으며, 형식과 주의 사항은 [OneSign vault 번들 형식](onesign-bundle.md)에 있습니다.
 
 **이 패키지에 없는 것:** 이체(송금), OneSign(하나인증서) 로그인·가입, 인증서 발급·등록·복사, 금융인증서 발급, OTP·한도 변경입니다. 이 명령들은 이전 전의 개인용 하나은행 CLI(`hana`)에 있으며 `fin hana`로 아직 옮기지 않았습니다.
 

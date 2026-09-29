@@ -19,6 +19,12 @@ def password(args):
             else getpass.getpass('인증서 비밀번호: ').encode())
 
 
+def passphrase(args):
+    if args.password_stdin:
+        return sys.stdin.buffer.readline().rstrip(b'\r\n').decode('utf-8')
+    return getpass.getpass('번들 암호: ')
+
+
 def credential(args):
     if args.profile:
         from finance_cli.core.profiles import resolve
@@ -59,6 +65,20 @@ def build():
     item.add_argument('--run', required=True, help='이번 연장의 새 기록 이름')
     item.add_argument('--send', action='store_true')
     session.add_parser('list', help='저장된 세션과 기록된 로그인 여부; 접속 없음')
+
+    onesign = sub.add_parser('onesign', help='하나인증서(OneSign) vault 번들 가져오기·내보내기; 접속 없음').add_subparsers(
+        dest='action', required=True)
+    item = onesign.add_parser('import', help='다른 도구가 내보낸 번들을 검증해 암호화된 채로 보관')
+    item.add_argument('--name', required=True)
+    item.add_argument('--bundle', type=Path, required=True)
+    item.add_argument('--password-stdin', action='store_true')
+    item = onesign.add_parser('export', help='보관한 번들을 새 파일로 복사(암호는 그대로)')
+    item.add_argument('--name', required=True)
+    item.add_argument('--output', type=Path, required=True)
+    item = onesign.add_parser('show', help='번들을 열어 인증서 지문·등록 상태 확인')
+    item.add_argument('--name', required=True)
+    item.add_argument('--password-stdin', action='store_true')
+    onesign.add_parser('list', help='보관한 번들 이름')
 
     item = sub.add_parser('login', help='공동인증서 로그인: nonce→금고 인증서 서명→로그인')
     item.add_argument('--session', required=True)
@@ -149,6 +169,15 @@ def dispatch(args):
         if args.action == 'extend':
             return extend.extend(args.session, args.run, send=args.send)
         return list_sessions()
+    if args.operation == 'onesign':
+        from . import onesign_bundle as bundle
+        if args.action == 'import':
+            return bundle.import_bundle(args.name, args.bundle, passphrase(args))
+        if args.action == 'export':
+            return bundle.export_bundle(args.name, args.output)
+        if args.action == 'show':
+            return bundle.show(args.name, passphrase(args))
+        return bundle.list_bundles()
     if args.operation == 'login':
         from . import login
         return login.login(args.session, credential(args), args.login_input,

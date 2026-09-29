@@ -13,7 +13,7 @@ def output(value):
 
 def capabilities():
     return {'schema_version': 1, 'services': {
-        'hana': {'offline': ['protocol', 'shared-certificate-login-signature'],
+        'hana': {'offline': ['protocol', 'shared-certificate-login-signature', 'onesign-vault-bundle'],
                  'live': ['app-authentication', 'joint-certificate-login', 'accounts', 'transfer-history-query',
                           'ledger-history', 'security-inquiry', 'login-extension'],
                  'not_included': ['transfers', 'OneSign login and enrollment', 'certificate issuance and registration',
