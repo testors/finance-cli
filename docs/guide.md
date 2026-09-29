@@ -210,7 +210,7 @@ fin runtime install hometax   # 고정된 npm 의존성을 사용자 데이터 �
 
 - Node.js 22.22.2 이상(22.x), 24.15 이상(24.x), 또는 26 이상과 npm.
 - 세금계산서 발급에는 JDK 17 이상.
-- 브라우저(Chromium 등)는 사용하지 않습니다. 로그인은 Node HTTP와 jsdom으로 처리합니다.
+- Chromium 같은 브라우저는 실행하지 않습니다. 다만 Node의 jsdom(DOM 에뮬레이터)이 홈택스가 내려주는 페이지 스크립트를 수정 없이 실행합니다. 로그인의 보안 본문과 화면 함수가 이 스크립트에 있어 현재는 Node·npm 없이 홈택스를 쓸 수 없습니다. 하나은행·모바일지로는 Node가 필요하지 않습니다.
 - 보고서 이미지 검사와 HTML 파일 생성은 Python/Pillow로 처리합니다. Pillow는 자동 설치되며 npm의 `pngjs`·`jpeg-js`는 필요하지 않습니다. 서비스 뷰어의 SVG 생성에는 계속 Node/jsdom이 필요합니다.
 
 ### 로그인
