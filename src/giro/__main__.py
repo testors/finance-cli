@@ -1,0 +1,257 @@
+"""JSON CLI, offline by default; fixed PIN-free probes only with --live."""
+import argparse
+from datetime import date, datetime
+import getpass
+import json
+from pathlib import Path
+import sys
+from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
+
+from .bills import TAX_TYPES, due_bills, normalize_detail, normalize_pages
+from .compat import loads
+from .errors import GiroError, ResponseError
+from .protocol import ENDPOINTS, auth_plan, request_plan
+
+
+def _load(path):
+    try:
+        text = sys.stdin.read() if path == "-" else Path(path).read_text(encoding="utf-8")
+        return loads(text)
+    except (OSError, UnicodeError, ValueError):
+        raise GiroError("UTF-8 JSON 입력을 읽을 수 없습니다.") from None
+
+
+def parser():
+    root = argparse.ArgumentParser(description="모바일지로 분석 CLI (기본 오프라인; 명시적 --live 초기 프로브만 통신)")
+    sub = root.add_subparsers(dest="command", required=True)
+    runtime = sub.add_parser("runtime", help="서버 배포용 로컬 점검; 기기 보안 검사/통신 아님")
+    runtime.add_subparsers(dest="action", required=True).add_parser("check", help="패키지 리소스·합성 암호·문자셋·시간대 점검")
+    api = sub.add_parser("api", help="인증/조회만 포함한 API 목록")
+    api.add_subparsers(dest="action", required=True).add_parser("list")
+    auth = sub.add_parser("auth", help="인증 순서 또는 로컬 PIN 코덱")
+    auth_sub = auth.add_subparsers(dest="action", required=True)
+    auth_sub.add_parser("plan", help="확인된 인증 흐름과 미해결 항목")
+    auth_sub.add_parser("login", help="미구현: 네트워크 요청 없이 오류 반환")
+    bootstrap = auth_sub.add_parser("bootstrap", help="PIN 없는 공개 서버 인증서 조회; 기본은 계획만 출력")
+    bootstrap.add_argument("--live", action="store_true", help="고정 HTTPS 경로에 단발 POST; 응답 전문/쿠키 저장 안 함")
+    cg_probe=auth_sub.add_parser('codeguard-bootstrap',help='PIN 없는 CMD101 단발 검사; 기본 계획만, CMD200/300 없음')
+    cg_probe.add_argument('--abi',required=True,choices=('arm64-v8a','armeabi-v7a','armeabi'),help='접속에 사용할 ABI; 서버 CPU와 독립적으로 지정')
+    cg_probe.add_argument('--live',action='store_true',help='고정 HTTPS 경로에 CMD101 GET 1회')
+    cg_challenge=auth_sub.add_parser('codeguard-challenge',help='PIN 없는 CMD101→200 검사; 기본 계획만, CMD300 없음')
+    cg_challenge.add_argument('--abi',required=True,choices=('arm64-v8a','armeabi-v7a','armeabi'),help='접속에 사용할 ABI; 서버 CPU와 독립적으로 지정')
+    cg_challenge.add_argument('--live',action='store_true',help='별도 승인 필요: CMD101 1회 후 CMD200 1회, 최대 GET 2회')
+    cg_challenge.add_argument('--inspect-material',action='store_true',help='추가 요청 없이 쿠키 값/세 번째 인증서/규칙 계획의 메모리 내 진단')
+    cg_challenge.add_argument('--locale',help='material 쿠키 처리에 필요한 명시적 Android 기본 locale 언어 (예: ko)')
+    rule = auth_sub.add_parser("inspect-rule", help="로컬 CodeGuard 규칙 복호화·연산 계획; 입력값/응답/토큰 출력 안 함")
+    rule.add_argument("--input", required=True, help="encoded_rule/encoded_challenge/app_info/version JSON 또는 -")
+    nonce = auth_sub.add_parser("inspect-nonce", help="로컬 nonce 산술 검사; 키/입력 digest/결과 출력 안 함")
+    nonce.add_argument("--input", required=True, help="key_hex/codes(문자열/null 배열) JSON 또는 -")
+    cert = auth_sub.add_parser("inspect-cert", help="로컬 수신자 인증서 선택·용도 부분검사; 신뢰 검증 아님")
+    cert.add_argument("--input", required=True, help="사용자가 준비한 공개 DER/PEM/CMS 파일; 원문 출력 안 함")
+    crl = auth_sub.add_parser('inspect-crl', help='로컬 발급자·서명·CRL 후보 부분검사; 전체 신뢰/폐지 검증 아님')
+    crl.add_argument('--target', required=True, help='대상 공개 인증서 DER/PEM/CMS')
+    crl.add_argument('--issuer', required=True, help='발급자 후보 공개 인증서 DER/PEM/CMS')
+    crl.add_argument('--crl', required=True, help='공개 CRL DER 파일')
+    crl.add_argument('--at', required=True, type=datetime.fromisoformat, help='명시적 시간대가 있는 검사 시각 ISO 8601')
+    crl.add_argument('--locale', required=True, help='대상 Android 기본 locale 언어, 예: ko')
+    path = auth_sub.add_parser('inspect-path', help='공개 인증서/CRL 경로의 오프라인 규칙 재생; 신뢰 자동 취득/설치 아님')
+    path.add_argument('--input', required=True, help='path/trust_anchor/crls/at/locale를 담은 로컬 JSON manifest 또는 -')
+    recipient = auth_sub.add_parser('inspect-recipient', help='명시적 공개 자료에서 발급자 탐색·필수 경로/CRL 검사; 접속/쓰기 없음')
+    recipient.add_argument('--input', required=True, help='대상 공개 인증서 DER/PEM/CMS')
+    recipient.add_argument('--trust-anchor', action='append', required=True, help='명시적 공개 신뢰 앵커; 반복 가능')
+    recipient.add_argument('--issuer', action='append', default=[], help='공개 발급자 후보; 반복 가능')
+    recipient.add_argument('--crl', action='append', default=[], help='공개 CRL DER; 반복 가능')
+    recipient.add_argument('--at', required=True, type=datetime.fromisoformat, help='시간대가 있는 검사 시각')
+    recipient.add_argument('--locale', required=True, help='대상 Android locale 언어')
+    ctl = auth_sub.add_parser('inspect-ctl', help='로컬 공개 CTL의 서명·포함 여부 검사; 신뢰 설치/로그인 아님')
+    ctl.add_argument('--input', required=True, help='공개 CMS SignedData CTL 파일')
+    ctl.add_argument('--target', required=True, help='CTL에서 찾을 공개 인증서 파일')
+    ctl.add_argument('--trust-anchor', action='append', required=True, help='명시적 공개 신뢰 앵커 인증서; 반복 가능')
+    ctl.add_argument('--at', required=True, type=datetime.fromisoformat, help='시간대가 있는 검사 시각')
+    ctl.add_argument('--locale', required=True, help='대상 Android locale 언어')
+    ldap = auth_sub.add_parser('inspect-ldap', help='로컬 공개 LDAP 응답 바이트 재생; 접속/신뢰 설치 안 함')
+    ldap.add_argument('--input', required=True, help='bind/첫 검색 결과/완료 응답을 이어 붙인 로컬 바이너리 파일')
+    ldap.add_argument('--uri', required=True, help='인증서의 LDAP URI; 파싱 문맥만 제공하며 접속하지 않음')
+    ldap.add_argument('--message-id', required=True, type=int, help='재생할 최초 요청 message ID')
+    ldap.add_argument('--locale', required=True, help='대상 Android locale 언어, 예: ko')
+    pin = auth_sub.add_parser("encode-pin", help="테스트용 로컬 변환; 로그인 아님, PIN을 인자로 받지 않음")
+    pin.add_argument("--key-file", required=True, help="사용자가 제공한 16바이트 키의 32자리 hex 파일")
+    request = sub.add_parser("request", help="오프라인 요청 스키마")
+    request.add_argument("endpoint", choices=tuple(ENDPOINTS))
+    bills = sub.add_parser("bills", help="복호화된 로컬 JSON에서 고지/기한 읽기")
+    bill_sub = bills.add_subparsers(dest="action", required=True)
+    for action in ("list", "due", "show"):
+        item = bill_sub.add_parser(action)
+        item.add_argument("--type", choices=TAX_TYPES, required=True)
+        item.add_argument("--input", required=True, help="로컬 JSON 파일 또는 표준입력(-)")
+        if action == "due":
+            item.add_argument("--within-days", type=int, default=7)
+            item.add_argument("--today", type=date.fromisoformat, help="기준일 YYYY-MM-DD; 기본 Asia/Seoul")
+            item.add_argument("--include-overdue", action="store_true")
+    return root
+
+
+def run(args):
+    if args.command == "runtime":
+        from .runtime import check_runtime
+        # Deployment diagnostics, never an application/authentication verdict.
+        return check_runtime(), 0
+    if args.command == "api":
+        return {"offline": True, "endpoints": [ep.describe() for ep in ENDPOINTS.values()]}, 0
+    if args.command == "request":
+        return request_plan(args.endpoint), 0
+    if args.command == "auth":
+        if args.action == "plan":
+            return auth_plan(), 0
+        if args.action == "login":
+            return {"error": "live_auth_unavailable", **auth_plan()}, 4
+        if args.action == "bootstrap":
+            from .bootstrap import plan, probe_server_cert
+            result = probe_server_cert() if args.live else plan()
+            return result, 2 if result['app_success'] is False else 0
+        if args.action=='codeguard-bootstrap':
+            from .codeguard_probe import plan,probe_cmd101
+            return (probe_cmd101(args.abi) if args.live else plan(args.abi)),0
+        if args.action=='codeguard-challenge':
+            from .codeguard_challenge_probe import plan,probe_challenge
+            if args.inspect_material:
+                options=dict(inspect_material=True,locale_language=args.locale)
+                return (probe_challenge(args.abi,**options) if args.live else plan(args.abi,**options)),0
+            return (probe_challenge(args.abi) if args.live else plan(args.abi)),0
+        if args.action == "inspect-rule":
+            from .codeguard_codec import derive_rule_plan
+            from .codeguard_rule import AnalysisLimit, NativeRuleError
+            document = _load(args.input)
+            fields = ('encoded_rule', 'encoded_challenge', 'app_info', 'version')
+            if not isinstance(document, dict) or any(document.get(k) is not None and not isinstance(document[k], str) for k in fields):
+                raise GiroError("로컬 규칙 입력은 문자열/null 필드로 이루어진 JSON 객체여야 합니다.")
+            result = {'offline': True, 'live_login_ready': False, 'server_token_generated': False,
+                      'analysis_status': 'rule_plan_only'}
+            try:
+                plan = derive_rule_plan(*(document.get(k) for k in fields))
+                result['plan'] = plan.describe()
+                return result, 0
+            except NativeRuleError as exc:
+                return {**result, 'analysis_status': 'native_stage_error', 'native_code': exc.native_code}, 2
+            except AnalysisLimit:
+                return {**result, 'analysis_status': 'unmodeled_memory_boundary'}, 0
+        if args.action == "inspect-nonce":
+            from .codeguard_codec import jni_modified_utf8
+            from .codeguard_nonce import cg_auth_code
+            from .codeguard_rule import AnalysisLimit
+            document = _load(args.input)
+            if (not isinstance(document, dict) or not isinstance(document.get('codes'), list)
+                    or any(v is not None and type(v) is not str for v in [document.get('key_hex'), *document['codes']])):
+                raise GiroError('로컬 nonce 입력은 key_hex(문자열/null), codes(문자열/null 배열) 객체여야 합니다.')
+            result = {'offline': True, 'network_attempted': False, 'live_login_ready': False,
+                      'server_token_generated': False, 'input_collection_implemented': False}
+            try:
+                cg_auth_code(jni_modified_utf8(document.get('key_hex')),
+                             [jni_modified_utf8(v) for v in document['codes']])
+                return {**result, 'analysis_status': 'arithmetic_completed', 'digest_inputs_consumed': 6,
+                        'dispatch_functions_implemented': 100}, 0
+            except AnalysisLimit:
+                return {**result, 'analysis_status': 'unmodeled_memory_boundary'}, 0
+        if args.action == "inspect-cert":
+            from .cert_factory import inspect_recipient, CertificateBackendLimit
+            try:
+                data = Path(args.input).read_bytes()
+            except OSError:
+                raise GiroError("인증서 입력 파일을 읽을 수 없습니다.") from None
+            try:
+                return inspect_recipient(data), 0
+            except CertificateBackendLimit as exc:
+                return {"offline": True, "analysis_status": "unmodeled", "message": str(exc),
+                        "certificate_validation_performed": False, "live_login_ready": False}, 0
+        if args.action == 'inspect-crl':
+            from .cert_crl import inspect_crl_candidate
+            if args.at.tzinfo is None:
+                raise GiroError('검사 시각에는 시간대가 필요합니다. 예: 2026-09-28T12:00:00+09:00')
+            try:
+                materials = [Path(path).read_bytes() for path in (args.target,args.issuer,args.crl)]
+            except OSError:
+                raise GiroError('공개 인증서/CRL 입력 파일을 읽을 수 없습니다.') from None
+            return inspect_crl_candidate(*materials,at=args.at,locale_language=args.locale), 0
+        if args.action == 'inspect-path':
+            from .cert_path import inspect_path_manifest
+            return inspect_path_manifest(_load(args.input)), 0
+        if args.action == 'inspect-recipient':
+            from .cert_pipeline import inspect_recipient_material
+            if args.at.tzinfo is None: raise GiroError('검사 시각에는 시간대가 필요합니다.')
+            try:
+                target=Path(args.input).read_bytes()
+                anchors=[Path(path).read_bytes() for path in args.trust_anchor]
+                issuers=[Path(path).read_bytes() for path in args.issuer]
+                crls=[Path(path).read_bytes() for path in args.crl]
+            except OSError:
+                raise GiroError('공개 인증서/CRL 입력 파일을 읽을 수 없습니다.') from None
+            return inspect_recipient_material(target,anchors,issuers,crls,at=args.at,locale_language=args.locale), 0
+        if args.action == 'inspect-ctl':
+            from .cert_ctl import inspect_ctl_candidate
+            if args.at.tzinfo is None: raise GiroError('검사 시각에는 시간대가 필요합니다.')
+            try:
+                data,target = Path(args.input).read_bytes(),Path(args.target).read_bytes()
+                anchors = [Path(path).read_bytes() for path in args.trust_anchor]
+            except OSError:
+                raise GiroError('공개 CTL/인증서 입력 파일을 읽을 수 없습니다.') from None
+            return inspect_ctl_candidate(data,target,anchors,at=args.at,locale_language=args.locale), 0
+        if args.action == 'inspect-ldap':
+            from .ldap_codec import inspect_responses
+            try: data = Path(args.input).read_bytes()
+            except OSError: raise GiroError('공개 LDAP 응답 파일을 읽을 수 없습니다.') from None
+            return inspect_responses(data,args.uri,message_id=args.message_id,locale_language=args.locale), 0
+        if not sys.stdin.isatty():
+            raise GiroError("PIN 입력은 에코 없는 대화형 터미널에서만 받습니다. 자동화 테스트는 Python 코덱을 사용하세요.")
+        from .crypto import encode_pin
+        try:
+            raw_key = Path(args.key_file).read_text(encoding="ascii").strip()
+            if len(raw_key) != 32:
+                raise ValueError()
+            key = bytes.fromhex(raw_key)
+        except (OSError, ValueError, UnicodeError):
+            raise GiroError("키 파일은 16바이트 키를 나타내는 32자리 hex여야 합니다.") from None
+        import warnings
+        with warnings.catch_warnings():
+            warnings.simplefilter("error", getpass.GetPassWarning)
+            try:
+                pin = getpass.getpass("테스트용 간편비밀번호 (6자리): ")
+            except (getpass.GetPassWarning, EOFError):
+                raise GiroError("안전한 PIN 입력 터미널을 열 수 없습니다.") from None
+        cipher = encode_pin(pin, key)
+        return {"offline": True, "live_login_verified": False, "pin_ciphertext": cipher}, 0
+    document = _load(args.input)
+    if args.action == "show":
+        return normalize_detail(document, args.type), 0
+    result = normalize_pages(document, args.type)
+    if args.action == "due":
+        try:
+            today = args.today or datetime.now(ZoneInfo("Asia/Seoul")).date()
+        except ZoneInfoNotFoundError:
+            return {**result, "as_of": None, "through": None,
+                    "include_overdue": args.include_overdue, "bills": None,
+                    "unfiltered_bills": result["bills"], "filter_applied": False,
+                    "filter_complete": False,
+                    "issues": result["issues"] + [
+                        "Asia/Seoul 시간대 자료 없음: 기한 필터 미수행; "
+                        "unfiltered_bills에 받은 목록 보존. tzdata 설치 또는 --today 지정 필요"]}, 0
+        result = due_bills(result, today=today, within_days=args.within_days, include_overdue=args.include_overdue)
+        return result, 0
+    return result, 0
+
+
+def main(argv=None):
+    args = parser().parse_args(argv)
+    try:
+        result, status = run(args)
+    except ResponseError as exc:
+        result, status = {"error": "response_error", "app_success": False,
+                          "response_code": exc.code, "callback_code": exc.callback_code,
+                          "error_info": exc.error_info, "origin": exc.origin, "message": str(exc)}, 2
+    except GiroError as exc:
+        result, status = {"error": "validation_error", "message": str(exc)}, 2
+    print(json.dumps(result, ensure_ascii=False, indent=2))
+    return status
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())

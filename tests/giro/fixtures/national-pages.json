@@ -1,0 +1,16 @@
+[
+  {
+    "responseCode": "000",
+    "pageNaviMap": {"currentPage": "1", "totalPage": "2", "totalCount": "2", "pageSize": "1"},
+    "paymentList": [
+      {"elecNo": "SYNTHETIC-001", "companyName": "가상 테스트 기관", "payMny": "12,340", "payLimitDate": "20260930"}
+    ]
+  },
+  {
+    "responseCode": "000",
+    "pageNaviMap": {"currentPage": "2", "totalPage": "2", "totalCount": "2", "pageSize": "1"},
+    "paymentList": [
+      {"elecNo": "SYNTHETIC-002", "companyName": "가상 테스트 기관", "payMny": "5,000", "payLimitDate": "20260920"}
+    ]
+  }
+]

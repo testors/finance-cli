@@ -1,0 +1,421 @@
+{
+  "entrypoints": {
+    "auth.server-cert": "kr/or/giro/android/net/query/etc/QryServerCert",
+    "auth.device-status": "kr/or/giro/android/net/query/home/QryDeviceRegStatus",
+    "auth.datetime": "kr/or/giro/android/net/query/service/common/QryDateTime",
+    "auth.pin": "kr/or/giro/android/net/query/home/QryGiroAppLogin",
+    "integrated.summary": "kr/or/giro/android/net/query/service/integrate/QryIntegratedQrySimple",
+    "national.list": "kr/or/giro/android/net/query/service/ntax/ntaxsearch/QryNtaxSearchQryBillList",
+    "national.detail": "kr/or/giro/android/net/query/service/ntax/ntaxsearch/QryNtaxSearchQryBillDetail",
+    "local.list": "kr/or/giro/android/net/query/service/localtax/localtaxsearch/QryLocaltaxQryBillList",
+    "local.detail": "kr/or/giro/android/net/query/service/localtax/localtaxsearch/QryLocaltaxQryBillDetail",
+    "customs.list": "kr/or/giro/android/net/query/service/ntax/tariff/QryTariffQryBillList",
+    "customs.detail": "kr/or/giro/android/net/query/service/ntax/tariff/QryTariffQryBillDetail"
+  },
+  "models": {
+    "kr/or/giro/android/net/query/etc/QryServerCert": {
+      "fields": {
+        "serverCert": "string"
+      },
+      "parent": "kr/or/giro/android/net/query/QryCommon"
+    },
+    "kr/or/giro/android/net/query/QryCommon": {
+      "fields": {
+        "CODE_RESPONSE": "string",
+        "appVersion": "string",
+        "deviceId": "string",
+        "errorInfo": {
+          "model": "kr/or/giro/android/model/ErrorInfo"
+        },
+        "httpResponseCode": "string",
+        "httpResponseMsg": "string",
+        "responseCode": "string",
+        "sessionInfo": {
+          "model": "kr/or/giro/android/model/SessionInfo"
+        },
+        "signedval": "string",
+        "ucpidval": "string"
+      }
+    },
+    "kr/or/giro/android/model/ErrorInfo": {
+      "fields": {
+        "errorCode": "string",
+        "errorMessage": "string",
+        "errorName": "string",
+        "errorType": "string",
+        "reponseMessage": "string"
+      }
+    },
+    "kr/or/giro/android/model/SessionInfo": {
+      "fields": {
+        "alertNum1": "string",
+        "alertNum2": "string",
+        "alertNum3": "string",
+        "alertStatus": "string",
+        "alertYn": "string",
+        "hasUIDInfoYn": "string",
+        "lastLoginTime": "string",
+        "mobile1": "string",
+        "mobile2": "string",
+        "mobile3": "string",
+        "payer": "string",
+        "showUIDInfoNoticeYn": "string",
+        "userId": "string",
+        "userType": "string",
+        "verifyBubinNoYn": "string"
+      }
+    },
+    "kr/or/giro/android/net/query/home/QryDeviceRegStatus": {
+      "fields": {
+        "certLoginYn": "string",
+        "defaultLoginType": "string",
+        "deviceRegYn": "string",
+        "deviceUniqNo": "string",
+        "fidoLoginYn": "string",
+        "finCertLoginYn": "string",
+        "memberType": "string",
+        "pinLoginYn": "string",
+        "saupNo": "string"
+      },
+      "parent": "kr/or/giro/android/net/query/QryCommon"
+    },
+    "kr/or/giro/android/net/query/service/common/QryDateTime": {
+      "fields": {
+        "currentDateTime": "string"
+      },
+      "parent": "kr/or/giro/android/net/query/QryCommon"
+    },
+    "kr/or/giro/android/net/query/home/QryGiroAppLogin": {
+      "fields": {
+        "billPushRegDatetime": "string",
+        "billPushYn": "string",
+        "demandOnlyYn": "string",
+        "deviceUniqNo": "string",
+        "fidoAaid": "string",
+        "fidoCertFailCo": "string",
+        "fidoCertRespCode": "string",
+        "fidoCertRespMsg": "string",
+        "fidoCompToken": "string",
+        "fidoDelReqMsg": "string",
+        "fidoSignPubkey": "string",
+        "fidoTraceNo": "string",
+        "hasMultipleAccounts": "string",
+        "paypinChangeDate": "string",
+        "paypinErrorCount": "string",
+        "pin": "string",
+        "pushId": "string",
+        "작업구분": "string"
+      },
+      "parent": "kr/or/giro/android/net/query/QryCommon",
+      "defaults": {
+        "작업구분": "로그인"
+      }
+    },
+    "kr/or/giro/android/net/query/service/integrate/QryIntegratedQrySimple": {
+      "fields": {
+        "env": {
+          "model": "kr/or/giro/android/model/IntegratedMap"
+        },
+        "fund": {
+          "model": "kr/or/giro/android/model/IntegratedMap"
+        },
+        "juminNo": "string",
+        "local": {
+          "model": "kr/or/giro/android/model/IntegratedMap"
+        },
+        "localtax": {
+          "model": "kr/or/giro/android/model/IntegratedMap"
+        },
+        "maritime": {
+          "model": "kr/or/giro/android/model/IntegratedMap"
+        },
+        "nontax": {
+          "model": "kr/or/giro/android/model/IntegratedMap"
+        },
+        "ntax": {
+          "model": "kr/or/giro/android/model/IntegratedMap"
+        },
+        "nts": {
+          "model": "kr/or/giro/android/model/IntegratedMap"
+        },
+        "patent": {
+          "model": "kr/or/giro/android/model/IntegratedMap"
+        },
+        "penalty": {
+          "model": "kr/or/giro/android/model/IntegratedMap"
+        },
+        "tariff": {
+          "model": "kr/or/giro/android/model/IntegratedMap"
+        },
+        "total": {
+          "model": "kr/or/giro/android/model/IntegratedMap"
+        },
+        "traffic": {
+          "model": "kr/or/giro/android/model/IntegratedMap"
+        },
+        "useUIDInfoYn": "string"
+      },
+      "parent": "kr/or/giro/android/net/query/QryCommon"
+    },
+    "kr/or/giro/android/model/IntegratedMap": {
+      "fields": {
+        "amount": "string",
+        "count": "string",
+        "respCode": "string"
+      }
+    },
+    "kr/or/giro/android/net/query/service/ntax/ntaxsearch/QryNtaxSearchQryBillList": {
+      "fields": {
+        "agreeUIDInfoSaveYn": "string",
+        "inputJuminNo": "string",
+        "isMemberOwnGoji": "string",
+        "isPayableDayTime": "string",
+        "isPayableDayTimeMsg": "string",
+        "juminNo": "string",
+        "lpPayAvailBankList": "string",
+        "page": "string",
+        "pageNaviMap": {
+          "model": "kr/or/giro/android/model/PageNaviMap"
+        },
+        "pageSize": "string",
+        "payCode": "string",
+        "paymentList": {
+          "list": "kr/or/giro/android/net/query/service/ntax/ntaxsearch/QryNtaxSearchQryBillList$PaymentData"
+        },
+        "serviceCode": "string",
+        "showUIDInfoNoticeYn": "string",
+        "useUIDInfoYn": "string"
+      },
+      "parent": "kr/or/giro/android/net/query/QryCommon"
+    },
+    "kr/or/giro/android/model/PageNaviMap": {
+      "fields": {
+        "currentPage": "string",
+        "endPage": "string",
+        "pageCount": "string",
+        "pageSize": "string",
+        "startPage": "string",
+        "totalCount": "string",
+        "totalPage": "string"
+      }
+    },
+    "kr/or/giro/android/net/query/service/ntax/ntaxsearch/QryNtaxSearchQryBillList$PaymentData": {
+      "fields": {
+        "companyName": "string",
+        "elecNo": "string",
+        "giroNo": "string",
+        "key": "string",
+        "payLimitDate": "string",
+        "payMny": "string",
+        "sortCode": "string",
+        "when": "string"
+      }
+    },
+    "kr/or/giro/android/net/query/service/ntax/ntaxsearch/QryNtaxSearchQryBillDetail": {
+      "fields": {
+        "autoIcheGojiMessage": "string",
+        "elecNo": "string",
+        "giroNo": "string",
+        "isAutoIcheGoji": "string",
+        "isCardPayableTime": "string",
+        "isCardPayableTimeMsg": "string",
+        "isMemberOwnGoji": "string",
+        "isPayableDayTime": "string",
+        "isPayableDayTimeMsg": "string",
+        "payCode": "string",
+        "paymentData": {
+          "model": "kr/or/giro/android/net/query/service/ntax/ntaxsearch/QryNtaxSearchQryBillDetail$PaymentData"
+        },
+        "serviceCode": "string",
+        "sortCode": "string",
+        "userFeeRate": "string",
+        "userFeeRateCheck": "string",
+        "userPayMaxMny": "string"
+      },
+      "parent": "kr/or/giro/android/net/query/QryCommon"
+    },
+    "kr/or/giro/android/net/query/service/ntax/ntaxsearch/QryNtaxSearchQryBillDetail$PaymentData": {
+      "fields": {
+        "cardYn": "string",
+        "companyName": "string",
+        "elecNo": "string",
+        "feeGroup": "string",
+        "giroNo": "string",
+        "key": "string",
+        "mnyEditYn": "string",
+        "name": "string",
+        "napseNo": "string",
+        "pay1date": "string",
+        "pay2date": "string",
+        "payInMny": "string",
+        "payMny": "string",
+        "payOutMny": "string",
+        "prePaidMny": "string",
+        "remainPayMny": "string",
+        "sortCode": "string",
+        "taxName": "string",
+        "when": "string"
+      }
+    },
+    "kr/or/giro/android/net/query/service/localtax/localtaxsearch/QryLocaltaxQryBillList": {
+      "fields": {
+        "agreeUIDInfoSaveYn": "string",
+        "convNapbuNo": "string",
+        "dutyPayerName": "string",
+        "giroNo": "string",
+        "inputJuminNo": "string",
+        "isCardPayableTime": "string",
+        "isCardPayableTimeMsg": "string",
+        "isMassPayable": "string",
+        "isMemberOwnGoji": "string",
+        "isPayableDayTime": "string",
+        "isPayableDayTimeMsg": "string",
+        "juminNo": "string",
+        "lpPayAvailBankList": "string",
+        "page": "string",
+        "pageNaviMap": {
+          "model": "kr/or/giro/android/model/PageNaviMap"
+        },
+        "pageSize": "string",
+        "payCode": "string",
+        "paymentList": {
+          "list": "kr/or/giro/android/net/query/service/localtax/localtaxsearch/QryLocaltaxQryBillList$PaymentData"
+        },
+        "serviceCode": "string",
+        "showUIDInfoNoticeYn": "string",
+        "sortCode": "string",
+        "sumTotalCount": "string",
+        "sumTotalPayMny": "string",
+        "useUIDInfoYn": "string"
+      },
+      "parent": "kr/or/giro/android/net/query/QryCommon"
+    },
+    "kr/or/giro/android/net/query/service/localtax/localtaxsearch/QryLocaltaxQryBillList$PaymentData": {
+      "fields": {
+        "cardYn": "string",
+        "certOnlyYn": "string",
+        "companyName": "string",
+        "elecNo": "string",
+        "giroNo": "string",
+        "gojiGubun": "string",
+        "payLimitDate": "string",
+        "payMny": "string",
+        "sortCode": "string",
+        "taxName": "string",
+        "when": "string"
+      }
+    },
+    "kr/or/giro/android/net/query/service/localtax/localtaxsearch/QryLocaltaxQryBillDetail": {
+      "fields": {
+        "autoIcheGojiMessage": "string",
+        "elecNo": "string",
+        "giroNo": "string",
+        "isAutoIcheGoji": "string",
+        "isCardPayableTime": "string",
+        "isCardPayableTimeMsg": "string",
+        "isMemberOwnGoji": "string",
+        "isPayableDayTime": "string",
+        "isPayableDayTimeMsg": "string",
+        "payCode": "string",
+        "paymentData": {
+          "model": "kr/or/giro/android/net/query/service/localtax/localtaxsearch/QryLocaltaxQryBillDetail$PaymentLocalDetail"
+        },
+        "serviceCode": "string",
+        "sortCode": "string"
+      },
+      "parent": "kr/or/giro/android/net/query/QryCommon"
+    },
+    "kr/or/giro/android/net/query/service/localtax/localtaxsearch/QryLocaltaxQryBillDetail$PaymentLocalDetail": {
+      "fields": {
+        "cardYn": "string",
+        "certOnlyYn": "string",
+        "companyName": "string",
+        "elecNo": "string",
+        "giroNo": "string",
+        "key": "string",
+        "name": "string",
+        "payLimitDate": "string",
+        "payMny": "string",
+        "sortCode": "string",
+        "taxCont": "string",
+        "taxName": "string",
+        "when": "string"
+      }
+    },
+    "kr/or/giro/android/net/query/service/ntax/tariff/QryTariffQryBillList": {
+      "fields": {
+        "agreeUIDInfoSaveYn": "string",
+        "inputJuminNo": "string",
+        "juminNo": "string",
+        "page": "string",
+        "pageNaviMap": {
+          "model": "kr/or/giro/android/model/PageNaviMap"
+        },
+        "pageSize": "string",
+        "paymentList": {
+          "list": "kr/or/giro/android/net/query/service/ntax/tariff/QryTariffQryBillList$PaymentData"
+        },
+        "showUIDInfoNoticeYn": "string",
+        "useUIDInfoYn": "string"
+      },
+      "parent": "kr/or/giro/android/net/query/QryCommon"
+    },
+    "kr/or/giro/android/net/query/service/ntax/tariff/QryTariffQryBillList$PaymentData": {
+      "fields": {
+        "companyName": "string",
+        "elecNo": "string",
+        "giroNo": "string",
+        "key": "string",
+        "payLimitDate": "string",
+        "payMny": "string",
+        "sortCode": "string"
+      }
+    },
+    "kr/or/giro/android/net/query/service/ntax/tariff/QryTariffQryBillDetail": {
+      "fields": {
+        "autoIcheGojiMessage": "string",
+        "cardPayMaxMny": "string",
+        "elecNo": "string",
+        "giroNo": "string",
+        "isAutoIcheGoji": "string",
+        "isCardPayableTime": "string",
+        "isCardPayableTimeMsg": "string",
+        "isMemberOwnGoji": "string",
+        "isPayableDayTime": "string",
+        "isPayableDayTimeMsg": "string",
+        "payCode": "string",
+        "paymentData": {
+          "model": "kr/or/giro/android/net/query/service/ntax/tariff/QryTariffQryBillDetail$PaymentData"
+        },
+        "serviceCode": "string",
+        "sortCode": "string",
+        "userFeeRate": "string",
+        "userFeeRateCheck": "string"
+      },
+      "parent": "kr/or/giro/android/net/query/QryCommon"
+    },
+    "kr/or/giro/android/net/query/service/ntax/tariff/QryTariffQryBillDetail$PaymentData": {
+      "fields": {
+        "cardYn": "string",
+        "companyName": "string",
+        "elecNo": "string",
+        "giroNo": "string",
+        "key": "string",
+        "mnyEditYn": "string",
+        "name": "string",
+        "napseNo": "string",
+        "pay1date": "string",
+        "pay2date": "string",
+        "payInMny": "string",
+        "payMny": "string",
+        "payOutMny": "string",
+        "prePaidMny": "string",
+        "remainPayMny": "string",
+        "sortCode": "string",
+        "taxName": "string",
+        "when": "string"
+      }
+    }
+  },
+  "protocol_version": "4.9.5_209"
+}

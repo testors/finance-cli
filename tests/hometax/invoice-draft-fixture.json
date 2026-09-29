@@ -1,0 +1,68 @@
+{
+  "etxivObj": {
+    "etxivClsfCd": "01",
+    "etxivKndCd": "01",
+    "wrtSplrInfrYn": "Y",
+    "etxivDmnrClsfCd": "01",
+    "wrtDmnrInfrYn": "Y",
+    "wrtLsatInfrYn": "Y",
+    "wrtSncInfrYn": "Y",
+    "wrtSncClInfrYn": "Y"
+  },
+  "splrInfrBizSVO": {
+    "splrTxprDscmNo": "1111111119",
+    "splrTnmNm": "FIXTURE SUPPLIER",
+    "splrRprsFnm": "FIXTURE",
+    "splrPfbAdr": "FIXTURE ADDRESS",
+    "splrMpbNo": "",
+    "splrBcNm": "SERVICE",
+    "splrItmNm": "SOFTWARE",
+    "splrTin": "SYNTHETIC_PERSON",
+    "splrChrgEmlAdr": ""
+  },
+  "dmnrInfrBizSVO": {
+    "dmnrTin": "SYNTHETIC_BUYER",
+    "dmnrTxprDscmNo": "1234567891",
+    "dmnrMpbNo": "",
+    "dmnrTxprDscmNoClCd": "01",
+    "dmnrTnmNm": "FIXTURE BUYER",
+    "dmnrRprsFnm": "FIXTURE",
+    "dmnrPfbAdr": "FIXTURE ADDRESS",
+    "dmnrBcNm": "SERVICE",
+    "dmnrItmNm": "SOFTWARE",
+    "dmnrMchrgEmlAdr": "",
+    "dmnrSchrgEmlAdr": ""
+  },
+  "trteInfrBizSVO": {},
+  "lsatInfrBizSVOList": [
+    {
+      "lsatSplMm": "09",
+      "lsatSplDd": "01",
+      "lsatSplDt": "20260901",
+      "lsatNm": "FIXTURE ITEM",
+      "lsatRszeNm": "",
+      "lsatQty": 1,
+      "lsatUtprc": 100,
+      "lsatSplCft": 100,
+      "lsatTxamt": 10,
+      "lsatRmrkCntn": ""
+    }
+  ],
+  "sncClInfrBizSVO": {
+    "csh": "",
+    "chck": "",
+    "note": "",
+    "crit": "110",
+    "recApeClCd": "02",
+    "sumAmt": 110
+  },
+  "sncInfrBizSVO": {
+    "wrtDt": "20260901",
+    "sumAmt": 110,
+    "splCft": 100,
+    "txamt": 10,
+    "rmrkCntn": "FIXTURE ONLY"
+  },
+  "flagConfirm_biz": "true",
+  "flagConfirm_dmnr": "true"
+}
