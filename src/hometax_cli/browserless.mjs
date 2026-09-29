@@ -3,7 +3,7 @@ import fs from 'node:fs/promises';
 import vm from 'node:vm';
 import {createRequire} from 'node:module';
 import {pathToFileURL} from 'node:url';
-import {LOGIN_URL, nativeBridgeSource, observerSource} from './browser.mjs';
+import {LOGIN_URL, nativeBridgeSource, observerSource} from './login_bridge.mjs';
 
 export const USER_AGENT = 'Mozilla/5.0 (Linux; Android 16) AppleWebKit/537.36 ' +
   '(KHTML, like Gecko) Version/4.0 Mobile Safari/537.36 Android511';

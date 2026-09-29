@@ -1,4 +1,4 @@
-"""Offline tools and explicit certificate login over Node HTTP or Chromium."""
+"""Offline tools and explicit certificate login over Node HTTP."""
 
 import argparse
 import base64
@@ -182,7 +182,6 @@ def main(argv=None) -> int:
         cert_command.add_argument("--app-version", default="14.3")
         cert_command.add_argument("--output", required=True, help="새 private/ 파일 경로; 기존 파일 덮어쓰기 없음")
         if name == "login-cert":
-            cert_command.add_argument("--cdp", help="선택: Chromium CDP 주소. 생략하면 Node HTTP로 처리")
             cert_command.add_argument("--timeout", type=float, default=180, help="페이지 초기화·대기열 관찰 시간(초)")
     args = parser.parse_args(argv)
     try:
@@ -215,14 +214,11 @@ def main(argv=None) -> int:
                                   "output": args.output, "network_requests": 0}, ensure_ascii=False))
                 return 0
             Path(args.output).parent.mkdir(mode=0o700, parents=True, exist_ok=True)
-            config = {"cdp": args.cdp, "callback": callback, "appVersion": args.app_version,
+            config = {"callback": callback, "appVersion": args.app_version,
                       "output": args.output, "timeout": args.timeout}
-            adapter = "browser.mjs" if args.cdp else "browserless.mjs"
-            node_args = ["node"]
-            if not args.cdp:
-                # The preload is inherited by jsdom's synchronous XHR worker.
-                node_args += ["--require", str(Path(__file__).with_name("jsdom_compat.cjs"))]
-            process = subprocess.run(node_args + [str(Path(__file__).with_name(adapter))],
+            # The preload is inherited by jsdom's synchronous XHR worker.
+            process = subprocess.run(["node", "--require", str(Path(__file__).with_name("jsdom_compat.cjs")),
+                                      str(Path(__file__).with_name("browserless.mjs"))],
                                      input=json.dumps(config), text=True, check=False, env=node_environment())
             return process.returncode
         data = read_json(args.input)

@@ -32,6 +32,7 @@ for args, source in (
     (['cert','list'], ''),
     (['capabilities'], ''),
     (['hana','encode-header'], '{"CHNL_SYS_HDPT":{"synthetic":true}}'),
+    (['hana','session','list'], ''),
     (['giro','request','national.list'], ''),
     (['giro','runtime','check'], ''),
     (['hometax','auth','replay','cert-register'], '{"RESULT":{"result":"S","msg":"synthetic"}}'),

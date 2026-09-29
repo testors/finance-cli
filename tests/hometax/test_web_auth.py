@@ -95,25 +95,26 @@ let s='';process.stdin.on('data',d=>s+=d);process.stdin.on('end',()=>{
             with contextlib.redirect_stderr(io.StringIO()):
                 self.assertEqual(main(args), 2)  # No overwrite/no new password prompt.
 
-    def test_login_defaults_to_node_http_and_keeps_explicit_cdp_option(self):
+    def test_login_runs_over_node_http_and_has_no_browser_option(self):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory).resolve()
             self.import_credential(root)
             base = ["auth", "login-cert", "--credential", "personal", "--output", str(root / "session.json")]
-            for options, adapter in (([], "browserless.mjs"),
-                                     (["--cdp", "http://127.0.0.1:9222"], "browser.mjs")):
-                with patch("getpass.getpass", return_value="offline password"), \
-                     patch("hometax_cli.__main__.subprocess.run") as run:
-                    run.return_value.returncode = 3
-                    self.assertEqual(main(base + options), 3)
-                    self.assertEqual(Path(run.call_args.args[0][-1]).name, adapter)
-                    if not options:
-                        self.assertEqual(run.call_args.args[0][1], "--require")
-                        self.assertEqual(Path(run.call_args.args[0][2]).name, "jsdom_compat.cjs")
-                    config = json.loads(run.call_args.kwargs["input"])
-                    self.assertEqual(config["callback"]["payload"]["certResult"], "SUCC")
-                    self.assertNotIn("offline password", run.call_args.kwargs["input"])
-                    self.assertNotIn("signData", " ".join(run.call_args.args[0]))
+            with patch("getpass.getpass", return_value="offline password"), \
+                 patch("hometax_cli.__main__.subprocess.run") as run:
+                run.return_value.returncode = 3
+                self.assertEqual(main(base), 3)
+                self.assertEqual(Path(run.call_args.args[0][-1]).name, "browserless.mjs")
+                self.assertEqual(run.call_args.args[0][1], "--require")
+                self.assertEqual(Path(run.call_args.args[0][2]).name, "jsdom_compat.cjs")
+                config = json.loads(run.call_args.kwargs["input"])
+                self.assertEqual(config["callback"]["payload"]["certResult"], "SUCC")
+                self.assertNotIn("cdp", config)
+                self.assertNotIn("offline password", run.call_args.kwargs["input"])
+                self.assertNotIn("signData", " ".join(run.call_args.args[0]))
+            with contextlib.redirect_stderr(io.StringIO()), self.assertRaises(SystemExit) as raised:
+                main(base + ["--cdp", "http://127.0.0.1:9222"])
+            self.assertEqual(raised.exception.code, 2)
 
 
 if __name__ == "__main__":
