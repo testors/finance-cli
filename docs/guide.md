@@ -4,7 +4,7 @@
 
 > **먼저 알아둘 점**
 > - 홈택스 명령은 현재 버전에서 **실서버 검증 전**입니다. 조회는 결과를 직접 대조하며 쓰고, 세금계산서 **발급은 실제 발급**이므로 특히 주의하세요.
-> - 하나은행은 공동인증서 로그인과 **읽기 전용 조회**(계좌·거래내역·보안매체 상태)를 지원합니다. 이체, OneSign(하나인증서) 로그인, 인증서 발급·등록은 아직 `fin`에 이전되지 않았습니다. → [하나은행](#하나은행)
+> - 하나은행은 공동인증서 로그인·조회와 하나인증서 신규 발급·서명 로그인·원화 이체를 지원합니다. 하나인증서에는 사용자 서비스 설정이 필요하며 실서버 검증 전입니다. → [하나은행](#하나은행), [하나인증서 시작하기](hana-onesign.md)
 
 ## 목차
 
@@ -78,7 +78,7 @@ fin profile list
 
 ## 하나은행
 
-`fin hana`는 공동인증서로 로그인해 계좌·거래내역·보안매체 상태를 읽는 **읽기 전용 조회**와 서버와 통신하지 않는 오프라인 도구를 제공합니다.
+`fin hana`는 공동인증서 로그인·조회와 하나인증서 발급·로그인·원화 이체를 제공합니다. 하나인증서는 별도의 암호화된 기기·인증서 저장소를 사용합니다.
 
 | 기능 | 명령 | 통신 |
 | --- | --- | --- |
@@ -91,11 +91,15 @@ fin profile list
 | 한도·보안매체·OTP 상태 | `security` + `limits`, `limit-exception`, `security-media`, `otp`, `otp-accident`, `mobile-otp` | `--send` |
 | 로그인 연장 | `session extend` | `--send` |
 | 하나인증서 vault 번들 | `onesign import` / `export` / `show` / `list` | 없음 |
+| 하나인증서 설정·저장소 | `setup extract` / `configure`, `onesign init` / `activate` / `export-identity` | 없음 |
+| 하나인증서 신규 발급 | `onesign enroll` 또는 `onesign issue` | 원격 단계에 `--send` |
+| 하나인증서 로그인·조회 | `onesign new-session` / `login` / `accounts` | `login`·`accounts`에 `--send` |
+| 하나인증서 원화 이체 | `transfer prepare` / `show` / `execute` / `reconcile` | `show` 외 `--send`; 실행 직전 내용 확인 |
 | 오프라인 도구 | `plan`, `sign-login`, `encode-header`, `decode-header`, `joint-cert-tbs`, `joint-cert-body`, `login-body` | 없음 |
 
-**하나인증서 vault 번들:** 다른 도구가 암호로 잠가 내보낸 하나인증서 vault 파일을 검증해 보관합니다. 로그인·서명에는 아직 쓰지 않으며, 형식과 주의 사항은 [OneSign vault 번들 형식](onesign-bundle.md)에 있습니다.
+**하나인증서:** [설정·발급·이체 안내](hana-onesign.md)에 따라 새 인증서를 발급하거나 `activate`로 호환 번들을 가져와 사용합니다. 기존 `import`·`export`는 암호화 번들의 보관·복사 명령입니다. [번들 형식](onesign-bundle.md)은 v1과 클라우드 키가 선택 사항인 v2를 지원합니다.
 
-**이 패키지에 없는 것:** 이체(송금), OneSign(하나인증서) 로그인·가입, 인증서 발급·등록·복사, 금융인증서 발급, OTP·한도 변경입니다. 이 명령들은 이전 전의 개인용 하나은행 CLI(`hana`)에 있으며 `fin hana`로 아직 옮기지 않았습니다.
+**지원하지 않는 경로:** 클라우드 인증서 다운로드, 예외 가입·재발급 화면, 금융인증서 발급, OTP 발급·한도 변경. 이체는 단일 일반 원화 즉시이체를 지원하며 은행이 OTP·추가 인증을 요구하면 중단합니다.
 
 **검증 상태:** 이 패키지의 테스트는 합성 자료와 가짜 전송 계층만 사용하므로 서버에는 접속하지 않습니다. 같은 절차는 이전 전의 CLI에서 실서버로 확인한 기록이 있습니다(로그인 연장은 서버 수락을 확인하지 못했습니다). `fin hana`로 하는 첫 실행은 결과를 직접 대조하며 진행하세요.
 

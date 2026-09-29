@@ -2,7 +2,7 @@
 
 Every command that contacts the bank prepares first and sends only with --send.
 A request is never repeated automatically, and an attempt that was started is
-recorded and never replayed. Transfers, OTP changes and limit changes are absent.
+recorded and never replayed. OTP changes and limit changes are absent.
 """
 import argparse
 import getpass
@@ -41,8 +41,8 @@ def selection_arguments(parser):
 
 def build():
     parser = argparse.ArgumentParser(prog='fin hana', description=(
-        '하나은행 오프라인 계약·서명과 저장된 로그인으로 하는 읽기 전용 조회. '
-        '은행에 연결하는 명령은 --send가 있어야 전송합니다. 이체·OTP·한도 변경 명령은 없습니다.'))
+        '하나은행 로그인·조회·하나인증서 발급·원화 이체. '
+        '은행에 연결하는 명령은 --send가 있어야 전송합니다. 실서버 검증 전입니다.'))
     sub = parser.add_subparsers(dest='operation', required=True)
     sub.add_parser('plan', help='로그인 계약과 공개 패키지 이전 범위; 접속 없음')
     for command in ('encode-header', 'decode-header', 'joint-cert-tbs', 'joint-cert-body', 'login-body'):
@@ -66,7 +66,7 @@ def build():
     item.add_argument('--send', action='store_true')
     session.add_parser('list', help='저장된 세션과 기록된 로그인 여부; 접속 없음')
 
-    onesign = sub.add_parser('onesign', help='하나인증서(OneSign) vault 번들 가져오기·내보내기; 접속 없음').add_subparsers(
+    onesign = sub.add_parser('onesign', help='하나인증서 발급·로그인·암호화 번들 관리').add_subparsers(
         dest='action', required=True)
     item = onesign.add_parser('import', help='다른 도구가 내보낸 번들을 검증해 암호화된 채로 보관')
     item.add_argument('--name', required=True)
@@ -79,6 +79,8 @@ def build():
     item.add_argument('--name', required=True)
     item.add_argument('--password-stdin', action='store_true')
     onesign.add_parser('list', help='보관한 번들 이름')
+    from .onesign_cli import add_parsers
+    add_parsers(sub, onesign)
 
     item = sub.add_parser('login', help='공동인증서 로그인: nonce→금고 인증서 서명→로그인')
     item.add_argument('--session', required=True)
@@ -142,11 +144,16 @@ def list_sessions():
 
 
 def dispatch(args):
+    if args.operation in ('setup','transfer') or (args.operation=='onesign' and args.action not in ('import','export','show','list')):
+        from .onesign_cli import dispatch as run
+        return run(args)
     if args.operation == 'plan':
         result = protocol.auth_plan()
         result['migration'] = {'network_execution': False, 'shared_credentials': True,
-            'remaining': ['OneSign login and enrollment', 'transfers', 'certificate issuance and registration',
-                          'financial certificate issuance']}
+            'remaining': ['cloud certificate download', 'exceptional enrollment branches',
+                          'financial certificate issuance', 'OTP and limit changes'],
+            'onesign': 'setup → init/enroll or activate → new-session/login → transfer',
+            'live_tested': False}
         return result
     if args.operation == 'decode-header':
         return protocol.decode_header(sys.stdin.read())
@@ -218,4 +225,6 @@ def main(argv=None):
         raise ValueError('inspect_saved_records_and_inputs: ' + type(error).__name__) from None
     print(json.dumps(result, ensure_ascii=False, indent=2))
     # A sent request the service did not accept is a refusal, not a local error.
+    if isinstance(result,dict) and result.get('processing_status')=='stopped':
+        return 2
     return 1 if isinstance(result, dict) and result.get('network_used') and result.get('accepted') is False else 0

@@ -13,11 +13,16 @@ def output(value):
 
 def capabilities():
     return {'schema_version': 1, 'services': {
-        'hana': {'offline': ['protocol', 'shared-certificate-login-signature', 'onesign-vault-bundle'],
+        'hana': {'offline': ['protocol', 'shared-certificate-login-signature', 'onesign-vault-bundle',
+                            'user-package-settings-extraction', 'onesign-identity-initialization'],
                  'live': ['app-authentication', 'joint-certificate-login', 'accounts', 'transfer-history-query',
-                          'ledger-history', 'security-inquiry', 'login-extension'],
-                 'not_included': ['transfers', 'OneSign login and enrollment', 'certificate issuance and registration',
-                                  'OTP and limit changes'],
+                          'ledger-history', 'security-inquiry', 'login-extension', 'onesign-new-issuance',
+                          'onesign-signed-login', 'onesign-krw-transfer'],
+                 'requirements': ['user-supplied service settings for version 1.0.27',
+                                  'domestic adult existing Hana customer for new issuance',
+                                  'server-approved authentication branch for transfers'],
+                 'not_included': ['cloud certificate download', 'exceptional enrollment branches',
+                                  'financial certificate issuance', 'OTP and limit changes'],
                  'live_tested': False},
         'hometax': {'offline': ['auth-replay', 'certificate-prepare'],
                     'live': ['certificate-login', 'session', 'account', 'business', 'tax-query',
@@ -129,7 +134,7 @@ def main(argv=None):
 
   cert        공동인증서 NPKI/PFX 암호화 보관·조회·내보내기
   profile     프로필·기관별 인증서 선택
-  hana        하나은행 공동인증서 로그인·계좌·거래내역·보안매체 조회 (통신 시 --send)
+  hana        하나은행 로그인·조회·하나인증서 발급·원화 이체 (통신 시 --send)
   hometax     홈택스 로그인·조회·보고서·세금계산서 (통신 시 --send)
   giro        지로 오프라인 도구·명시적 초기 프로브 (--send/--live)
   runtime     홈택스 Node 런타임 status/install

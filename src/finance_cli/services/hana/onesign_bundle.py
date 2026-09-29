@@ -1,15 +1,14 @@
-"""Portable OneSign vault bundle: one passphrase-sealed file. No login, no network.
+"""Portable, passphrase-sealed OneSign identities; no sessions or plaintext PINs.
 
-The bundle carries the imported OneSign vault (app identity and key, cloud key,
-stored certificate records) but never a run ledger or a PIN. The format is fixed
-in docs/onesign-bundle.md; the private Hana research tool writes and reads the
-same layout. Bytes are kept sealed at rest; a passphrase is needed to open them.
+v1 retains the cloud key requirement. v2 also supports direct issuance without
+a cloud key. Archive operations preserve bytes; activation creates fresh state.
 """
 import base64
 import hashlib
 import json
 from pathlib import Path
 import re
+import secrets
 import unicodedata
 
 from cryptography.exceptions import InvalidTag
@@ -21,6 +20,7 @@ from . import store
 from .hana_protocol import device_uuid
 
 FORMAT = 'finance-onesign-bundle-v1'
+FORMAT_V2 = 'finance-onesign-bundle-v2'
 KDF = {'name': 'scrypt', 'n': 131072, 'r': 8, 'p': 1}
 LIMIT = 1024 * 1024
 TOP = {'version', 'created_at', 'device_id', 'profile', 'cloud', 'records'}
@@ -57,7 +57,7 @@ def opened(data, passphrase):
         salt, nonce, sealed = unb64url(outer['kdf']['salt']), unb64url(outer['cipher']['nonce']), unb64url(outer['sealed'])
     except (ValueError, KeyError, TypeError):
         raise ValueError('invalid_bundle_file') from None
-    if (set(outer) != {'format', 'kdf', 'cipher', 'sealed'} or outer['format'] != FORMAT
+    if (set(outer) != {'format', 'kdf', 'cipher', 'sealed'} or outer['format'] not in (FORMAT, FORMAT_V2)
             or outer['kdf'] != {**KDF, 'salt': outer['kdf'].get('salt')} or len(salt) != 16
             or outer['cipher'] != {'name': 'aes-256-gcm', 'nonce': outer['cipher'].get('nonce')} or len(nonce) != 12):
         raise ValueError('unsupported_bundle_format')
@@ -65,12 +65,16 @@ def opened(data, passphrase):
         plain = AESGCM(key(passphrase, salt)).decrypt(nonce, sealed, canonical(header))
     except InvalidTag:
         raise ValueError('incorrect_passphrase_or_damaged_bundle') from None
-    return validated(json.loads(plain))
+    value = json.loads(plain)
+    expected_version = 1 if outer['format'] == FORMAT else 2
+    if not isinstance(value,dict) or type(value.get('version')) is not int or value['version'] != expected_version:
+        raise ValueError('unsupported_bundle_format')
+    return validated(value)
 
 
 def validated(plain):
     """The binding checks; certificate and key material stay opaque."""
-    if not isinstance(plain, dict) or set(plain) != TOP or plain['version'] != 1 or not isinstance(plain['created_at'], str):
+    if not isinstance(plain, dict) or set(plain) != TOP or type(plain['version']) is not int or plain['version'] not in (1, 2) or not isinstance(plain['created_at'], str):
         raise ValueError('invalid_bundle_content')
     profile, cloud, records, device = plain['profile'], plain['cloud'], plain['records'], plain['device_id']
     if not all(isinstance(v, dict) for v in (profile, cloud, records)) or not records:
@@ -84,13 +88,83 @@ def validated(plain):
     enrollment = profile.get('enrollment')
     if not isinstance(enrollment, dict) or enrollment.get('state') != 'ready':
         raise ValueError('bundle_enrollment_not_ready')
-    if cloud.get('device_id') != device or not unb64url(cloud.get('private_key')):
+    if (plain['version'] == 1 or cloud) and (cloud.get('device_id') != device or not unb64url(cloud.get('private_key'))):
         raise ValueError('bundle_cloud_binding_failed')
     for alias, record in records.items():
         if (not isinstance(record, dict) or record.get('alias') != alias or record.get('device_id') != device
                 or hashlib.sha256(unb64url(record.get('certificate'))).hexdigest() != record.get('fingerprint')):
             raise ValueError('bundle_record_binding_failed')
     return plain
+
+
+def sealed(plain, passphrase):
+    validated(plain)
+    if len(passphrase) < 12:
+        raise ValueError('passphrase_minimum_12_characters')
+    salt, nonce = secrets.token_bytes(16), secrets.token_bytes(12)
+    header = {'format': FORMAT if plain['version']==1 else FORMAT_V2,
+              'kdf': {**KDF, 'salt':b64url(salt)}, 'cipher':{'name':'aes-256-gcm','nonce':b64url(nonce)}}
+    encrypted = AESGCM(key(passphrase,salt)).encrypt(nonce,canonical(plain),canonical(header))
+    result = canonical({**header,'sealed':b64url(encrypted)})
+    if len(result) > LIMIT:
+        raise ValueError('bundle_too_large')
+    return result
+
+
+def export_identity(state, output, passphrase):
+    from datetime import datetime, timezone
+    import copy
+    from .onesign import record
+    record(state)
+    value = state.snapshot()
+    profile = copy.deepcopy(value['profile'])
+    for field in list(profile):
+        if field.startswith('customer_source'):
+            del profile[field]
+    profile['enrollment'].pop('run',None)
+    plain = {'version':2,'created_at':datetime.now(timezone.utc).isoformat(),'device_id':profile['device_id'],
+             'profile':profile,'cloud':value.get('cloud',{}),'records':value['records']}
+    storage.write_new(Path(output).expanduser(),sealed(plain,passphrase))
+    return {'exported':True,'format':FORMAT_V2,'network_used':False}
+
+
+def activate(name, source, passphrase, settings_name):
+    import copy
+    from .onesign import initial, record
+    from .onesign_state import State
+    from . import onesign_setup
+    from Crypto.PublicKey import RSA
+    from types import SimpleNamespace
+    from .onesign_keys import certificate_alias, PIN_ITEM, EXTERNAL_ITEM
+    from .onesign_crypto import certificate_parts
+    plain = opened(read_file(source),passphrase)
+    settings = onesign_setup.load(settings_name)
+    state = initial(settings)
+    state.update(profile=copy.deepcopy(plain['profile']),records=plain['records'],cloud=plain['cloud'])
+    state['profile']['service_profile'] = settings['service_profile']
+    # Import is usable only when the material is a real compatible record.
+    app_key = RSA.import_key(unb64url(state['profile']['app_key']))
+    if not app_key.has_private() or app_key.size_in_bits()<2048:
+        raise ValueError('unsupported_app_private_key')
+    state['signup']['state']='imported'
+    state['issuance'].update(state='imported',certificate_issued=False)
+    for entry in state['records'].values():
+        if (type(entry.get('pinSpecVersion')) is not int or entry['pinSpecVersion'] != 2
+                or type(entry.get('authType')) is not int or not entry['authType'] & 1
+                or not isinstance(entry.get('pinSalt'),str) or not isinstance(entry.get('pinVersion'),str)):
+            raise ValueError('unsupported_signing_record')
+        certificate = unb64url(entry['certificate'])
+        certificate_parts(certificate)
+        if entry['alias'] != certificate_alias(certificate):
+            raise ValueError('certificate_alias_mismatch')
+        if len(unb64url(entry.get('key'))) < 28 or len(unb64url(entry.get(PIN_ITEM)))%16:
+            raise ValueError('invalid_signing_record_envelope')
+        if entry['authType'] & 8 and len(unb64url(entry.get(EXTERNAL_ITEM)))%16:
+            raise ValueError('invalid_external_auth_envelope')
+    record(SimpleNamespace(snapshot=lambda:state))
+    with State(name,passphrase,state):
+        pass
+    return {'imported':True,'identity':name,'network_used':False,'next':'new-session'}
 
 
 def directory(name, *, create=False):

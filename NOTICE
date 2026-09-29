@@ -1,0 +1,5 @@
+The Android JSONTokener compatibility code in
+finance_cli/services/hana/onesign_compat.py is adapted from Android libcore.
+Copyright (C) 2010 The Android Open Source Project.
+Licensed under the Apache License, Version 2.0. See LICENSES/Apache-2.0.txt.
+The adaptation supplies the service response semantics in Python.

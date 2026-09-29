@@ -33,6 +33,8 @@ for args, source in (
     (['capabilities'], ''),
     (['hana','encode-header'], '{"CHNL_SYS_HDPT":{"synthetic":true}}'),
     (['hana','session','list'], ''),
+    (['hana','onesign','enroll','--name','synthetic','--run','plan'], ''),
+    (['hana','transfer','execute','--name','synthetic','--session','s','--transaction','p','--run','plan'], ''),
     (['giro','request','national.list'], ''),
     (['giro','runtime','check'], ''),
     (['hometax','auth','replay','cert-register'], '{"RESULT":{"result":"S","msg":"synthetic"}}'),

@@ -18,6 +18,19 @@ ROOT = Path(__file__).resolve().parents[1]
 ORDER = int('04' + '00' * 9 + '01e60fc8821cc74daeafc1', 16)
 
 
+def encrypt_numeric_password(server_public_key, digits, mac_key):
+    """Fresh numeric input encryption with explicitly supplied service material."""
+    from .nfilter_number import pack_numeric_input
+    if not isinstance(mac_key, bytes) or len(mac_key) != 20:
+        raise ValueError('invalid_keypad_mac')
+    _, peer = decode_public_key_envelope(base64.b64decode(server_public_key, validate=True), mac_key)
+    crypto = OpenSSL()
+    public, shared = crypto.curve(secrets.randbelow(ORDER - 1) + 1, peer)
+    client = public_key_envelope(b'', public, mac_key)
+    ciphertext = crypto.encrypt(shared[:16], pack_numeric_input(shared, digits))
+    return base64.b64encode(client).decode() + base64.b64encode(ciphertext).decode()
+
+
 class OpenSSL:
     _lib = None
 
