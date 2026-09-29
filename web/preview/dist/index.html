@@ -1,0 +1,25 @@
+<!doctype html>
+<html lang="ko">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="theme-color" content="#087f6e">
+  <meta name="description" content="Finance 모바일·데스크탑 뱅킹·지로·세금 UI 시안. 모든 데이터는 가상입니다.">
+  <title>Finance — 내 계좌</title>
+  <link rel="stylesheet" href="style.css">
+  <link rel="stylesheet" href="workspaces.css">
+  <script src="modes.js" defer></script>
+  <script src="app.js" defer></script>
+  <script src="interactions.js" defer></script>
+</head>
+<body>
+  <div class="preview-bar"><div><span class="preview-tag">UI CONCEPT</span><span>가상 데이터로 보는 Finance</span></div><div class="viewport-controls" aria-label="시안 화면 크기"><button data-size="desktop" class="active" aria-pressed="true">데스크탑</button><button data-size="mobile" aria-pressed="false">모바일</button></div><span class="preview-note">서비스 연결 없음</span></div>
+  <div id="preview-stage"><div class="application">
+    <aside class="sidebar"><a href="#accounts" data-view="accounts" class="brand" aria-label="Finance 내 계좌"><span class="brand-mark">f</span>finance<span class="brand-dot">.</span></a><div class="mode-control sidebar-mode"></div><div class="workspace-label">하나은행</div><nav class="main-nav" aria-label="주요 메뉴"></nav><div class="sidebar-bottom"><div class="common-label">공통</div><nav class="common-nav" aria-label="공통 메뉴"></nav><div class="sidebar-foot">Finance Server <span>미리보기</span></div></div></aside>
+    <div class="main-shell"><header class="topbar"><div class="mode-control mobile-mode"></div><div class="breadcrumb"><span id="breadcrumb-mode">뱅킹</span> <span>/</span> <strong id="breadcrumb-title">내 계좌</strong></div><div class="topbar-right"><span class="connection-status"><span></span>미리보기 환경</span><button class="profile-button" data-view="settings" aria-label="연결 및 인증 설정">F</button></div></header><main id="main" tabindex="-1"></main><footer class="page-footer">표시된 계좌·금액·거래는 모두 예시입니다.</footer></div>
+    <nav class="bottom-nav" aria-label="모바일 주요 메뉴"></nav>
+  </div></div>
+  <dialog id="detail-dialog" aria-labelledby="dialog-title"><div id="dialog-content"></div></dialog>
+  <div id="toast" role="status" aria-live="polite"></div>
+</body>
+</html>
