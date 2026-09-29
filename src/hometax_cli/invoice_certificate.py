@@ -8,7 +8,6 @@ import sys
 from cryptography import x509
 
 from .certificate import CertificateError, SignedCertificate, sign_empty, vid_random
-from .pfx import read_pfx, select_signing_pair
 from finance_cli.core.native import java_executable
 
 
@@ -44,12 +43,8 @@ def xml_sign(certificate, private, xml):
 def main():
     # The caller supplies the password through stdin, never an argv option.
     data = json.load(sys.stdin)
-    if data.get('credential'):
-        from finance_cli.credentials.registry import Registry
-        certificate, private, warnings = Registry().material(data['credential'], base64.b64decode(data['password']))
-    else:
-        pairs, warnings = read_pfx(Path(data["pfx"]).read_bytes(), base64.b64decode(data["password"]))
-        certificate, private = select_signing_pair(pairs, data.get("pfx_index"))
+    from finance_cli.credentials.registry import Registry
+    certificate, private, warnings = Registry().material(data['credential'], base64.b64decode(data['password']))
     selection = certificate_selection(certificate, data.get("oid"))
     if not selection["selectable"]:
         print(json.dumps({"selection": selection, "warnings": warnings}))

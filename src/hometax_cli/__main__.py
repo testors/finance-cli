@@ -25,22 +25,15 @@ def secret_file(path: str, content: dict):
 
 
 def prepare(args):
-    from .certificate import prepare_certificate
+    from finance_cli.credentials.registry import Registry
+    from .certificate import SignedCertificate, sign_empty, vid_random
     if args.password_stdin:
         password = sys.stdin.buffer.readline().removesuffix(b"\n").removesuffix(b"\r")
     else:
         password = getpass.getpass("인증서 비밀번호: ").encode("utf-8")
-    if args.credential:
-        from finance_cli.credentials.registry import Registry
-        from .certificate import SignedCertificate, sign_empty, vid_random
-        cert, private, notes = Registry().material(args.credential, password)
-        result = SignedCertificate(sign_empty(cert, private), vid_random(private), notes)
-        del private
-    elif args.pfx:
-        from .pfx import prepare_pfx
-        result = prepare_pfx(Path(args.pfx).read_bytes(), password, args.pfx_index)
-    else:
-        result = prepare_certificate(Path(args.cert).read_bytes(), Path(args.key).read_bytes(), password)
+    cert, private, notes = Registry().material(args.credential, password)
+    result = SignedCertificate(sign_empty(cert, private), vid_random(private), notes)
+    del private
     for warning in result.warnings:
         print("경고: " + warning, file=sys.stderr)
     return result
@@ -134,10 +127,7 @@ def main(argv=None) -> int:
     issue.add_argument("--session", help="갱신 세션; 생략하면 --prepared의 세션 재사용")
     issue.add_argument("--output", required=True)
     issue.add_argument("--timeout", type=float, default=60)
-    issue_source = issue.add_mutually_exclusive_group(required=True)
-    issue_source.add_argument("--pfx", help="전자세금계산서 발급용 인증서")
-    issue_source.add_argument("--credential", help="공통 저장소의 발급용 인증서 별칭")
-    issue.add_argument("--pfx-index", type=int)
+    issue.add_argument("--credential", required=True, help="공통 저장소의 발급용 인증서 별칭")
     issue.add_argument("--password-stdin", action="store_true")
     for operation in ("list", "detail", "prepare", "amend"):
         item = invoice_operations.add_parser(operation)
@@ -187,12 +177,7 @@ def main(argv=None) -> int:
     for name, description in (("prepare-cert", "인증서 복호화·서명 및 요청 파일 생성; 접속 없음"),
                               ("login-cert", "서비스 웹 페이지와 연결한 실제 공동인증서 로그인")):
         cert_command = subcommands.add_parser(name, help=description)
-        source = cert_command.add_mutually_exclusive_group(required=True)
-        source.add_argument("--cert", help="signCert.der 경로; --key와 함께 사용")
-        source.add_argument("--pfx", help="공동인증서 PFX/PKCS#12 경로")
-        source.add_argument("--credential", help="fin cert로 가져온 공통 저장소의 인증서 별칭")
-        cert_command.add_argument("--key", help="암호화된 signPri.key 경로")
-        cert_command.add_argument("--pfx-index", type=int, help="PFX에 여러 인증서가 있을 때 선택할 0부터 시작하는 인덱스")
+        cert_command.add_argument("--credential", required=True, help="fin cert로 가져온 공통 저장소의 인증서 별칭")
         cert_command.add_argument("--password-stdin", action="store_true", help="비밀번호 한 줄을 stdin에서 읽기")
         cert_command.add_argument("--app-version", default="14.3")
         cert_command.add_argument("--output", required=True, help="새 private/ 파일 경로; 기존 파일 덮어쓰기 없음")
@@ -200,11 +185,6 @@ def main(argv=None) -> int:
             cert_command.add_argument("--cdp", help="선택: Chromium CDP 주소. 생략하면 Node HTTP로 처리")
             cert_command.add_argument("--timeout", type=float, default=180, help="페이지 초기화·대기열 관찰 시간(초)")
     args = parser.parse_args(argv)
-    if args.operation in ("prepare-cert", "login-cert"):
-        if args.cert and not args.key:
-            parser.error("--cert에는 --key가 필요합니다.")
-        if args.pfx and args.key:
-            parser.error("--pfx와 --key는 함께 사용하지 않습니다.")
     try:
         if args.command in ("session", "account", "business", "tax", "returns", "report", "invoice"):
             Path(args.output).parent.mkdir(mode=0o700, parents=True, exist_ok=True)

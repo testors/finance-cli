@@ -3,6 +3,7 @@ import contextlib
 import hashlib
 import hmac
 import io
+import os
 from pathlib import Path
 import tempfile
 import unittest
@@ -15,6 +16,7 @@ from cryptography.hazmat.primitives.ciphers import Cipher, algorithms, modes
 from cryptography.hazmat.decrepit.ciphers.algorithms import TripleDES
 from cryptography.hazmat.primitives.serialization import pkcs12 as crypto_pkcs12
 
+from finance_cli.credentials.registry import Registry
 from hometax_cli.__main__ import main
 from hometax_cli.certificate import CertificateError, vid_random
 from hometax_cli.pfx import read_pfx, prepare_pfx
@@ -140,14 +142,15 @@ class PfxContracts(unittest.TestCase):
         signed = cms.SignedData.load(prepared.signed_data)
         self.assertEqual(signed['certificates'][0].chosen.dump(),self.cert)
 
-    def test_cli_pfx_stays_offline_and_does_not_print_secrets(self):
+    def test_cli_imported_pfx_stays_offline_and_does_not_print_secrets(self):
         with tempfile.TemporaryDirectory() as temp:
-            source, target = Path(temp)/'source.pfx',Path(temp)/'result.json'
-            source.write_bytes(synthetic_pfx([self.cert],[self.private]))
+            target = Path(temp)/'result.json'
             out = io.StringIO()
-            with patch('getpass.getpass',return_value='synthetic password'), \
-                 patch('socket.socket',side_effect=AssertionError('No network')), contextlib.redirect_stdout(out):
-                self.assertEqual(main(['auth','prepare-cert','--pfx',str(source),'--output',str(target)]),0)
+            with patch.dict(os.environ,{'FINANCE_HOME':str(Path(temp).resolve()/'state')}):
+                Registry().import_pfx('personal',synthetic_pfx([self.cert],[self.private]),b'synthetic password')
+                with patch('getpass.getpass',return_value='synthetic password'), \
+                     patch('socket.socket',side_effect=AssertionError('No network')), contextlib.redirect_stdout(out):
+                    self.assertEqual(main(['auth','prepare-cert','--credential','personal','--output',str(target)]),0)
             self.assertNotIn('synthetic password',out.getvalue())
             self.assertNotIn('signData',out.getvalue())
             self.assertEqual(target.stat().st_mode&0o777,0o600)

@@ -46,7 +46,7 @@ async function sign(config,xml,oid,xml2) {
     child.once('error',reject);child.once('close',code=>code===0 ? resolve() : reject(new Error('Certificate processing incomplete')));
   });
   child.stdin.on('error',()=>{});
-  child.stdin.end(JSON.stringify({pfx:config.pfx,credential:config.credential,password:config.password,pfx_index:config.pfx_index,xml,xml2,oid}));
+  child.stdin.end(JSON.stringify({credential:config.credential,password:config.password,xml,xml2,oid}));
   await complete;
   return JSON.parse(stdout);
 }

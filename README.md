@@ -85,7 +85,7 @@ fin giro request national.list
 fin giro bills due --type national --input /path/to/local-response.json --today 2026-09-29
 ```
 
-홈택스 `invoice issue`에서도 `--pfx` 또는 공통 `--credential`/`--profile`을 선택할 수 있습니다. 기관별 등록·용도·만료 조건을 충족하는 인증서를 사용해야 합니다. 지로 초기 프로브의 `--send`는 `--live`와 같은 의미이며, 로그인이나 납부 기능을 추가하지 않습니다.
+홈택스의 로그인·`auth prepare-cert`·`invoice issue`는 인증서 파일 경로를 받지 않고 공통 `--credential`/`--profile`로만 인증서를 선택합니다. 인증서 파일은 먼저 `fin cert joint import`로 가져옵니다(PFX에 인증서가 여럿이면 가져올 때 `--pfx-index`로 선택). 기관별 등록·용도·만료 조건을 충족하는 인증서를 사용해야 합니다. 지로 초기 프로브의 `--send`는 `--live`와 같은 의미이며, 로그인이나 납부 기능을 추가하지 않습니다.
 
 프로필은 인증서 선택 설정입니다. 세션을 자동 선택·갱신하거나 기관 간 쿠키를 공유하지 않습니다. 홈택스 세션·보고서 파일은 지정한 새 경로에 소유자만 읽고 쓸 수 있는 0600 권한으로 저장합니다. 이 파일에는 공통 인증서 금고의 암호화가 적용되지 않습니다.
 

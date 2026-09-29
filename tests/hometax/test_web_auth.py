@@ -1,6 +1,7 @@
 import contextlib
 import io
 import json
+import os
 from pathlib import Path
 import stat
 import subprocess
@@ -8,6 +9,7 @@ import tempfile
 import unittest
 from unittest.mock import patch
 
+from finance_cli.credentials.registry import Registry
 from hometax_cli import web_auth
 from hometax_cli.__main__ import main
 from test_certificate import synthetic_material, encrypt_test_key
@@ -49,14 +51,37 @@ let s='';process.stdin.on('data',d=>s+=d);process.stdin.on('end',()=>{
         self.assertEqual(decision.branch, "success")
         self.assertTrue(decision.warnings)
 
-    def test_prepare_cli_writes_private_artifact_without_network(self):
+    def import_credential(self, root, password=b"offline password"):
         cert, key, _ = synthetic_material()
+        environment = patch.dict(os.environ, {"FINANCE_HOME": str(root / "state")})
+        environment.start()
+        self.addCleanup(environment.stop)
+        Registry().import_npki("personal", cert, encrypt_test_key(key, password), password,
+                               compatibility="hometax")
+
+    def test_certificate_commands_accept_only_the_shared_credential(self):
+        for operation in ("prepare-cert", "login-cert"):
+            for removed in (["--cert", "cert.der", "--key", "key.der"], ["--pfx", "cert.pfx"], ["--pfx-index", "0"]):
+                with self.subTest(operation=operation, removed=removed[0]), \
+                     contextlib.redirect_stderr(io.StringIO()), self.assertRaises(SystemExit) as raised:
+                    main(["auth", operation, "--credential", "personal", *removed, "--output", "out.json"])
+                self.assertEqual(raised.exception.code, 2)
+            with self.subTest(operation=operation, removed="credential"), \
+                 contextlib.redirect_stderr(io.StringIO()), self.assertRaises(SystemExit) as raised:
+                main(["auth", operation, "--output", "out.json"])
+            self.assertEqual(raised.exception.code, 2)
+        for removed in (["--pfx", "cert.pfx"], ["--pfx-index", "0"]):
+            with self.subTest(operation="invoice issue", removed=removed[0]), \
+                 contextlib.redirect_stderr(io.StringIO()), self.assertRaises(SystemExit) as raised:
+                main(["invoice", "issue", "--prepared", "prepared.json", "--output", "out.json",
+                      "--credential", "personal", *removed])
+            self.assertEqual(raised.exception.code, 2)
+
+    def test_prepare_cli_writes_private_artifact_without_network(self):
         with tempfile.TemporaryDirectory() as directory:
-            root = Path(directory)
-            (root / "cert.der").write_bytes(cert)
-            (root / "key.der").write_bytes(encrypt_test_key(key, b"offline password"))
-            args = ["auth", "prepare-cert", "--cert", str(root / "cert.der"),
-                    "--key", str(root / "key.der"), "--output", str(root / "result.json")]
+            root = Path(directory).resolve()
+            self.import_credential(root)
+            args = ["auth", "prepare-cert", "--credential", "personal", "--output", str(root / "result.json")]
             out = io.StringIO()
             with patch("getpass.getpass", return_value="offline password"), \
                  patch("socket.socket", side_effect=AssertionError("No networking allowed")), \
@@ -71,13 +96,10 @@ let s='';process.stdin.on('data',d=>s+=d);process.stdin.on('end',()=>{
                 self.assertEqual(main(args), 2)  # No overwrite/no new password prompt.
 
     def test_login_defaults_to_node_http_and_keeps_explicit_cdp_option(self):
-        cert, key, _ = synthetic_material()
         with tempfile.TemporaryDirectory() as directory:
-            root = Path(directory)
-            (root / "cert.der").write_bytes(cert)
-            (root / "key.der").write_bytes(encrypt_test_key(key, b"offline password"))
-            base = ["auth", "login-cert", "--cert", str(root / "cert.der"),
-                    "--key", str(root / "key.der"), "--output", str(root / "session.json")]
+            root = Path(directory).resolve()
+            self.import_credential(root)
+            base = ["auth", "login-cert", "--credential", "personal", "--output", str(root / "session.json")]
             for options, adapter in (([], "browserless.mjs"),
                                      (["--cdp", "http://127.0.0.1:9222"], "browser.mjs")):
                 with patch("getpass.getpass", return_value="offline password"), \

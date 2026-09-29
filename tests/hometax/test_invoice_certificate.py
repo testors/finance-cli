@@ -7,10 +7,12 @@ from datetime import timedelta
 from pathlib import Path
 import subprocess
 import unittest
+from unittest.mock import patch
 from lxml import etree
 from cryptography import x509
 from cryptography.hazmat.primitives import hashes
 from cryptography.hazmat.primitives.asymmetric import padding
+from finance_cli.credentials.registry import Registry
 from hometax_cli.invoice_certificate import xml_sign, certificate_selection
 from test_certificate import synthetic_material
 
@@ -55,17 +57,21 @@ class InvoiceSignatureTests(unittest.TestCase):
             xml_sign(self.cert,self.key,b'<!DOCTYPE TaxInvoice [<!ENTITY x SYSTEM "file:///nonexistent">]><TaxInvoice><TaxInvoiceDocument>&x;</TaxInvoiceDocument></TaxInvoice>')
 
     def test_worker_signs_two_documents_and_preserves_native_partial_callback(self):
-        # Actual worker/PFX/JDK boundary with synthetic credentials only.
+        # Actual worker/shared vault/JDK boundary with synthetic credentials only.
         with tempfile.TemporaryDirectory() as directory:
             root=Path(__file__).parent
             subprocess.run(['python',str(root/'make_wire_material.py'),directory],check=True,
                 stdout=subprocess.PIPE,stderr=subprocess.PIPE,env={**os.environ,'PYTHONPATH':str(root)})
-            data={'pfx':str(Path(directory)/'certificate.pfx'),
-                  'password':base64.b64encode(b'OFFLINE FIXTURE PASSWORD').decode(),
+            home=str(Path(directory).resolve()/'state')
+            password=b'OFFLINE FIXTURE PASSWORD'
+            with patch.dict(os.environ,{'FINANCE_HOME':home}):
+                Registry().import_pfx('personal',(Path(directory)/'certificate.pfx').read_bytes(),password)
+            data={'credential':'personal','password':base64.b64encode(password).decode(),
                   'xml':XML.decode(),'xml2':XML.decode().replace('ORIGINAL','REPLACEMENT')}
             def worker():
                 process=subprocess.run(['python','-m','hometax_cli.invoice_certificate'],
-                    input=json.dumps(data),text=True,stdout=subprocess.PIPE,stderr=subprocess.PIPE,check=True)
+                    input=json.dumps(data),text=True,stdout=subprocess.PIPE,stderr=subprocess.PIPE,check=True,
+                    env={**os.environ,'FINANCE_HOME':home})
                 return json.loads(process.stdout)
             result=worker()
             first=base64.b64decode(result['callback']['xmlSigniture'])
