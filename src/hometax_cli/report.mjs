@@ -5,10 +5,20 @@ import path from 'node:path';
 import {createHash} from 'node:crypto';
 import {pathToFileURL} from 'node:url';
 import {loadDOM,USER_AGENT} from './browserless.mjs';
-import {reportImage} from './report_image.mjs';
+import {spawnSync} from 'node:child_process';
 
 const pause = ms=>new Promise(resolve=>setTimeout(resolve,ms));
 const hash = bytes=>createHash('sha256').update(bytes).digest('hex');
+
+// One local Python process per report. Page and image bytes stay on stdin;
+// stdout contains only archive metadata. The service branch belongs to the viewer.
+export function archiveReport(config) {
+  const result = spawnSync(process.env.FINANCE_PYTHON || 'python', ['-m','hometax_cli.report_archive'], {
+    input:JSON.stringify(config),encoding:'utf8',timeout:60000,maxBuffer:1024*1024,
+  });
+  if (result.error || result.status !== 0) throw new Error('Report archive generation failed');
+  return JSON.parse(result.stdout);
+}
 
 export async function saveReport(config, dependencies = {}) {
   const timeout = Math.ceil(config.timeout*1000);
@@ -169,59 +179,38 @@ export async function saveReport(config, dependencies = {}) {
       }
       if (!await until(()=>pending===0 && Date.now()-changedAt>=100))
         warnings.push('추가 페이지의 이미지 수신이 관찰 시간 안에 끝나지 않았습니다.');
-      const output=new JSDOM('<!doctype html><html lang="ko"><head><meta charset="utf-8"><title></title></head><body></body></html>');
-      try {
-        const d=output.window.document;d.title=report.m_strFileName || '보고서';
-        const style=d.createElement('style');
-        style.textContent='body{margin:0;background:#eee}.page{background:white;margin:12px auto;width:max-content;break-after:page}.page:last-child{break-after:auto}svg{display:block}@media print{body{background:white}.page{margin:0}}';
-        d.head.append(style);
-        let missingImages=0,invalidImages=0,imageCount=0,externalReferences=0;
-        for(const [index,page] of rendered.entries()) {
-          const section=d.createElement('section');section.className='page';section.style.page='sheet'+index;
-          style.textContent+=`@page sheet${index}{size:${page.width/100}cm ${page.height/100}cm;margin:0}`;
-          const clone=page.svg.cloneNode(true);
-          const originals=[...page.svg.querySelectorAll('image')];
-          const copies=[...clone.querySelectorAll('image')];
-          for(let i=0;i<copies.length;i++) {
-            imageCount++;
-            const binding=imageBindings.get(originals[i]);
-            if (binding) {
-              // Original AJAX checks status and caches image bytes. Browser
-              // Image sniffs JPEG as well as PNG despite its PNG data-URI label.
-              const cached=w.m_reportHashMap[binding.renderer.objDocument.reportKey]?.getProperty(binding.imageId);
-              if (typeof cached==='string') {
-                let mime='image/png';
-                try {mime=reportImage(Buffer.from(cached,'base64')).mime;}catch {}
-                copies[i].setAttributeNS('http://www.w3.org/1999/xlink','xlink:href','data:'+mime+';base64,'+cached);
-              }
-            }
-            const href=copies[i].getAttribute('href')||copies[i].getAttributeNS('http://www.w3.org/1999/xlink','href');
-            if (!href?.startsWith('data:image/')) missingImages++;
-            else if (/^data:image\/(png|jpeg);base64,/.test(href)) {
-              try {reportImage(Buffer.from(href.slice(href.indexOf(',')+1),'base64'));}
-              catch {invalidImages++;}
+      const pages = rendered.map(page => {
+        const clone = page.svg.cloneNode(true);
+        const xmlns = 'http://www.w3.org/2000/xmlns/';
+        // Some SVG exporters use setAttribute for namespace declarations.
+        // Normalize their DOM namespace before XMLSerializer adds declarations.
+        for (const node of [clone,...clone.querySelectorAll('*')]) {
+          for (const attribute of [...node.attributes]) {
+            if ((attribute.name==='xmlns' || attribute.name.startsWith('xmlns:')) &&
+                attribute.namespaceURI!==xmlns) {
+              const {name,value} = attribute;
+              node.removeAttributeNode(attribute);
+              node.setAttributeNS(xmlns,name,value);
             }
           }
-          // Archive graphics, not the viewer's UI event handlers or session.
-          for(const node of [clone,...clone.querySelectorAll('*')]) {
-            for(const attribute of [...node.attributes]) {
-              if (attribute.name.toLowerCase().startsWith('on')) node.removeAttributeNode(attribute);
-              else if (['href','xlink:href','src'].includes(attribute.name) && attribute.value &&
-                  !attribute.value.startsWith('#') && !attribute.value.startsWith('data:')) externalReferences++;
-              else if (/url\(\s*['"]?(?:https?:|\/)/i.test(attribute.value)) externalReferences++;
-            }
-          }
-          externalReferences+=clone.querySelectorAll('script,iframe,object,embed').length;
-          section.append(d.importNode(clone,true));d.body.append(section);
         }
-        const bytes=Buffer.from(output.serialize());
-        const filename='report.html';
-        await fs.writeFile(path.join(config.output,filename),bytes,{mode:0o600,flag:'wx'});
-        artifact={saved:true,file:filename,format:'html-svg',page_count:rendered.length,image_count:imageCount,
-          missing_images:missingImages,invalid_images:invalidImages,external_references:externalReferences,bytes:bytes.length,sha256:hash(bytes),
-          complete:rendered.length===Number(report.m_pageCount) && missingImages===0 && invalidImages===0 && externalReferences===0};
-        if (!artifact.complete) warnings.push('서비스 성공과 별도로, 독립 파일의 페이지·이미지 완전성을 확인하지 못했습니다.');
-      } finally {output.window.close();}
+        // Keep xlink:href usable when this XML is embedded in HTML, whose SVG
+        // parser recognizes xlink but not XMLSerializer's generated ns1 alias.
+        clone.setAttributeNS(xmlns,'xmlns:xlink','http://www.w3.org/1999/xlink');
+        const originals = [...page.svg.querySelectorAll('image')];
+        const copies = [...clone.querySelectorAll('image')];
+        for (let i=0;i<copies.length;i++) {
+          const binding = imageBindings.get(originals[i]);
+          if (!binding) continue;
+          const cached = w.m_reportHashMap[binding.renderer.objDocument.reportKey]?.getProperty(binding.imageId);
+          if (typeof cached === 'string')
+            copies[i].setAttributeNS('http://www.w3.org/1999/xlink','xlink:href','data:image/png;base64,'+cached);
+        }
+        return {svg:new w.XMLSerializer().serializeToString(clone),width:page.width,height:page.height};
+      });
+      artifact = archiveReport({output:config.output,title:report.m_strFileName,
+        expected_page_count:Number(report.m_pageCount),pages});
+      if (!artifact.complete) warnings.push('서비스 성공과 별도로, 독립 파일의 페이지·이미지 완전성을 확인하지 못했습니다.');
     }
   } catch(error) {
     dependencies.onError?.(error);

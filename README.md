@@ -37,7 +37,7 @@ fin runtime status hometax
 fin runtime install hometax
 ```
 
-홈택스는 Node HTTP·jsdom으로 실행합니다. 브라우저는 사용하지 않습니다.
+홈택스의 로그인·조회·보고서 SVG 생성은 Node HTTP·jsdom으로 실행합니다. 보고서 이미지 검사·HTML 파일 생성은 Python으로 처리하며 Pillow는 패키지 설치 시 함께 설치됩니다. npm 직접 의존성은 `jsdom` 하나입니다. 브라우저는 사용하지 않습니다.
 
 ## 공통 인증서
 

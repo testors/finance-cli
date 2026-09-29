@@ -1,8 +1,6 @@
-// Synthetic ClipReport wire data, based on documentReader's public source.
-import {PNG} from 'pngjs';
-import jpeg from 'jpeg-js';
-export const png=PNG.sync.write({width:1,height:1,data:Buffer.from([10,20,30,255])}).toString('base64');
-export const jpg=jpeg.encode({width:1,height:1,data:Buffer.from([10,20,30,255])},90).data.toString('base64');
+// Synthetic 1 × 1 images and report data.
+import fs from 'node:fs';
+export const {png,jpg}=JSON.parse(fs.readFileSync(new URL('./report-images.json',import.meta.url),'utf8'));
 export function documentFixture() {
   const styles={a:[[0,2100,2970,0,0,0,0,0,1,0]],b:[[0,0]],
     c:[[0,16777215,0,16777215,0,16777215,16777215]],d:[[0,0,0]],e:[],f:[],g:[],h:[],

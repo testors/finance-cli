@@ -12,7 +12,7 @@ ROOT = Path(__file__).resolve().parents[1]
 
 def main():
     from finance_cli.core.native import java_executable
-    env = {**os.environ, 'PATH': os.pathsep.join((str(Path(sys.executable).parent),
+    env = {**os.environ, 'FINANCE_PYTHON': sys.executable, 'PATH': os.pathsep.join((str(Path(sys.executable).parent),
         str(Path(java_executable()).parent), os.environ.get('PATH', '')))}
     commands = [(name, [sys.executable, '-m', 'unittest', 'discover', '-s', str(ROOT / directory)])
                 for name, directory in [('shared', 'tests'), ('hometax', 'tests/hometax'), ('giro', 'tests/giro')]]
