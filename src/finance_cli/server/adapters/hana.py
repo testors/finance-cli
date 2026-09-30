@@ -621,7 +621,17 @@ class OneSignLogin(OneSignAdapter):
                           result={'session_id': session_id, 'login_method': 'onesign'})
 
 
-class OneSignAccounts(OneSignAdapter):
+class OneSignReadAdapter(OneSignAdapter):
+    uses_session = True
+    steps = {'run': Step('run', secrets=('vault_passphrase',))}
+
+    def accepts_session(self, session):
+        # Consumed by a transfer is different from superseded by a later login.
+        return super().accepts_session(session) or (session is not None
+            and session['state'] == 'consumed' and session['note'] == 'transfer_prepared')
+
+
+class OneSignAccounts(OneSignReadAdapter):
     name = 'hana.onesign.accounts'
     title = '하나은행 계좌 목록·잔액'
     uses_session = True

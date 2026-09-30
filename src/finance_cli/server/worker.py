@@ -201,10 +201,8 @@ def precheck(con, job, adapter, step):
         if profile is None or profile['disabled']:
             return 'profile_disabled'
     if adapter.uses_session and step == adapter.first_step and job['session_id']:
-        session = con.execute('SELECT state FROM sessions WHERE id=?', (job['session_id'],)).fetchone()
-        allowed = {'usable'} | ({'stale'} if adapter.accepts_stale_session else set()) \
-            | ({'consumed'} if adapter.accepts_consumed_session else set())
-        if session is None or session['state'] not in allowed:
+        session = con.execute('SELECT * FROM sessions WHERE id=?', (job['session_id'],)).fetchone()
+        if not adapter.accepts_session(session):
             return 'fixed_session_not_usable'
     return None
 

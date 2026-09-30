@@ -127,6 +127,8 @@ def saved(session, receipt, kind, headers):
 
 def authenticated_account(session, value):
     """Recorded login plus the main-account provenance of the selected account."""
+    if hasattr(session, 'authenticated_account'):
+        return session.authenticated_account(value)
     if type(value['account_index']) is not int or value['account_index'] < 1:
         raise ValueError('expected_a_positive_account_index')
     request = login.authenticated_session(session)

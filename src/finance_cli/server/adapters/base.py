@@ -77,6 +77,11 @@ class Adapter:
     def ready(self, login):
         """Refuse a login this job cannot use (method, registration)."""
 
+    def accepts_session(self, session):
+        return session is not None and (session['state'] == 'usable'
+            or self.accepts_stale_session and session['state'] == 'stale'
+            or self.accepts_consumed_session and session['state'] == 'consumed')
+
     def masked_input(self, value):
         return mask_fields(value, self.input_masks)
 
