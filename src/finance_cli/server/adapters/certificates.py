@@ -104,9 +104,9 @@ def account_choices(value):
     rows = value['issuance']['responses'].get('signup-accounts', {}).get('expLginAllAcctInq')
     if not isinstance(rows, list):
         return []
-    # Selection indexes resolve only against this store's sealed response. Raw
-    # account numbers and other bank fields never enter job results or the DOM.
-    return [{'choice': str(index), 'label': '하나은행 ' + number[:3] + '*' * (len(number) - 7) + number[-4:]}
+    # Show the complete number, but resolve selections only by the index in this
+    # store's sealed response; unrelated bank fields remain private.
+    return [{'choice': str(index), 'label': '하나은행 ' + number}
             for index, row in enumerate(rows) if isinstance(row, dict)
             and isinstance(number := row.get('acctNo'), str) and re.fullmatch('[0-9]{8,20}', number)]
 

@@ -518,6 +518,19 @@ class FlowTests(unittest.TestCase):
 
 
 class PlanTests(unittest.TestCase):
+    def test_account_choice_shows_full_numbers_and_selects_by_index(self):
+        from finance_cli.services.hana.onesign_cli import choose_account
+        numbers = ['12345678901234', '98765432101234']
+        with patch('finance_cli.services.hana.onesign_cli.text', return_value='2'), \
+                patch('socket.socket.connect', side_effect=AssertionError('No network')), \
+                redirect_stdout(io.StringIO()) as stdout, redirect_stderr(io.StringIO()) as stderr:
+            chosen = choose_account([{'acctNo': number, 'acctSubjNm': '합성 계좌'} for number in numbers])
+        self.assertEqual(chosen, numbers[1])
+        self.assertEqual(stdout.getvalue(), '')
+        for number in numbers:
+            self.assertIn(number, stderr.getvalue())
+        self.assertNotIn('끝 네 자리', stderr.getvalue())
+
     def test_plan_never_opens_state_prompts_or_connects(self):
         commands=[['onesign','enroll','--name','x','--run','a'],
                   ['onesign','login','--name','x','--run','a','--session','s'],

@@ -119,7 +119,7 @@ class CertificateTests(ServerCase):
         self.assertEqual(self.stage('account', account_choice='0', account_password='6049')['outcome'], 'success')
         return prepared
 
-    def test_select_bank_account_from_sealed_list_without_requery_or_raw_number_in_job(self):
+    def test_select_full_bank_account_from_sealed_list_without_requery_or_unrelated_fields(self):
         self.before_issue(stop_at_account=True)
         from finance_cli.services.hana import onesign_issue_protocol as protocol
         other = '98765432101234'
@@ -131,7 +131,12 @@ class CertificateTests(ServerCase):
         self.assertEqual(listed['outcome'], 'success', listed)
         self.assertEqual(listed['result']['next_stage'], 'account')
         self.assertEqual(len(listed['result']['accounts']), 2)
-        self.assert_private(listed, fixture.SOURCE, other, 'SYNTHETIC-PRIVATE')
+        self.assertEqual(listed['result']['accounts'], [
+            {'choice': '0', 'label': '하나은행 ' + fixture.SOURCE},
+            {'choice': '1', 'label': '하나은행 ' + other}])
+        self.assert_private(listed, 'SYNTHETIC-PRIVATE')
+        for number in (fixture.SOURCE, other):
+            self.assertNotIn(number, json.dumps(listed['events']))
         count = len(self.services.calls)
         self.assertEqual(count, before + 1)
         inspected = self.stage('inspect')
@@ -147,7 +152,7 @@ class CertificateTests(ServerCase):
         sent = self.services.calls[count:]
         self.assertEqual([call[1] for call in sent], [protocol.PATHS['keypad'], protocol.PATHS['signup-account']])
         self.assertEqual(json.loads(sent[-1][3])['acctNo'], other)
-        self.assert_private(good, other, '6049')
+        self.assert_private(good, '6049')
         repeat = self.stage('account', account_choice='1', account_password='6049')
         self.assertEqual(repeat['outcome'], 'not_started')
         self.assertEqual(len(self.services.calls), count + 2)
@@ -181,7 +186,8 @@ class CertificateTests(ServerCase):
         self.assertIsNone(job['result']['next_stage'])
         self.assertEqual(len(self.services.calls), count)
         self.assertEqual((self.home / 'hana/identities/synthetic/state.json').read_bytes(), before)
-        self.assert_private(job, fixture.SOURCE, '99999999999999')
+        self.assert_private(job, '99999999999999')
+        self.assertNotIn(fixture.SOURCE, json.dumps(job['result']['account_diagnostic']))
 
     def assert_private(self, job, *needles):
         text = json.dumps(job, ensure_ascii=False)
@@ -398,7 +404,7 @@ class CertificateTests(ServerCase):
         self.assertTrue(finished['result']['ready'], finished)
         self.assertIsNone(finished['result']['next_stage'])
         self.assertEqual(self.get('/logins').json()['logins'], [])  # No automatic login.
-        self.assert_private(finished, fixture.PASSWORD, fixture.PIN, fixture.SOURCE, '01000000000', '1000000', 'SYNTHETIC-ACCESS')
+        self.assert_private(finished, fixture.PASSWORD, fixture.PIN, '01000000000', '1000000', 'SYNTHETIC-ACCESS')
 
     def test_pin_and_confirmation_validation_before_requests(self):
         self.before_issue()

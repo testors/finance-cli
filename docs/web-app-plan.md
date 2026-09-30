@@ -177,7 +177,7 @@ API 경로는 `/api/v1`로 시작한다. 웹앱과 같은 출처에서 제공하
 | `POST /auth/enroll`, `POST /auth/logout` | 새 브라우저 접속 등록과 현재 접속 종료 |
 | `GET /auth/devices`, `DELETE /auth/devices/{id}` | 등록한 브라우저 접속 확인·철회 |
 | `POST /jobs` | 로그인·대상·업무 이름과 정형화한 입력으로 작업 접수; 단계에 필요한 비밀 입력 포함 가능 |
-| `GET /jobs`, `GET /jobs/{id}` | 작업 목록·진행·결과·후속 입력 요구 조회; 목록에서는 수취 계좌 등 입력값 마스킹 |
+| `GET /jobs`, `GET /jobs/{id}` | 작업 목록·진행·결과·후속 입력 요구 조회; 계좌번호는 전체 표시, 다른 민감 식별자 마스킹 유지 |
 | `POST /jobs/{id}/inputs` | 작업이 요청한 입력을 제출; 예상 단계와 입력 유형 검증 |
 | `POST /jobs/{id}/confirm` | 준비된 이체·계산서 내용을 확인하고 실행 예약; 필요한 경우 PIN을 함께 받음 |
 | `POST /jobs/{id}/cancel` | 아직 업무 요청을 시작하지 않은 작업 취소 |

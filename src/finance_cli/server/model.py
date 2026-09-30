@@ -208,15 +208,22 @@ def registration_value(con, login_id, key):
 
 # Targets
 
-MASKED_IDENTITY = ('tin', 'account_number', 'business_number')
+MASKED_IDENTITY = ('tin', 'business_number')
 
 
 def masked_identity(identity):
-    """Identity as shown to browsers; the stored value stays server-side."""
+    """Show full account numbers; keep taxpayer and business IDs masked."""
     from .adapters.base import mask_account
     if not isinstance(identity, dict):
         return identity
     return {k: (mask_account(v) if k in MASKED_IDENTITY and v and '•' not in str(v) else v) for k, v in identity.items()}
+
+
+def account_display_name(name, identity):
+    """Expand only the old generated account label, preserving user names."""
+    from .adapters.base import mask_account
+    number = (identity or {}).get('account_number')
+    return f'계좌 {number}' if number and name == f'계좌 {mask_account(number)}' else name
 
 
 def target_row(row):
@@ -224,6 +231,7 @@ def target_row(row):
         return None
     value = dict(row)
     value['identity'] = masked_identity(loads(value['identity'], {}))
+    value['display_name'] = account_display_name(value['display_name'], value['identity'])
     value['signing'] = loads(value['signing'], {})
     value['disabled'] = bool(value['disabled'])
     value.pop('identity_key', None)

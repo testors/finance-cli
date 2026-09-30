@@ -43,7 +43,7 @@ def agree(terms,title):
 
 def choose_account(rows):
     for i,row in enumerate(rows,1):
-        print(f"{i}: {row.get('acctSubjNm','')} / 끝 네 자리 {str(row.get('acctNo',''))[-4:]}",file=sys.stderr)
+        print(f"{i}: {row.get('acctSubjNm','')} / {row.get('acctNo','')}",file=sys.stderr)
     chosen = text('본인 계좌 순번: ')
     require(chosen.isdecimal() and 1<=int(chosen)<=len(rows),'account_selection_invalid')
     return rows[int(chosen)-1]['acctNo']

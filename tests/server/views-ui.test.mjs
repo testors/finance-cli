@@ -15,7 +15,7 @@ async function setup(t, method = 'onesign', readiness = 'query_only', secret = {
   context.Date.now = () => Date.parse('2026-09-30T16:00:00Z');
   const row = {id: 'login', institution: 'hana', method, readiness, display_name: '합성 연결',
     credential: {ref: 'synthetic'}, current_session_id: 'session', session: {state: 'consumed'}};
-  const target = {id: 'target', login_id: row.id, kind: 'account', display_name: '합성 계좌', identity: {account_number: '••••1234'}};
+  const target = {id: 'target', login_id: row.id, kind: 'account', display_name: '합성 계좌', identity: {account_number: '12345678901234'}};
   const state = {logins: [row], targets: [target], cache: new Map(), rows: {}, capabilities: {features: []},
     vaults: {synthetic: true}, credentials: [], profiles: []};
   const calls = [], asked = [], checked = [];

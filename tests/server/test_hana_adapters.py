@@ -106,13 +106,14 @@ class JointPathTests(HanaCase):
         self.assertNoLeak(login, 'USER-TOKEN', 'ACCESS-TOKEN', 'SERVER-NONCE')
         accounts = self.run_job(self.submit('hana.accounts.list', login_id=self.login['id'])['id'])
         self.assertEqual(accounts['outcome'], 'success', accounts)
-        self.assertEqual(accounts['result']['accounts'][0]['account_number'], '••••••••••1234')
-        self.assertNoLeak(accounts, joint_fixture.ACCOUNT)
+        self.assertEqual(accounts['result']['accounts'][0]['account_number'], joint_fixture.ACCOUNT)
+        self.assertEqual(accounts['result']['rows'][0]['acctNo'], joint_fixture.ACCOUNT)
+        self.assertNoLeak(accounts['events'], joint_fixture.ACCOUNT)
         again = self.run_job(self.submit('hana.accounts.list', login_id=self.login['id'])['id'])
         self.assertNotEqual(again['outcome'], 'success')  # One-shot per session, as in the CLI.
         self.assertIn('stopped', again['local'])
         target = self.register_account(self.login['id'], accounts)
-        self.assertEqual(target['identity']['account_number'], '••••••••••1234')
+        self.assertEqual(target['identity']['account_number'], joint_fixture.ACCOUNT)
         today = time.strftime('%Y-%m-%d')
         history = self.run_job(self.submit('hana.history.list', login_id=self.login['id'], target_id=target['id'],
                                            input={'start_date': today, 'end_date': today})['id'])
@@ -466,8 +467,10 @@ class OneSignPathTests(HanaCase):
         for job in (accounts, history2, inquiry, inquiry_detail):
             self.assertEqual(job['outcome'], 'success', job)
             self.assertEqual(job['session_id'], session)
-            self.assertNoLeak(job, onesign_fixture.SOURCE, onesign_fixture.PASSWORD, 'SYNTHETIC-OAT',
+            self.assertNoLeak(job, onesign_fixture.PASSWORD, 'SYNTHETIC-OAT',
                               'PRIVATE-SYNTHETIC-ROW')
+            self.assertNoLeak(job['events'], onesign_fixture.SOURCE)
+        self.assertEqual(accounts['result']['accounts'][0]['account_number'], onesign_fixture.SOURCE)
         paths = [c[1] for c in self.services.calls[count:]]
         self.assertEqual(paths, [onesign.ACCOUNTS, lp.PATHS['clock'], lp.PATHS['account'], lp.PATHS['recent'],
                                  onesign_transfer.PATHS['history'], onesign_transfer.PATHS['detail']])
@@ -525,7 +528,9 @@ class OneSignPathTests(HanaCase):
         self.assertEqual(detail['result']['source'], 'bank_detail')
         self.assertEqual(self.services.calls[-1][1], lp.PATHS['automatic'])
         self.assertEqual(json.loads(self.services.calls[-1][3])['atfMgntNo'], 'SYNTHETIC-DETAIL')
-        self.assertNoLeak(detail, onesign_fixture.SOURCE, 'SYNTHETIC-COOKIE')
+        self.assertEqual(detail['result']['detail']['wdrwAcctNo'], onesign_fixture.SOURCE)
+        self.assertNoLeak(detail, 'SYNTHETIC-COOKIE')
+        self.assertNoLeak(detail['events'], onesign_fixture.SOURCE)
 
     def test_query_acceptance_survives_bad_data_and_response_storage_failure(self):
         from finance_cli.services.hana import ledger_protocol as lp
@@ -634,10 +639,20 @@ class OneSignPathTests(HanaCase):
         awaiting = prepared['awaiting']
         self.assertEqual((awaiting['next_step'], awaiting['requires']), ('execute', ['vault_passphrase']))
         self.assertEqual(awaiting['preview']['recipient_name'], '합성 수취인')
-        self.assertEqual(awaiting['preview']['source_account'], '••••••••••1234')
+        self.assertEqual(awaiting['preview']['source_account'], onesign_fixture.SOURCE)
+        self.assertEqual(awaiting['preview']['recipient_account'], onesign_fixture.RECIPIENT)
+        self.assertEqual(prepared['fixed']['target']['identity']['account_number'], onesign_fixture.SOURCE)
+        self.assertEqual(prepared['result']['source_account'], onesign_fixture.SOURCE)
+        with self.db.read() as con:
+            saved = loads(jobs.get(con, prepared['id'])['awaiting'])
+        self.assertEqual(saved['digest'], awaiting['digest'])
+        self.assertEqual(saved['preview']['source_account'], '••••••••••1234')
+        self.assertEqual(next(j for j in self.get('/jobs').json()['jobs'] if j['id'] == prepared['id'])
+                         ['input']['recipient_account_number'], onesign_fixture.RECIPIENT)
         self.assertEqual(awaiting['verification'], 'live_untested')
         self.assertLessEqual(awaiting['expires_at'] - time.time(), 600)
         self.assertNoLeak(prepared, '6049', onesign_fixture.PASSWORD)
+        self.assertNoLeak(prepared['events'], onesign_fixture.SOURCE, onesign_fixture.RECIPIENT)
         sessions = self.get(f"/logins/{self.login['id']}/sessions").json()['sessions']
         self.assertEqual(sessions[0]['state'], 'consumed')  # One login session per transfer.
         refused = self.post('/jobs', {'name': 'hana.transfer.prepare', 'login_id': self.login['id'],
