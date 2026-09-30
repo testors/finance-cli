@@ -1,4 +1,4 @@
-"""Read-only ledger/inquiry using an existing OneSign login and sealed receipts.
+"""Read-only ledger/inquiry/security using a OneSign login and sealed receipts.
 
 The joint-login query planners retain endpoint, account, scope and cursor checks.
 Only their receipt/account source changes. No login, refresh, signing or retry.
@@ -7,7 +7,7 @@ The caller holds the identity operation lock and supplies an explicit send flag.
 import base64
 import gzip
 
-from . import inquiry, ledger, ledger_protocol, store, request_activity
+from . import inquiry, ledger, ledger_protocol, security, security_protocol, store, request_activity
 from .evidence import account
 from .hana_protocol import API
 from .onesign_codec import encode
@@ -15,7 +15,8 @@ from .onesign_crypto import ProtocolError
 from .onesign_io import Client, send_http
 from .onesign_transfer import binding
 
-PATHS = frozenset(ledger_protocol.PATHS.values()) | {inquiry.PATHS[k] for k in ('history', 'detail')}
+PATHS = (frozenset(ledger_protocol.PATHS.values()) | {inquiry.PATHS[k] for k in ('history', 'detail')}
+         | {path for path, _, _ in security_protocol.QUERIES.values()})
 
 
 class Queries:
@@ -80,15 +81,20 @@ class Queries:
                                         'observation': observation})
         client = Client(self.state, run, self.session, send=True, exchange=self.exchange)
         client.query_paths = PATHS
-        meta = request.get('account_history') or request['inquiry']
+        meta = request.get('account_history') or request.get('inquiry') or request['security_inquiry']
         kind = meta['kind']
         result = {'accepted': None, 'receipt_directory': run, 'automatic_retry': False,
                   'transfer_confirmed': False, 'processing_status': 'not_started'}
         try:
-            raw = client.request('bank', 'POST', path, request['headers'], encode(request['body']), web=kind != 'clock')
-            assessed = (ledger.assess(kind, client.last['http_status'], client.response_headers, raw)
-                        if 'account_history' in request else inquiry.assess(kind, client.last['http_status'],
-                            client.response_headers, raw, request['body'], (meta.get('previous') or {}).get('history_total')))
+            body = None if request.get('omit_body') else encode(request['body'])
+            raw = client.request('bank', 'POST', path, request['headers'], body, web=kind != 'clock')
+            if 'security_inquiry' in request:
+                assessed = security.assess(kind, client.last['http_status'], client.response_headers, raw)
+            elif 'account_history' in request:
+                assessed = ledger.assess(kind, client.last['http_status'], client.response_headers, raw)
+            else:
+                assessed = inquiry.assess(kind, client.last['http_status'], client.response_headers, raw,
+                                          request['body'], (meta.get('previous') or {}).get('history_total'))
             result.update(assessed, processing_status='completed')
         except (ValueError, OSError) as error:
             result['reason'] = str(error) if isinstance(error, (ProtocolError, request_activity.RequestBlocked)) else 'local_processing_error'

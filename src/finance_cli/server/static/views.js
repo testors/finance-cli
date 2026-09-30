@@ -346,7 +346,7 @@ async function runHanaQuery(ctx, suffix, fields, options) {
   if (suffix !== 'history.export' && !await ensureBankSession(ctx, fields.login_id)) return;
   const owner = login(fields.login_id);
   const onesign = owner?.method === 'onesign';
-  const secrets = onesign ? await askSecrets('내역 조회', [SECRET_LABELS.vault_passphrase],
+  const secrets = onesign ? await askSecrets(suffix === 'security.query' ? '보안매체·한도 조회' : '내역 조회', [SECRET_LABELS.vault_passphrase],
     '로그인한 세션으로 조회해요.', {store: onesignStore(owner)}) : {};
   if (secrets === null) return;
   return ctx.run(`hana.${onesign ? 'onesign.' : ''}${suffix}`, fields, {...options, secrets});
@@ -415,11 +415,11 @@ async function inquiryView(ctx) {
 }
 
 async function securityView(ctx) {
-  const logins = scopeLogins('hana').filter(l => l.method === 'joint_certificate');
-  if (!logins.length) return heading('보안매체·한도', '등록된 보안매체와 한도 상태를 조회하세요.') + setupNotice('hana-security') + empty('공동인증서 하나은행 로그인이 없어요.', '<button class="button primary" data-view="settings">연결·인증서</button>');
+  const logins = scopeLogins('hana').filter(l => ['joint_certificate', 'onesign'].includes(l.method));
+  if (!logins.length) return heading('보안매체·한도', '등록된 보안매체와 한도 상태를 조회하세요.') + setupNotice('hana-security') + empty('연결된 하나은행 로그인이 없어요.', '<button class="button primary" data-view="settings">연결·인증서</button>');
   const kinds = [['limits', '이체한도'], ['limit-exception', '한도 예외'], ['security-media', '보안매체'], ['otp', 'OTP'], ['otp-accident', 'OTP 사고'], ['mobile-otp', '모바일 OTP']];
   return heading('보안매체·한도', '상태를 조회만 해요. OTP 발급이나 한도 변경은 제공하지 않아요.') + setupNotice('hana-security') +
-    `<section class="panel"><form class="filter-bar" data-submit="security-query"><label class="field-inline">로그인<select name="login_id">${logins.map(l => `<option value="${esc(l.id)}">${esc(l.display_name)}</option>`).join('')}</select></label><label class="field-inline">조회 항목<select name="kind">${kinds.map(([k, l]) => `<option value="${k}">${l}</option>`).join('')}</select></label><button class="button primary" type="submit">${icon('refresh')}조회</button></form>${panel('job-panel', null)}<div id="results"></div></section>`;
+    `<section class="panel"><form class="filter-bar" data-submit="security-query"><label class="field-inline">로그인<select name="login_id">${logins.map(l => `<option value="${esc(l.id)}">${esc(l.display_name)}</option>`).join('')}</select></label><label class="field-inline">조회 항목<select name="kind">${kinds.map(([k, l]) => `<option value="${k}">${l}</option>`).join('')}</select></label><button class="button primary" type="submit">${icon('refresh')}조회</button><button class="button secondary" type="button" data-action="security-login">다시 로그인</button></form>${panel('job-panel', null)}<div id="results"></div></section>`;
 }
 
 // Giro -----------------------------------------------------------------------
@@ -765,11 +765,13 @@ export const actions = {
     const input = formInput(form);
     const loginId = input.login_id;
     delete input.login_id;
-    await ctx.run('hana.security.query', {login_id: loginId, input}, {panel: 'job-panel', onDone: job => {
+    await runHanaQuery(ctx, 'security.query', {login_id: loginId, input}, {panel: 'job-panel', onDone: job => {
       const observation = job.result?.observation || {};
       document.getElementById('results').innerHTML = outcomeNote(job) + (observation.fields ? `<div class="settings-body">${ui.fieldsList({...observation.fields, ...observation.display})}</div>` : '') + ui.rowsTable(observation.rows, {group: 'security'}) + ui.details('진단', observation.diagnostics);
     }});
   },
+  'security-login': (ctx, button) => actions.login(ctx,
+    {dataset: {login: button.closest('form').querySelector('[name="login_id"]').value}}),
   'amount-add': (ctx, button) => {
     const input = document.querySelector('#transfer-amount');
     const value = Number(String(input.value).replace(/\D/g, '')) || 0;

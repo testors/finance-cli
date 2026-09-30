@@ -16,7 +16,7 @@ FEATURES = (
      ('hana.inquiry.history', 'hana.inquiry.detail', 'hana.onesign.inquiry.history', 'hana.onesign.inquiry.detail')),
     ('banking', 'hana-transfer', '원화 이체 준비·확인·실행·결과 조회', 'work',
      ('hana.transfer.prepare', 'hana.transfer.reconcile')),
-    ('banking', 'hana-security', '보안매체·한도 조회', 'work', ('hana.security.query',)),
+    ('banking', 'hana-security', '보안매체·한도 조회', 'work', ('hana.security.query', 'hana.onesign.security.query')),
     ('banking', 'hana-login', '앱 인증·공동인증서·하나인증서 로그인', 'settings', ('hana.login', 'hana.onesign.login')),
     ('banking', 'hana-extend', '로그인 연장', 'settings', ('hana.session.extend',)),
     ('banking', 'hana-issuance', '하나인증서 신규 발급', 'settings',
