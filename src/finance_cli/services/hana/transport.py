@@ -91,6 +91,8 @@ def send(session, stage, request, assessor):
 
 def read_receipt(session, stage):
     """The saved request, response and body bytes of one attempt."""
+    if hasattr(session, 'read_receipt'):
+        return session.read_receipt(stage)
     directory = store.child(session, store.name(stage))
     if store.child(directory, 'failure.json').exists():
         raise ValueError('receipt_has_failure_marker')

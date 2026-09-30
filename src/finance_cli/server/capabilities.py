@@ -10,8 +10,10 @@ FEATURES = (
     # area, id, title, placement, jobs
     ('banking', 'hana-accounts', '계좌·잔액 조회', 'work', ('hana.accounts.list', 'hana.onesign.accounts')),
     ('banking', 'hana-history', '거래 내역·상세·내보내기', 'work',
-     ('hana.history.list', 'hana.history.more', 'hana.history.detail', 'hana.history.export')),
-    ('banking', 'hana-inquiry', '이체 내역·상세', 'work', ('hana.inquiry.history', 'hana.inquiry.detail')),
+     ('hana.history.list', 'hana.history.more', 'hana.history.detail', 'hana.history.export',
+      'hana.onesign.history.list', 'hana.onesign.history.more', 'hana.onesign.history.detail', 'hana.onesign.history.export')),
+    ('banking', 'hana-inquiry', '이체 내역·상세', 'work',
+     ('hana.inquiry.history', 'hana.inquiry.detail', 'hana.onesign.inquiry.history', 'hana.onesign.inquiry.detail')),
     ('banking', 'hana-transfer', '원화 이체 준비·확인·실행·결과 조회', 'work',
      ('hana.transfer.prepare', 'hana.transfer.reconcile')),
     ('banking', 'hana-security', '보안매체·한도 조회', 'work', ('hana.security.query',)),
@@ -122,13 +124,16 @@ def global_capabilities():
     cache = {}
     return {'features': [feature_state(f, levels, cache) for f in FEATURES], 'verification': levels,
             'jobs': adapters.names(), 'states': ['available', 'setup_required', 'planned', 'local_only'],
-            'readiness': ['ready', 'login_required', 'input_required', 'target_unverified']}
+            'readiness': ['ready', 'query_only', 'login_required', 'input_required', 'target_unverified']}
 
 
 def login_readiness(con, login):
     session = model.current_session(con, login['id'])
     if login['disabled']:
         return 'login_disabled'
+    if login['institution'] == 'hana' and login['method'] == 'onesign' and session is not None \
+            and session['state'] != 'usable' and adapters.get('hana.onesign.accounts').accepts_session(session):
+        return 'query_only'
     if session is None or session['state'] != 'usable':
         return 'login_required'
     return 'ready'
@@ -141,7 +146,7 @@ def profile_capabilities(con, profile_id):
     for target in targets:
         login = model.get_login(con, target['login_id'], raw=True)
         readiness = login_readiness(con, login)
-        if readiness == 'ready' and target['disabled']:
+        if readiness in ('ready', 'query_only') and target['disabled']:
             readiness = 'target_disabled'
         signing = {p: bool(model.signing_for(con, login, target, p)) for p in ('invoice_sign', 'transfer_sign')}
         rows.append({'target_id': target['id'], 'login_id': login['id'], 'institution': login['institution'],

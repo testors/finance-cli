@@ -105,9 +105,7 @@ def submit(db, *, name, origin, login_id=None, target_id=None, profile_id=None, 
                 session = model.current_session(con, login['id'])
             if session is None:
                 raise NotReady('login_required')
-            allowed = {'usable'} | ({'stale'} if adapter.accepts_stale_session else set()) \
-                | ({'consumed'} if adapter.accepts_consumed_session else set())
-            if session['state'] not in allowed:
+            if not adapter.accepts_session(session):
                 raise NotReady('session_' + session['state'])
             session_id = session['id']
         signing = None

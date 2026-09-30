@@ -46,6 +46,7 @@ class Client:
         self.last = {'service_status': 'unconfirmed', 'processing_status': 'not_started'}
         self.cookies = {'ra': [], 'ca': []}
         self.transfer_paths = set()
+        self.query_paths = set()
 
     def request(self, scope, method, path, headers, body, *, web=False, auth_stage=None, observe=None):
         if not self.send:
@@ -54,7 +55,7 @@ class Client:
             'signup-accounts','signup-account','keypad','clock','pin-check','registration','complete-signup')} | {
             signup.WEB_PATHS[name] for name in ('clear','phone-pre','sms-send','sms-verify','eligibility',
                                               'customer','terms-status','terms-save')} | {
-            pin.BANK_NONCE_PATH, pin.LOGIN_PATH, ACCOUNTS} | self.transfer_paths
+            pin.BANK_NONCE_PATH, pin.LOGIN_PATH, ACCOUNTS} | self.transfer_paths | self.query_paths
         if scope == 'bank':
             if auth_stage:
                 expected = {'register':'/public/app_public_key', 'first-access':'/public/app_first_access',

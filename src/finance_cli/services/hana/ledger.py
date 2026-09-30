@@ -257,11 +257,8 @@ def run(name, stage, input_path, *, send=False, **options):
         return result
 
 
-def export(name, last, output):
-    """Export accepted pages without contacting the bank; keep duplicates and wire order."""
-    from pathlib import Path
-    from finance_cli.core import storage
-    session = store.session_path(name)
+def export_report(session, last):
+    """Build an export from accepted receipts, including an encrypted receipt reader."""
     final = transport.read_receipt(session, last)[0]
     headers = {k.lower(): v for k, v in final['headers'].items()}
     pages, position = chain(session, last, headers)
@@ -300,6 +297,14 @@ def export(name, last, output):
             cells[field] = value
         writer.writerow(cells)
     report['csv_text_cells_escaped'] = escaped
+    return report, ('﻿' + buffer.getvalue()).encode('utf-8')
+
+
+def export(name, last, output):
+    """Export accepted pages without contacting the bank; keep duplicates and wire order."""
+    from pathlib import Path
+    from finance_cli.core import storage
+    report, csv_bytes = export_report(store.session_path(name), last)
     output = storage.no_symlinks(Path(output).expanduser())
     if output.suffix != '.json':
         raise ValueError('export_output_must_end_in_json')
@@ -307,6 +312,6 @@ def export(name, last, output):
     if output.exists() or csv_path.exists():
         raise ValueError('export_already_exists')
     store.write_new(output, report)
-    storage.write_new(csv_path, ('﻿' + buffer.getvalue()).encode('utf-8'))
+    storage.write_new(csv_path, csv_bytes)
     return {k: report[k] for k in ('network_used', 'page_count', 'row_count', 'pagination_complete',
                                    'atomic_snapshot_verified', 'transfer_confirmed')}

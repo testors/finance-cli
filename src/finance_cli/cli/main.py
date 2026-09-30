@@ -38,7 +38,7 @@ def capabilities():
         'web': {'optional_dependency': 'finance-cli[web]', 'command': 'fin server',
                 'scope': ['browser-enrollment', 'business-profiles', 'institution-logins-and-targets', 'jobs',
                           'hana', 'hometax', 'giro-bills', 'joint-certificate-import', 'id-card-storage',
-                          'onesign-staged-issuance'],
+                          'onesign-staged-issuance', 'onesign-shared-session-queries'],
                 'server_managed': ['certificate-export', 'onesign-settings-and-bundle-transfer', 'runtime-install',
                                    'device-registration-files'],
                 'binding': 'loopback', 'remote_access': 'https reverse proxy', 'live_tested': False},

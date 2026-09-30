@@ -189,6 +189,209 @@ class OneSignPathTests(HanaCase):
         self.assertEqual(response.status_code, 200, response.text)
         return self.run_job(job['id'], secrets)
 
+    def query_setup(self):
+        from finance_cli.services.hana import ledger_protocol as lp, onesign_queries
+        self.enterContext(patch.object(onesign_queries, 'send_http', self.services))
+        self.services.override[onesign.ACCOUNTS] = {'mainAcctList': [
+            {'acctNo': onesign_fixture.SOURCE, 'curCd': 'KRW', 'acctBal': 1000, 'acctSeqNo': ''}]}
+        self.services.override[lp.PATHS['account']] = {'acctInfo': {
+            'acctNo': onesign_fixture.SOURCE, 'curCd': 'KRW', 'tailNo': '01'}}
+        self.services.override[lp.PATHS['recent']] = {'grid1': [{'trscDt': time.strftime('%Y%m%d'), 'trscAmt': 10,
+                                                               'trscSrno': 'PRIVATE-SYNTHETIC-ROW'}],
+                                                    'recNcnt1': 1, 'nextTrscYn1': 'N'}
+        self.signed_in()
+        return self.account_target()
+
+    def query_job(self, target, suffix, parent=None, **input):
+        if parent is None:
+            input = {'start_date': time.strftime('%Y-%m-%d'), 'end_date': time.strftime('%Y-%m-%d'), **input}
+        return self.run_job(self.submit('hana.onesign.' + suffix, login_id=self.login['id'], target_id=target['id'],
+                                        input=input, parent_job_id=parent)['id'], self.vault)
+
+    def test_same_login_queries_before_and_after_transfer_and_sealed_receipts(self):
+        from finance_cli.services.hana import ledger_protocol as lp
+        target = self.query_setup()
+        session = self.get('/logins').json()['logins'][0]['current_session_id']
+        history = self.query_job(target, 'history.list')
+        self.assertEqual(history['outcome'], 'success', history)
+        self.assertEqual(history['result']['rows'][0]['amount'], 10)
+        self.assertFalse(history['result']['more_available'])
+        count = len(self.services.calls)
+        detail = self.query_job(target, 'history.detail', history['id'], row=1)
+        self.assertEqual(detail['outcome'], 'success', detail)
+        self.assertFalse(detail['result']['network_used'])
+        exported = self.query_job(target, 'history.export', history['id'])
+        self.assertEqual(exported['outcome'], 'success', exported)
+        self.assertEqual(count, len(self.services.calls))
+        artifact = self.get('/artifacts/' + exported['artifacts'][0]['id']).json()
+        self.assertNotIn('scope', artifact)
+        self.assertNotIn('raw', artifact['rows'][0])
+        self.assertNoLeak(artifact, onesign_fixture.SOURCE, 'PRIVATE-SYNTHETIC-ROW', 'SYNTHETIC-OAT')
+        prepared = self.prepare(target)
+        self.assertEqual(prepared['status'], 'awaiting_input', prepared)
+        executed = self.confirm(prepared, self.vault)
+        self.assertEqual(executed['outcome'], 'success', executed)
+        row = self.get('/logins').json()['logins'][0]
+        self.assertEqual((row['current_session_id'], row['readiness']), (session, 'query_only'))
+        count = len(self.services.calls)
+        accounts = self.run_job(self.submit('hana.onesign.accounts', login_id=self.login['id'])['id'], self.vault)
+        self.assertEqual(accounts['outcome'], 'success', accounts)
+        history2 = self.query_job(target, 'history.list')
+        inquiry = self.query_job(target, 'inquiry.history')
+        inquiry_detail = self.query_job(target, 'inquiry.detail', inquiry['id'], row=1)
+        for job in (accounts, history2, inquiry, inquiry_detail):
+            self.assertEqual(job['outcome'], 'success', job)
+            self.assertEqual(job['session_id'], session)
+            self.assertNoLeak(job, onesign_fixture.SOURCE, onesign_fixture.PASSWORD, 'SYNTHETIC-OAT',
+                              'PRIVATE-SYNTHETIC-ROW')
+        paths = [c[1] for c in self.services.calls[count:]]
+        self.assertEqual(paths, [onesign.ACCOUNTS, lp.PATHS['clock'], lp.PATHS['account'], lp.PATHS['recent'],
+                                 onesign_transfer.PATHS['history'], onesign_transfer.PATHS['detail']])
+        for _, path, headers, _ in self.services.calls[count:]:
+            self.assertTrue(headers.get('one-access-token'), path)
+        # No plaintext receipts in job files or OneSign storage.
+        for path in self.root.rglob('*'):
+            if path.is_file() and path.suffix in ('.json', '.bin', '.csv'):
+                self.assertNotIn(b'PRIVATE-SYNTHETIC-ROW', path.read_bytes(), str(path))
+        with State('synthetic', onesign_fixture.PASSWORD) as state:
+            self.assertTrue(any(s.get('transfer_attempted') for s in state.snapshot()['sessions'].values()))
+
+    def test_query_pagination_continues_once_and_export_keeps_duplicates(self):
+        from finance_cli.services.hana import ledger_protocol as lp
+        target = self.query_setup()
+        first = self.services.override[lp.PATHS['recent']]
+        first.update(recNcnt1=20, nextTrscYn1='Y', dtlsSeqNo1=2, trscSeqNo1=3, nextTrscDt1='20260930')
+        history = self.query_job(target, 'history.list')
+        self.assertEqual(history['outcome'], 'success', history)
+        self.assertTrue(history['result']['more_available'], history)
+        first.update(nextTrscYn1='N', recNcnt1=1)
+        count = len(self.services.calls)
+        more = self.query_job(target, 'history.more', history['id'])
+        self.assertEqual(more['outcome'], 'success', more)
+        self.assertTrue(more['result']['pagination_complete'])
+        sent = json.loads(self.services.calls[-1][3])
+        self.assertEqual((sent['dtlsSeqNo'], sent['trscSeqNo']), (2, 3))
+        again = self.query_job(target, 'history.more', history['id'])
+        self.assertNotEqual(again['outcome'], 'success', again)
+        self.assertEqual(len(self.services.calls), count + 1)
+        exported = self.query_job(target, 'history.export', more['id'])
+        self.assertEqual(exported['result']['row_count'], 2)
+        document = self.get('/artifacts/' + exported['artifacts'][0]['id']).json()
+        self.assertFalse(document['duplicates_removed'])
+        self.assertEqual(document['issues'][-1]['issue'], 'identical_row_preserved')
+
+    def test_query_bad_cursor_preserves_page_and_detail_uses_saved_identifiers(self):
+        from finance_cli.services.hana import ledger_protocol as lp
+        target = self.query_setup()
+        value = self.services.override[lp.PATHS['recent']]
+        value.update(recNcnt1=20, nextTrscYn1='Y')  # Missing trscSeqNo1: do not infer a next page.
+        value['grid1'][0].update(atfMgntNo='SYNTHETIC-DETAIL', balFlctDvCd='2', atfPrfRankCd='314')
+        self.services.override[lp.PATHS['automatic']] = {'trnsAmt': 10, 'wdrwAcctNo': onesign_fixture.SOURCE,
+                                                        'cookie': 'SYNTHETIC-COOKIE'}
+        history = self.query_job(target, 'history.list')
+        self.assertEqual(history['outcome'], 'success', history)
+        self.assertFalse(history['result']['more_available'])
+        self.assertFalse(history['result']['pagination_complete'])
+        count = len(self.services.calls)
+        more = self.query_job(target, 'history.more', history['id'])
+        self.assertNotEqual(more['outcome'], 'success', more)
+        self.assertEqual(len(self.services.calls), count)
+        detail = self.query_job(target, 'history.detail', history['id'], row=1)
+        self.assertEqual(detail['outcome'], 'success', detail)
+        self.assertEqual(detail['result']['source'], 'bank_detail')
+        self.assertEqual(self.services.calls[-1][1], lp.PATHS['automatic'])
+        self.assertEqual(json.loads(self.services.calls[-1][3])['atfMgntNo'], 'SYNTHETIC-DETAIL')
+        self.assertNoLeak(detail, onesign_fixture.SOURCE, 'SYNTHETIC-COOKIE')
+
+    def test_query_acceptance_survives_bad_data_and_response_storage_failure(self):
+        from finance_cli.services.hana import ledger_protocol as lp
+        target = self.query_setup()
+        self.services.override[lp.PATHS['recent']] = b'not JSON'
+        malformed = self.query_job(target, 'history.list')
+        self.assertEqual(malformed['outcome'], 'success', malformed)
+        self.assertIsNone(malformed['result']['rows'])
+        self.assertTrue(malformed['local']['saved_rows_unreadable'])
+        real_record = State.record
+
+        def fail_receipt(state, run, name, value):
+            if run.startswith('query-') and name == 'http-0001-response':
+                raise OSError('synthetic disk failure')
+            return real_record(state, run, name, value)
+        count = len(self.services.calls)
+        with patch.object(State, 'record', fail_receipt):
+            failed = self.query_job(target, 'inquiry.history')
+        self.assertEqual(failed['outcome'], 'success', failed)
+        self.assertTrue(failed['service_verdict']['accepted'])
+        self.assertEqual(failed['service_verdict']['processing_status'], 'response_storage_failed')
+        self.assertIsNone(failed['result']['rows'])
+        self.assertEqual(len(self.services.calls), count + 1)
+
+    def test_query_rejection_or_transport_loss_does_not_refresh_retry_or_continue(self):
+        from finance_cli.services.hana import ledger_protocol as lp, onesign_queries
+        target = self.query_setup()
+        count = len(self.services.calls)
+        self.services.override[lp.PATHS['account']] = OSError('synthetic response lost')
+        lost = self.query_job(target, 'history.list')
+        self.assertEqual(lost['outcome'], 'unknown', lost)
+        self.assertEqual([c[1] for c in self.services.calls[count:]], [lp.PATHS['clock'], lp.PATHS['account']])
+        count = len(self.services.calls)
+
+        def rejected(*args):
+            status, headers, raw, cookies = self.services(*args)
+            return 403, headers, raw, cookies
+        with patch.object(onesign_queries, 'send_http', rejected):
+            refused = self.query_job(target, 'inquiry.history')
+        self.assertEqual(refused['outcome'], 'rejected', refused)
+        self.assertEqual(len(self.services.calls), count + 1)
+
+    def test_queries_refuse_expired_stale_superseded_sessions_and_recheck_queued_jobs(self):
+        from finance_cli.server import model
+        target = self.query_setup()
+        prepared = self.prepare(target)
+        self.assertEqual(prepared['status'], 'awaiting_input', prepared)
+        with self.db.read() as con:
+            session = model.current_session(con, self.login['id'])['id']
+        count = len(self.services.calls)
+        for state, note in (('expired', 'transfer_prepared'), ('stale', 'transfer_prepared'),
+                            ('consumed', 'superseded_by_synthetic'), ('consumed', None)):
+            with self.db.write() as con:
+                model.mark_session(con, session, state, note)
+            for name in ('accounts', 'history.list', 'inquiry.history'):
+                response = self.post('/jobs', {'name': 'hana.onesign.' + name, 'login_id': self.login['id'],
+                    'target_id': target['id'], 'secrets': self.vault,
+                    'input': {} if name == 'accounts' else {'start_date': '2026-10-01', 'end_date': '2026-10-01'}})
+                self.assertEqual(response.json()['error'], 'session_' + state)
+            self.assertEqual(self.get('/logins').json()['logins'][0]['readiness'], 'login_required')
+        with self.db.write() as con:
+            model.mark_session(con, session, 'consumed', 'transfer_prepared')
+        queued = self.submit('hana.onesign.accounts', login_id=self.login['id'])
+        with self.db.write() as con:
+            model.mark_session(con, session, 'consumed', 'superseded_by_synthetic')
+        checked = self.run_job(queued['id'], self.vault)
+        self.assertEqual(checked['local']['stopped'], 'fixed_session_not_usable')
+        self.assertEqual(len(self.services.calls), count)
+
+    def test_query_requires_current_session_accounts_and_cannot_mix_receipts(self):
+        from finance_cli.services.hana import onesign_queries
+        target = self.query_setup()
+        history = self.query_job(target, 'history.list')
+        self.assertEqual(history['outcome'], 'success', history)
+        with self.db.read() as con:
+            saved = json.loads(jobs.get(con, history['id'])['attempt'])['history']['receipts']['page']
+        self.signed_in()
+        count = len(self.services.calls)
+        missing = self.query_job(target, 'history.list')
+        self.assertEqual(missing['local']['stopped'], 'accounts_query_required_in_session')
+        self.assertEqual(len(self.services.calls), count)
+        with State('synthetic', onesign_fixture.PASSWORD) as state:
+            current = list(state.snapshot()['sessions'])[-1]
+            source = onesign_queries.Queries(state, current)
+            with self.assertRaisesRegex(ValueError, 'query_login_identity_changed'):
+                source.read_receipt(saved)
+        foreign = self.post('/jobs', {'name': 'hana.onesign.history.export', 'login_id': self.login['id'],
+                                      'target_id': target['id'], 'parent_job_id': history['id'], 'secrets': self.vault})
+        self.assertEqual(foreign.json()['error'], 'session_consumed')
+
     def test_wrong_passphrase_and_pin_stop_before_requests(self):
         before = len(self.services.calls)
         wrong = self.run_job(self.submit('hana.onesign.login', login_id=self.login['id'])['id'],
