@@ -14,6 +14,20 @@ const options = {hana: {settings: [{name: 'synthetic', version: '1.0.27'}], carr
 
 const CARD = {name: 'resident-card', kind: 'resident', issue_date: '2020.02.29', saved_at: 1700000000};
 
+test('stored identity rejection explains a mismatched name without resending', async t => {
+  const ui = await setup(t, {stage:'identity', overrides:{inspect:{result:{next_stage:null,ready:false,
+    identity_diagnostic:{input_checks:{name_matches_phone:false,name_is_document_label:true},requests:[
+      {stage:'image',service_status:'accepted',image_accepted:true},
+      {stage:'identity',service_status:'rejected',error_codes:['TEST456']}]}}}}});
+  await ui.resume();
+  assert.deepEqual(ui.names(), ['inspect']);
+  assert.match(ui.document.body.textContent, /사진 접수 완료/);
+  assert.match(ui.document.body.textContent, /은행 거절.*TEST456/);
+  assert.match(ui.document.body.textContent, /성명 칸에 신분증 종류가 입력/);
+  assert.doesNotMatch(ui.document.body.textContent, /완료 성공/);
+  assert.equal(ui.form(), null);
+});
+
 async function setup(t, {stage = 'init', overrides = {}, lost = '', closeAt = '', unlockFailed = false, refreshFailed = false, cards = []} = {}) {
   const dom = new JSDOM('<dialog id="detail-dialog"><div id="dialog-content"></div></dialog><div id="toast"></div>',
     {url: 'http://127.0.0.1:8740', runScripts: 'outside-only'});

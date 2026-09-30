@@ -24,7 +24,7 @@ from finance_cli.credentials.registry import Registry
 from finance_cli.server import jobs, worker
 from finance_cli.server.adapters import certificates
 from finance_cli.server.adapters.base import Stop
-from finance_cli.services.hana import onesign, onesign_setup, onesign_signup_protocol as signup
+from finance_cli.services.hana import hana_protocol, onesign, onesign_setup, onesign_signup_protocol as signup
 from finance_cli.services.hana.onesign_state import State
 
 
@@ -141,6 +141,89 @@ class CertificateTests(ServerCase):
         self.assertNotIn('SYNTHETIC-PRIVATE', json.dumps(result))
         self.assertNotIn('secure_token', json.dumps(result))
         self.assertFalse(result['network_used'])
+
+    def test_inspect_identity_receipts_without_sending_or_exposing_private_fields(self):
+        self.setup_identity()
+        private = 'SYNTHETIC-PRIVATE-NAME-AND-TOKEN'
+        with State('synthetic', fixture.PASSWORD) as state:
+            state.begin_run('synthetic-attempt', 'identity')
+            state.record('synthetic-attempt', 'http-0001-response', {'status': 200,
+                'service_status': 'accepted', 'headers': [],
+                'body': base64.b64encode(json.dumps({'scss': True, 'name': private}).encode()).decode()})
+            state.record('synthetic-attempt', 'http-0002-response', {'status': 200,
+                'service_status': 'rejected', 'headers': [
+                    ('set-cookie', private),
+                    ('hana-sys-header', hana_protocol.encode_header({'CHNL_SYS_HDPT': {
+                        'PROC_RSLT_DV_CD': '1', 'STD_TMSG_ERR_CD': 'TEST123', 'TMSG_GLOB_ID': private}})),
+                    ('hana-com-header', hana_protocol.encode_header({'STD_MSGPT': [{
+                        'OGN_ERR_CD': 'TEST456', 'MSG_INFO_REPT': [{'MSG_CTT': private + ' 이용시간 08:00 ~ 22:00'}]}]}))],
+                'body': base64.b64encode(json.dumps({'private': private}).encode()).decode()})
+        before = (self.home / 'hana/identities/synthetic/state.json').read_bytes()
+        calls = len(self.services.calls)
+        job = self.stage('inspect')
+        diagnostic = job['result']['identity_diagnostic']
+        self.assertEqual(job['outcome'], 'success')
+        self.assertFalse(diagnostic['network_used'])
+        self.assertEqual(diagnostic['requests'], [
+            {'stage': 'image', 'http_status': 200, 'service_status': 'accepted', 'error_codes': [],
+             'image_accepted': True, 'information_mismatch_reported': False},
+            {'stage': 'identity', 'http_status': 200, 'service_status': 'rejected',
+             'processing_code': '1', 'standard_error_code': 'TEST123', 'error_codes': ['TEST456'],
+             'message_hints': ['service_hours'], 'service_times': ['08:00', '22:00'],
+             'information_mismatch_reported': False}])
+        self.assertEqual(len(self.services.calls), calls)
+        self.assertEqual((self.home / 'hana/identities/synthetic/state.json').read_bytes(), before)
+        self.assert_private(job, private)
+
+    def test_inspect_missing_or_damaged_identity_receipts_preserves_inspection(self):
+        self.setup_identity()
+        with State('synthetic', fixture.PASSWORD) as state:
+            state.begin_run('synthetic-attempt', 'identity')
+            state.record('synthetic-attempt', 'http-0001-response', {'status': 200,
+                'headers': [('hana-sys-header', 'not-valid-base64')]})
+        job = self.stage('inspect')
+        self.assertEqual(job['outcome'], 'success')
+        self.assertEqual(job['result']['identity_diagnostic']['requests'], [
+            {'stage': 'image', 'receipt': 'unreadable'}, {'stage': 'identity', 'receipt': 'not_available'}])
+
+    def test_identity_rejection_keeps_name_mismatch_evidence_and_never_retries(self):
+        self.begin_identity()
+        fields = dict(CARD_FIELDS, name='운전면허증')
+        capture = {'kind': 'resident', 'fields': fields, 'image': base64.b64encode(synthetic_jpeg()).decode(),
+                   'confirmation': '본인 신분증'}
+        self.assertEqual(self.stage('prepare-id', identity_capture=json.dumps(capture))['outcome'], 'success')
+        from finance_cli.services.hana import onesign_issue_protocol as protocol
+        original = self.services.bank
+        def bank(path, body):
+            return {'rspsCd': '901', 'rspsMsg': 'SYNTHETIC-PRIVATE'} if path == protocol.PATHS['identity'] else original(path, body)
+        with patch.object(self.services, 'bank', side_effect=bank):
+            job = self.stage('identity')
+        self.assertEqual(job['outcome'], 'rejected')
+        self.assertEqual(job['local']['stopped'], 'identity_verification_failed')
+        self.assertEqual(job['result']['identity_diagnostic']['input_checks'], {
+            'name_matches_phone': False, 'name_is_document_label': True, 'birth_matches_phone': True,
+            'resident_prefix_matches_phone': True, 'resident_tail_seven_digits': True, 'request_matches_capture': True})
+        count = len(self.services.calls)
+        inspected = self.stage('inspect')
+        self.assertEqual(inspected['result']['identity_diagnostic'], job['result']['identity_diagnostic'])
+        self.assertEqual(len(self.services.calls), count)
+        self.assert_private(inspected, 'SYNTHETIC-PRIVATE', CARD_FIELDS['name'], CARD_FIELDS['resident'])
+
+    def test_identity_diagnostic_failure_preserves_bank_rejection(self):
+        self.begin_identity()
+        capture = {'kind': 'resident', 'fields': CARD_FIELDS, 'image': base64.b64encode(synthetic_jpeg()).decode(),
+                   'confirmation': '본인 신분증'}
+        self.stage('prepare-id', identity_capture=json.dumps(capture))
+        from finance_cli.services.hana import onesign_issue_protocol as protocol
+        original = self.services.bank
+        def bank(path, body):
+            return {'rspsCd': '901'} if path == protocol.PATHS['identity'] else original(path, body)
+        with patch.object(self.services, 'bank', side_effect=bank), \
+                patch.object(certificates, 'identity_diagnostics', side_effect=OSError('SYNTHETIC-PRIVATE')):
+            job = self.stage('identity')
+        self.assertEqual(job['outcome'], 'rejected')
+        self.assertEqual(job['local']['stopped'], 'identity_verification_failed')
+        self.assertTrue(job['result']['diagnostic_unavailable'])
 
     def test_remote_send_approval_required_before_store_or_worker(self):
         with patch.object(State, '__enter__', side_effect=AssertionError('must not open')), \
