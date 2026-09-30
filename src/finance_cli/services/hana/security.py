@@ -32,7 +32,14 @@ def assess(kind, status, headers, raw):
 def prepare(session, kind):
     if kind not in protocol.QUERIES:
         raise ValueError('unknown_inquiry')
-    request = login.authenticated_session(session)
+    return prepare_request(login.authenticated_session(session), kind)
+
+
+def prepare_request(authenticated, kind):
+    """The original read-only web request, with an already authenticated login."""
+    if kind not in protocol.QUERIES:
+        raise ValueError('unknown_inquiry')
+    request = dict(authenticated)
     headers = {k.lower(): v for k, v in request['headers'].items()}
     for key in login.IDENTITY:
         headers[key] = headers[key].strip()  # The web interceptor trims these values.

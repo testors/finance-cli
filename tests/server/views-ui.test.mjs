@@ -53,6 +53,30 @@ async function setup(t, method = 'onesign', readiness = 'query_only', secret = {
 }
 
 for (const method of ['onesign', 'joint_certificate']) {
+  test(`${method} security queries use the selected login without an account target`, async t => {
+    const ui = await setup(t, method);
+    ui.state.targets = [];
+    ui.document.querySelector('main').innerHTML = await ui.views.security(ui.ctx);
+    assert.doesNotMatch(ui.document.body.textContent, /공동인증서 하나은행 로그인이 없어요/);
+    const form = ui.document.querySelector('form');
+    assert.equal(form.querySelector('[name="login_id"]').value, 'login');
+    assert.equal(form.querySelector('[name="kind"]').options.length, 6);
+    assert.equal(ui.calls.length, 0);
+    assert.equal(ui.asked.length, 0);
+    await ui.actions['security-query'](ui.ctx, form);
+    assert.equal(ui.calls[0].name, `hana.${method === 'onesign' ? 'onesign.' : ''}security.query`);
+    assert.equal(ui.calls[0].fields.login_id, 'login');
+    assert.equal(ui.calls[0].fields.input.kind, 'limits');
+    assert.equal(ui.calls[0].fields.target_id, undefined);
+    assert.equal(ui.asked.length, method === 'onesign' ? 1 : 0);
+    if (method === 'onesign') assert.equal(ui.asked[0][3].store, 'synthetic');
+    const button = form.querySelector('[data-action="security-login"]');
+    assert.equal(button.type, 'button');
+    await ui.actions['security-login'](ui.ctx, button);
+    assert.equal(ui.calls[1].name, method === 'onesign' ? 'hana.onesign.login' : 'hana.login');
+    assert.equal(ui.calls[1].fields.login_id, 'login');
+  });
+
   test(`${method} accounts can be selected in both history screens`, async t => {
     const ui = await setup(t, method);
     for (const view of ['history', 'inquiry']) {
@@ -124,11 +148,11 @@ test('idle accounts, history and transfers check expiry before requesting secret
   const ui = await setup(t, 'onesign', 'ready');
   ui.state.idleExpired = true;
   await ui.actions['accounts-query'](ui.ctx, {dataset: {login: 'login'}});
-  for (const view of ['history', 'inquiry', 'transfer']) {
+  for (const view of ['history', 'inquiry', 'transfer', 'security']) {
     ui.document.querySelector('main').innerHTML = await ui.views[view](ui.ctx);
     await ui.actions[view === 'transfer' ? 'transfer-prepare' : `${view}-query`](ui.ctx, ui.document.querySelector('form'));
   }
-  assert.deepEqual(ui.checked, ['login', 'login', 'login', 'login']);
+  assert.deepEqual(ui.checked, ['login', 'login', 'login', 'login', 'login']);
   assert.equal(ui.asked.length, 0);
   assert.equal(ui.calls.length, 0);
   ui.document.querySelector('main').innerHTML = await ui.views.accounts(ui.ctx);

@@ -2,9 +2,9 @@
 import json
 import time
 
-from finance_cli.services.hana import inquiry, ledger, ledger_protocol as protocol, onesign_queries
-from .base import InputError, Step, StepResult, Stop, pick
-from .hana import (OneSignReadAdapter, History, HistoryDetail, TransferHistory, account_number,
+from finance_cli.services.hana import inquiry, ledger, ledger_protocol as protocol, onesign_queries, security
+from .base import InputError, Step, StepResult, Stop, mask_account, pick
+from .hana import (OneSignReadAdapter, History, HistoryDetail, TransferHistory, Security, account_number,
                    compact, outcome, safe_code, verdict, ROW_LIMIT)
 from .hometax import scalar_row
 
@@ -220,5 +220,38 @@ class OneSignTransferDetail(Query):
         return inquiry_result(ctx, source, result, 'detail')
 
 
+class OneSignSecurity(Query):
+    name = 'hana.onesign.security.query'
+    title = Security.title
+    requires_target = False  # Customer-level inquiry; no prior account query is needed.
+    validate = Security.validate
+
+    def query(self, ctx, source):
+        from finance_cli.services.hana.compat import web_value
+        kind = ctx.input['kind']
+        request = security.prepare_request({'headers': source.headers()}, kind)
+        result = perform(ctx, source, (request, 'security-' + kind), ctx.input, ctx.job['id'])
+        service = verdict(result, ('accepted', 'reason', 'processing_status', 'service_status', 'diagnostics', 'warnings'))
+        ctx.observe(service_verdict=service, outcome=outcome(result['accepted']))
+        view, local = None, {}
+        if result['accepted'] is True:
+            try:
+                _, _, raw = source.read_receipt(result['receipt_directory'])
+                observed = security.protocol.observe(kind, web_value(raw))
+                rows = []
+                for row in observed['rows'][:ROW_LIMIT]:
+                    safe = scalar_row(pick(row, ('otpSeqNo', 'scrtMdclStCd', 'scrtMdclStNm',
+                                                 'otpVndrEntrNm', 'otpVndrEntrCd', 'issuDt')))
+                    if safe is not None and safe.get('otpSeqNo') is not None:
+                        safe['otpSeqNo'] = mask_account(safe['otpSeqNo'])
+                    rows.append(safe)
+                view = {'fields': scalar_row(observed['fields']), 'display': scalar_row(observed['display']),
+                        'rows': rows, 'diagnostics': observed['diagnostics']}
+            except (ValueError, OSError, KeyError, TypeError, AttributeError):
+                local['saved_rows_unreadable'] = True
+        return StepResult(service_verdict=service, outcome=outcome(result['accepted']), local=local,
+                          result={'kind': kind, 'observation': view, 'state_change_requested': False})
+
+
 ADAPTERS = (OneSignHistory(), OneSignHistoryMore(), OneSignHistoryDetail(), OneSignHistoryExport(),
-            OneSignTransferHistory(), OneSignTransferDetail())
+            OneSignTransferHistory(), OneSignTransferDetail(), OneSignSecurity())

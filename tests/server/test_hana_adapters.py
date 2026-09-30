@@ -224,6 +224,114 @@ class OneSignPathTests(HanaCase):
         return self.run_job(self.submit('hana.onesign.' + suffix, login_id=self.login['id'], target_id=target['id'],
                                         input=input, parent_job_id=parent)['id'], self.vault)
 
+    def security_job(self, kind='limits'):
+        return self.run_job(self.submit('hana.onesign.security.query', login_id=self.login['id'],
+                                       input={'kind': kind})['id'], self.vault)
+
+    def test_security_queries_use_signed_login_without_accounts_and_preserve_wire_contracts(self):
+        from finance_cli.server import model
+        from finance_cli.services.hana import hana_protocol, onesign_queries, security_protocol
+        self.enterContext(patch.object(onesign_queries, 'send_http', self.services))
+        self.signed_in()
+        session = self.get('/logins').json()['logins'][0]['current_session_id']
+        row = {'otpSeqNo': '910123456789', 'scrtMdclStCd': '903', 'scrtMdclStNm': '잠김',
+               'otpVndrEntrNm': '합성 제조사', 'cookie': 'PRIVATE-COOKIE', 'token': 'PRIVATE-TOKEN'}
+        values = {
+            'limits': {'dd1TrnsLimAmt': '1234', 'bot1TrnsLimAmt': 120, 'scrtMdclDvCd': '1'},
+            'limit-exception': {'oldDd1TrnsLimAmt': None, 'dd1TrnsPossLimAmt': '10000'},
+            'security-media': {'errNcnt': 0, 'otpInfoSvcRecOutDto': [row, None],
+                               'scrtCrdInfoSvcRecOutDto': {'secret': 'PRIVATE-CARD'}},
+            'otp': {'allNcnt': '0', 'otpInfoInqSvcRecOutDto': [row]},
+            'otp-accident': {'acdtRcvryPoss': False, 'otpAcdtRcvryInqSvcOutRecDto': [row]},
+            'mobile-otp': {'issu': True, 'lgin': False, 'mbleOtpApcInqSvcOutRecDto': [row]},
+        }
+        count = len(self.services.calls)
+        for kind, (path, omitted, screen) in security_protocol.QUERIES.items():
+            with self.subTest(kind=kind):
+                self.services.override[path] = {**values[kind], 'token': 'PRIVATE-TOKEN'}
+                job = self.security_job(kind)
+                self.assertEqual(job['outcome'], 'success', job)
+                self.assertEqual(job['session_id'], session)
+                self.assertIsNone(job['target_id'])
+                self.assertFalse(job['result']['state_change_requested'])
+                scope, sent_path, headers, body = self.services.calls[-1]
+                self.assertEqual((scope, sent_path, body), ('bank', path, None if omitted else b'{}'))
+                self.assertEqual(hana_protocol.decode_header(headers['hana-com-header'])['CNL_HDPT']['SCRN_ID'], screen)
+                self.assertTrue(headers.get('one-access-token'))  # Including the public mobile OTP inquiry.
+                self.assertEqual('content-type' in headers, not omitted)
+                self.assertNoLeak(job, 'PRIVATE-COOKIE', 'PRIVATE-TOKEN', 'PRIVATE-CARD', '910123456789',
+                                  onesign_fixture.PASSWORD, 'SYNTHETIC-LOGIN')
+                observed = job['result']['observation']
+                if kind == 'limits':
+                    self.assertEqual(observed['fields']['dd1TrnsLimAmt'], '1234')
+                    self.assertEqual(observed['fields']['bot1TrnsLimAmt'], 120)
+                if kind == 'security-media':
+                    self.assertIsNone(observed['rows'][1])
+                    self.assertEqual(observed['rows'][0]['otpSeqNo'], '••••••••6789')
+                if kind == 'mobile-otp':
+                    self.assertTrue(observed['display']['locked'])
+        self.assertEqual([c[1] for c in self.services.calls[count:]], [v[0] for v in security_protocol.QUERIES.values()])
+        with self.db.write() as con:
+            model.mark_session(con, session, 'consumed', 'transfer_prepared')
+        self.assertEqual(self.security_job()['outcome'], 'success')
+        with self.db.read() as con:
+            current = model.current_session(con, self.login['id'])
+            self.assertEqual((current['id'], current['state'], current['note']), (session, 'consumed', 'transfer_prepared'))
+        for path in self.root.rglob('*'):
+            if path.is_file() and path.suffix in ('.json', '.bin'):
+                for secret in (b'PRIVATE-TOKEN', b'PRIVATE-CARD', b'PRIVATE-COOKIE'):
+                    self.assertNotIn(secret, path.read_bytes(), str(path))
+        feature = next(f for f in self.get('/capabilities').json()['features'] if f['id'] == 'hana-security')
+        self.assertIn('hana.onesign.security.query', [j['name'] for j in feature['jobs']])
+
+    def test_security_queries_preserve_acceptance_and_never_retry_rejections_or_losses(self):
+        from finance_cli.services.hana import onesign_queries, security_protocol
+        self.enterContext(patch.object(onesign_queries, 'send_http', self.services))
+        self.signed_in()
+        path = security_protocol.QUERIES['limits'][0]
+        self.services.override[path] = b'not JSON'
+        malformed = self.security_job()
+        self.assertEqual(malformed['outcome'], 'success', malformed)
+        self.assertIn('non_object_body', malformed['result']['observation']['diagnostics'])
+        self.services.override[path] = b''
+        empty = self.security_job()
+        self.assertEqual(empty['outcome'], 'success', empty)
+        self.assertIn('empty_body', empty['result']['observation']['diagnostics'])
+        real_record = State.record
+
+        def fail_receipt(state, run, name, value):
+            if run.startswith('query-') and name == 'http-0001-response':
+                raise OSError('synthetic disk failure')
+            return real_record(state, run, name, value)
+
+        with patch.object(State, 'record', fail_receipt):
+            failed = self.security_job()
+        self.assertEqual(failed['outcome'], 'success', failed)
+        self.assertEqual(failed['service_verdict']['processing_status'], 'response_storage_failed')
+        self.assertTrue(failed['local']['saved_rows_unreadable'])
+        count = len(self.services.calls)
+        self.services.override[path] = OSError('synthetic timeout')
+        lost = self.security_job()
+        self.assertEqual(lost['outcome'], 'unknown', lost)
+        self.assertEqual(len(self.services.calls), count + 1)
+        self.services.override[path] = {}
+
+        def rejected(*args):
+            status, headers, raw, cookies = self.services(*args)
+            return 403, headers, raw, cookies
+
+        with patch.object(onesign_queries, 'send_http', rejected):
+            refused = self.security_job()
+        self.assertEqual(refused['outcome'], 'rejected', refused)
+        self.assertEqual(len(self.services.calls), count + 2)
+        with self.assertRaisesRegex(ValueError, 'invalid_kind'):
+            self.security_job('update-limit')
+        row = self.get('/logins').json()['logins'][0]
+        with patch.object(session_activity, 'now', return_value=row['session']['idle_expires_at']):
+            with self.assertRaisesRegex(jobs.NotReady, 'session_idle_expired'):
+                self.security_job()
+        self.assertEqual(len(self.services.calls), count + 2)
+
     def test_idle_boundary_polling_restart_and_new_login(self):
         from finance_cli.server.db import Database
         at = time.time()
