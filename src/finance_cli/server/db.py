@@ -43,6 +43,8 @@ CREATE TABLE IF NOT EXISTS sessions(
 CREATE TABLE IF NOT EXISTS session_pointers(
   login_id TEXT PRIMARY KEY REFERENCES logins(id), session_id TEXT NOT NULL REFERENCES sessions(id),
   updated_at REAL NOT NULL);
+CREATE TABLE IF NOT EXISTS session_activity(
+  session_id TEXT PRIMARY KEY REFERENCES sessions(id) ON DELETE CASCADE, last_request_at REAL NOT NULL);
 CREATE TABLE IF NOT EXISTS jobs(
   id TEXT PRIMARY KEY, name TEXT NOT NULL, origin TEXT NOT NULL, profile_id TEXT, login_id TEXT,
   target_id TEXT, session_id TEXT, login_revision INTEGER, snapshot TEXT NOT NULL DEFAULT '{}',

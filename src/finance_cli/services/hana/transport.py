@@ -13,7 +13,7 @@ import urllib.request
 from datetime import datetime, timezone
 
 from finance_cli.core import storage
-from . import store
+from . import store, request_activity
 
 USER_AGENT = 'HanaBankOQF/1.0.27 (Android; Mobile) okhttp/4.12.0'
 LIMIT = 2 * 1024 * 1024
@@ -60,6 +60,7 @@ def send(session, stage, request, assessor):
     if cookie_file.exists():
         jar.load(ignore_discard=True)
     req = urllib.request.Request(request['url'], method=request['method'], headers=request['headers'], data=data)
+    request_activity.before_request()
     try:
         try:
             response = opener(jar).open(req, timeout=30)

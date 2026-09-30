@@ -7,7 +7,7 @@ are not part of any job row, event or response.
 import hashlib
 import json
 
-from . import model
+from . import model, session_activity
 from . import adapters as registry
 from .adapters.base import InputError, OUTCOMES
 from .db import dumps, loads, new_id, now
@@ -108,6 +108,9 @@ def submit(db, *, name, origin, login_id=None, target_id=None, profile_id=None, 
             if not adapter.accepts_session(session):
                 raise NotReady('session_' + session['state'])
             session_id = session['id']
+            reason = session_activity.refusal(con, adapter, session)
+            if reason:
+                raise NotReady(reason)
         signing = None
         if adapter.purpose:
             signing = model.signing_for(con, login, target, adapter.purpose)
@@ -183,6 +186,9 @@ def accept_confirmation(db, job_id, confirmation, origin):
                       'login_disabled' if login['disabled'] else
                       'target_disabled' if target is not None and target['disabled'] else
                       'profile_disabled' if profile is not None and profile['disabled'] else None)
+            if reason is None and job['session_id']:
+                session = con.execute('SELECT * FROM sessions WHERE id=?', (job['session_id'],)).fetchone()
+                reason = session_activity.refusal(con, adapter_for(job['name']), session, awaiting['next_step'])
             if reason:
                 con.execute("UPDATE jobs SET status='expired', awaiting=NULL, updated_at=?,"
                             " local=json_set(local, '$.expired_reason', ?) WHERE id=?", (now(), reason, job_id))

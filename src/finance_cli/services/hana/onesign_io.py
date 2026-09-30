@@ -6,7 +6,7 @@ import time
 import urllib.error
 import urllib.request
 
-from . import auth, hana_protocol, onesign_crypto as pin, onesign_issue_protocol as issue
+from . import auth, hana_protocol, onesign_crypto as pin, onesign_issue_protocol as issue, request_activity
 from . import onesign_signup_protocol as signup, onesign_compat as compat
 from .onesign_codec import encode
 from .transport import NoRedirect, USER_AGENT
@@ -74,6 +74,7 @@ class Client:
             raise ValueError('invalid_service_scope')
         self.count += 1
         name = 'http-%04d' % self.count
+        previous = self.last
         self.last = {'service_status': 'unconfirmed', 'processing_status': 'request_prepared', 'scope': scope}
         request = {'method': method, 'url': url, 'headers': headers,
                    'body': None if body is None else base64.b64encode(body).decode()}
@@ -83,6 +84,11 @@ class Client:
         value = self.state.snapshot()['sessions'][self.session]
         cookies = value.get('cookies', []) if scope == 'bank' else self.cookies[scope]
         timeout = 5 if scope == 'ca' else 300 if path == issue.PATHS['image'] else 125 if web else 30 if scope == 'bank' else 10
+        try:
+            request_activity.before_request(scope)
+        except request_activity.RequestBlocked:
+            self.last = previous  # The local guard cannot erase an earlier service verdict.
+            raise
         try:
             self.sent += 1
             status, head, raw, cookies = self.exchange(scope, method, url, headers, body, cookies, timeout)

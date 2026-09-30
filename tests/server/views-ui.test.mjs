@@ -18,7 +18,7 @@ async function setup(t, method = 'onesign', readiness = 'query_only', secret = {
   const target = {id: 'target', login_id: row.id, kind: 'account', display_name: '합성 계좌', identity: {account_number: '••••1234'}};
   const state = {logins: [row], targets: [target], cache: new Map(), rows: {}, capabilities: {features: []},
     vaults: {synthetic: true}, credentials: [], profiles: []};
-  const calls = [], asked = [];
+  const calls = [], asked = [], checked = [];
   const ctx = {run: async (name, fields, options) => { calls.push({name, fields, options}); }};
   const values = {
     state, login: id => state.logins.find(r => r.id === id), target: id => state.targets.find(r => r.id === id), profile: () => null,
@@ -28,6 +28,8 @@ async function setup(t, method = 'onesign', readiness = 'query_only', secret = {
     SECRET_LABELS: {vault_passphrase: ['vault_passphrase', '저장소 암호'], pin: ['pin', 'PIN'],
       certificate_password: ['certificate_password', '인증서 비밀번호']},
     applyRemember: () => {}, changeView: () => {}, jobState: () => '', refreshModel: async () => {},
+    bankSessionExpired: () => state.idleExpired || false,
+    ensureBankSession: async (ctx, id) => { checked.push(id); return !state.idleExpired; }, expiredBankLogin: async () => {},
     rememberField: () => '', render: () => {}, secretFields: () => [], showJob: () => {},
   };
   const app = new SyntheticModule(Object.keys(values), function () {
@@ -47,7 +49,7 @@ async function setup(t, method = 'onesign', readiness = 'query_only', secret = {
   const views = new SourceTextModule(await readFile(new URL('views.js', root), 'utf8'), {context});
   await views.link(name => ({'./app.js': app, './api.js': api, './ui.js': ui, './certificates.js': certificates}[name]));
   await views.evaluate();
-  return {ctx, state, calls, asked, row, document: dom.window.document, ...views.namespace};
+  return {ctx, state, calls, asked, checked, row, document: dom.window.document, ...views.namespace};
 }
 
 for (const method of ['onesign', 'joint_certificate']) {
@@ -116,6 +118,21 @@ test('cancelling the store password sends no query', async t => {
   ui.document.querySelector('main').innerHTML = await ui.views.history(ui.ctx);
   await ui.actions['history-query'](ui.ctx, ui.document.querySelector('form'));
   assert.equal(ui.calls.length, 0);
+});
+
+test('idle accounts, history and transfers check expiry before requesting secrets', async t => {
+  const ui = await setup(t, 'onesign', 'ready');
+  ui.state.idleExpired = true;
+  await ui.actions['accounts-query'](ui.ctx, {dataset: {login: 'login'}});
+  for (const view of ['history', 'inquiry', 'transfer']) {
+    ui.document.querySelector('main').innerHTML = await ui.views[view](ui.ctx);
+    await ui.actions[view === 'transfer' ? 'transfer-prepare' : `${view}-query`](ui.ctx, ui.document.querySelector('form'));
+  }
+  assert.deepEqual(ui.checked, ['login', 'login', 'login', 'login']);
+  assert.equal(ui.asked.length, 0);
+  assert.equal(ui.calls.length, 0);
+  ui.document.querySelector('main').innerHTML = await ui.views.accounts(ui.ctx);
+  assert.match(ui.document.body.textContent, /세션 만료 · 다시 로그인/);
 });
 
 

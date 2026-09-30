@@ -4,7 +4,7 @@
 import {api, submit} from './api.js';
 import * as ui from './ui.js';
 import {certificateActions} from './certificates.js';
-import {applyRemember, askSecrets, changeView, jobState, login, onesignStore, profile, refreshModel, rememberField,
+import {applyRemember, askSecrets, bankSessionExpired, changeView, ensureBankSession, expiredBankLogin, jobState, login, onesignStore, profile, refreshModel, rememberField,
   render, scopeLogins, scopeTargets, SECRET_LABELS, secretFields, showJob, state, target} from './app.js';
 
 const {esc, icon, tag, note, heading, money} = ui;
@@ -26,6 +26,7 @@ function setupNotice(featureId) {
 function canQuery(row) { return ['ready', 'query_only'].includes(row.readiness); }
 
 function readiness(row) {
+  if (bankSessionExpired(row)) return tag('세션 만료 · 다시 로그인', 'warning');
   const value = row.readiness;
   return value === 'query_only' ? tag('조회용 세션 있음', '') : value === 'ready' ? tag('세션 있음', '') : value === 'login_disabled' ? tag('사용 중지', 'neutral') : tag('로그인 필요', 'warning');
 }
@@ -287,10 +288,16 @@ function confirmDialog(ctx, job) {
     const form = event.target;
     form.querySelector('button[type=submit]').disabled = true;
     try {
+      if (transfer && !await ensureBankSession(ctx, job.login_id)) return;
       const secrets = await applyRemember(Object.fromEntries(new FormData(form).entries()), store);
       form.reset();
       await api.post(`/jobs/${encodeURIComponent(job.id)}/confirm`, {confirmation: awaiting.digest, secrets});
     } catch (error) {
+      if (error.code === 'session_idle_expired') {
+        clearInterval(timer);
+        await expiredBankLogin(ctx, job.login_id);
+        return;
+      }
       ui.toast(ui.message(error.code));
       form.querySelector('button[type=submit]').disabled = false;
       return;
@@ -336,6 +343,7 @@ function loginButton(row, primary = false) {
 function accountsJobName(row) { return row.method === 'onesign' ? 'hana.onesign.accounts' : 'hana.accounts.list'; }
 
 async function runHanaQuery(ctx, suffix, fields, options) {
+  if (suffix !== 'history.export' && !await ensureBankSession(ctx, fields.login_id)) return;
   const owner = login(fields.login_id);
   const onesign = owner?.method === 'onesign';
   const secrets = onesign ? await askSecrets('내역 조회', [SECRET_LABELS.vault_passphrase],
@@ -671,7 +679,8 @@ export const actions = {
   privacy: () => { state.hidden = !state.hidden; render(); },
   login: async (ctx, button) => {
     const row = login(button.dataset.login);
-    const secrets = await askSecrets(`${row.display_name} 로그인`, loginSecrets(row), row.institution === 'hometax' ? '공동인증서로 홈택스에 로그인해요.' : row.method === 'onesign' ? '하나인증서로 새 로그인 세션을 만들어요.' : '앱 인증과 공동인증서 로그인을 진행해요.', {store: onesignStore(row)});
+    const reason = button.dataset.reason === 'session_idle_expired' ? ui.message('session_idle_expired') + ' ' : '';
+    const secrets = await askSecrets(`${row.display_name} 로그인`, loginSecrets(row), reason + (row.institution === 'hometax' ? '공동인증서로 홈택스에 로그인해요.' : row.method === 'onesign' ? '하나인증서로 새 로그인 세션을 만들어요.' : '앱 인증과 공동인증서 로그인을 진행해요.'), {store: onesignStore(row)});
     if (!secrets) return;
     await runForLogin(ctx, loginJob(row), row, {}, {secrets, onDone: job => { ui.toast(ui.OUTCOME[job.outcome]?.[0] || ''); if (job.local?.stopped) ui.toast(ui.message(job.local.stopped)); return afterModel(ctx); }});
   },
@@ -684,6 +693,7 @@ export const actions = {
     await runForLogin(ctx, 'hometax.targets.discover', row, {}, {onDone: job => candidatesDialog(ctx, job, row.id)});
   },
   'accounts-query': async (ctx, button) => {
+    if (!await ensureBankSession(ctx, button.dataset.login)) return;
     const row = login(button.dataset.login);
     let secrets;
     if (row.method === 'onesign') {
@@ -769,6 +779,7 @@ export const actions = {
   'transfer-prepare': async (ctx, form) => {
     const data = new FormData(form);
     const source = target(data.get('target_id'));
+    if (!await ensureBankSession(ctx, source.login_id)) return;
     const owner = login(source.login_id);
     if (owner.readiness !== 'ready') { ui.toast('하나인증서로 새로 로그인한 뒤 준비하세요.'); return; }
     const amount = Number(String(data.get('amount')).replace(/\D/g, ''));
@@ -782,6 +793,7 @@ export const actions = {
   },
   reconcile: async (ctx, button) => {
     const parent = await api.get('/jobs/' + encodeURIComponent(button.dataset.job));
+    if (!await ensureBankSession(ctx, parent.login_id)) return;
     const secrets = await askSecrets('이체 결과 조회', [SECRET_LABELS.vault_passphrase], '같은 이체를 다시 보내지 않고 이체 내역에서 결과를 대조해요.', {store: onesignStore(login(parent.login_id), true)});
     if (!secrets) return;
     await ctx.run('hana.transfer.reconcile', {login_id: parent.login_id, target_id: parent.target_id, parent_job_id: parent.id}, {
