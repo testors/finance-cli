@@ -43,6 +43,7 @@ FEATURES = (
     ('giro', 'giro-live', '실제 로그인·실시간 조회·납부', 'planned', ()),
     ('common', 'credentials', '공동인증서 목록·표시 정보', 'settings', ()),
     ('common', 'certificate-import', '공동인증서 NPKI·PFX 가져오기', 'settings', ('cert.joint.import',)),
+    ('common', 'id-cards', '신분증 보관·발급 시 선택', 'settings', ('idcard.add',)),
     ('common', 'certificate-files', '인증서 내보내기·프로필 가져오기', 'local', ()),
     ('common', 'joint-issuance', '공동인증서 신규 발급', 'planned', ()),
     ('common', 'financial-issuance', '금융인증서 신규 발급·클라우드 연결', 'planned', ()),

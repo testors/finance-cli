@@ -64,7 +64,20 @@ def confirm_transfer(preview):
     return text(f"위 수취인·계좌·금액·수수료로 송금하려면 \"이체 {preview['amount_krw']}원\" 입력: ")==f"이체 {preview['amount_krw']}원"
 
 
-def prepare_id(state,args):
+def saved_card(args):
+    """Open the saved card before any stage that waits on it; kind comes from the card, not --kind."""
+    from finance_cli.credentials.id_cards import IdCards
+    cards = IdCards()
+    cards.entry(args.id_card)
+    card = cards.load(args.id_card,hidden('신분증 보관 암호: '))
+    require(text('보관 후 재발급받지 않은 현재 유효한 본인 신분증이면 "본인 신분증" 입력: ')=='본인 신분증','identity_not_confirmed')
+    return card
+
+
+def prepare_id(state,args,card=None):
+    if args.id_card:
+        card = card or saved_card(args)
+        return onesign.prepare_identity(state,card['kind'],card['jpeg'],card['fields'])
     require(args.image is not None,'identity_image_required')
     from finance_cli.core.storage import no_symlinks
     path = no_symlinks(args.image.expanduser())
@@ -124,7 +137,9 @@ def add_parsers(sub,onesign_sub):
         if action in ('login','accounts','new-session'):
             item.add_argument('--session',required=True)
         if action in ('enroll','issue'):
-            item.add_argument('--image',type=Path)
+            source=item.add_mutually_exclusive_group()
+            source.add_argument('--image',type=Path)
+            source.add_argument('--id-card',help='fin idcard로 보관한 신분증 이름; 종류는 보관한 신분증을 따름')
             item.add_argument('--kind',choices=('resident','driver'),default='resident')
         if action=='issue':
             item.add_argument('--stage',choices=(*onesign.PHONE,'begin-id','prepare-id',*onesign.ISSUE[1:]),required=True)
@@ -191,14 +206,15 @@ def dispatch(args):
             return onesign_bundle.export_identity(state,args.output,secret)
         if args.action=='enroll':
             require(state.snapshot()['signup']['state']=='new','use_stage_commands_for_existing_issuance')
-            require(args.image is not None,'identity_image_required')
+            require(args.image is not None or args.id_card is not None,'identity_image_required')
             from .store import name as valid_name
             for stage in (*onesign.PHONE,*onesign.ISSUE):
                 valid_name(args.run+'-'+stage)
+            card=saved_card(args) if args.id_card else None
             for stage in (*onesign.PHONE,'begin-id','prepare-id',*onesign.ISSUE[1:]):
                 print('진행: '+stage,file=sys.stderr)
                 if stage=='prepare-id':
-                    result=prepare_id(state,args)
+                    result=prepare_id(state,args,card)
                 else:
                     result=onesign.operate(state,stage,args.run+'-'+stage,send=True,inputs=inputs())
                 if result.get('processing_status')=='stopped':

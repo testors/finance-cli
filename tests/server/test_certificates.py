@@ -18,6 +18,7 @@ from PIL import Image
 from cryptography.hazmat.primitives.serialization import pkcs12, load_der_private_key, BestAvailableEncryption
 from cryptography import x509
 from finance_cli.core import storage
+from finance_cli.credentials.id_cards import IdCards
 from finance_cli.credentials.joint import crypto
 from finance_cli.credentials.registry import Registry
 from finance_cli.server import jobs, worker
@@ -35,6 +36,11 @@ def synthetic_jpeg(width=512, height=256, orientation=1):
     output = io.BytesIO()
     image.save(output, format='JPEG', exif=metadata, comment=b'SYNTHETIC-PRIVATE-COMMENT')
     return output.getvalue()
+
+
+CARD_PASSPHRASE = 'SYNTHETIC-card-passphrase'
+CARD_FIELDS = {'name': '합성 이름', 'issueDate': '2020.02.29', 'birthDate': '900101', 'resident': '1000000'}
+DRIVER_FIELDS = {'regionCode': '11', 'driver1': '20', 'driver2': '123456', 'driver3': '78'}
 
 
 class CertificateTests(ServerCase):
@@ -62,10 +68,28 @@ class CertificateTests(ServerCase):
         original = onesign.operate
         self.enterContext(patch.object(onesign, 'operate', functools.partial(original, exchange=self.services)))
 
-    def stage(self, stage, **secrets):
-        return self.run_job('hana.onesign.issue.' + stage, {'name': 'synthetic', **({'send': True} if
+    def stage(self, stage, extra=None, **secrets):
+        return self.run_job('hana.onesign.issue.' + stage, {'name': 'synthetic', **(extra or {}), **({'send': True} if
                             certificates.OneSignIssuance(stage).remote else {})},
                             {'vault_passphrase': fixture.PASSWORD, **secrets})
+
+    def save_card(self, alias='resident-card', kind='resident'):
+        fields = dict(CARD_FIELDS, **(DRIVER_FIELDS if kind == 'driver' else {}))
+        return IdCards().add(alias, kind, fields, synthetic_jpeg(1600, 1000), CARD_PASSPHRASE)
+
+    def begin_identity(self):
+        self.setup_identity()
+        profile = {'name': '합성 이름', 'birth7': '9001011', 'phone': '01000000000', 'carrier': '4'}
+        self.assertEqual(self.stage('profile', phone_profile=json.dumps(profile),
+            agreement=certificates.terms_digest(signup.sms_terms('4')))['outcome'], 'success')
+        for stage in ('authenticate', 'request-sms'):
+            self.assertEqual(self.stage(stage)['outcome'], 'success')
+        verified = self.stage('verify-sms', sms='012345')
+        self.assertEqual(self.stage('consent', agreement=verified['result']['terms_digest'])['outcome'], 'success')
+        self.assertEqual(self.stage('begin-id')['outcome'], 'success')
+
+    def saved_choice(self, passphrase=CARD_PASSPHRASE, confirmation='본인 신분증'):
+        return json.dumps({'passphrase': passphrase, 'confirmation': confirmation})
 
     def before_issue(self, kind='resident', jpeg=None):
         self.setup_identity()
@@ -278,7 +302,7 @@ class CertificateTests(ServerCase):
                 (capture['fields'] if field in capture['fields'] else capture)[field] = value
                 with self.assertRaises(Stop) as stopped:
                     certificates.OneSignIssuance('prepare-id').inputs(
-                        SimpleNamespace(secrets={'identity_capture': json.dumps(capture)}), {})
+                        SimpleNamespace(secrets={'identity_capture': json.dumps(capture)}, input={}), {})
                 self.assertEqual(stopped.exception.code, code)
         with patch.object(Image, 'MAX_IMAGE_PIXELS', 100), self.assertRaises(Stop) as stopped:
             certificates.identity_jpeg(valid['image'])
@@ -330,3 +354,106 @@ class CertificateTests(ServerCase):
             self.assertEqual(start.call_count, 1)
         too_large = self.client.post('/api/v1/jobs', content=b'x' * (12 * 1024 * 1024 + 256 * 1024 + 1), headers=self.headers())
         self.assertEqual(too_large.status_code, 413)
+
+    def test_saved_card_is_stored_from_the_worker_pipe_only(self):
+        raw = synthetic_jpeg(2400, 1500)
+        capture = {'kind': 'driver', 'fields': dict(CARD_FIELDS, **DRIVER_FIELDS),
+                   'image': base64.b64encode(raw).decode(), 'confirmation': '본인 신분증'}
+        job = self.run_job('idcard.add', {'name': 'driver-card'},
+                           {'idcard_passphrase': CARD_PASSPHRASE, 'identity_capture': json.dumps(capture)})
+        self.assertEqual((job['outcome'], job['result']), ('success', {'name': 'driver-card', 'kind': 'driver',
+                                                                       'saved': True, 'network_used': False}), job)
+        self.assertIsNone(job['service_verdict'])
+        self.assert_private(job, CARD_PASSPHRASE, '합성 이름', '1000000', '900101', '123456', capture['image'])
+        listed = self.get('/id-cards').json()
+        self.assertEqual([{k: v for k, v in row.items() if k != 'saved_at'} for row in listed['id_cards']],
+                         [{'name': 'driver-card', 'kind': 'driver', 'issue_date': '2020.02.29'}])
+        self.assertNotIn('합성 이름', json.dumps(listed, ensure_ascii=False))
+        card = IdCards().load('driver-card', CARD_PASSPHRASE)
+        self.assertEqual(onesign.jpeg_size(card['jpeg']), (1024, 640))
+        self.assertNotIn(b'SYNTHETIC-PRIVATE', card['jpeg'])
+        duplicate = self.run_job('idcard.add', {'name': 'driver-card'},
+                                 {'idcard_passphrase': 'SYNTHETIC-other', 'identity_capture': json.dumps(capture)})
+        self.assertEqual((duplicate['outcome'], duplicate['local']['stopped']), ('not_started', 'id_card_name_exists'))
+        short = self.run_job('idcard.add', {'name': 'other'}, {'idcard_passphrase': 'abc', 'identity_capture': json.dumps(capture)})
+        self.assertEqual(short['local']['stopped'], 'passphrase_minimum_4_characters')
+        unconfirmed = self.run_job('idcard.add', {'name': 'other'}, {'idcard_passphrase': CARD_PASSPHRASE,
+                                   'identity_capture': json.dumps({**capture, 'confirmation': ''})})
+        self.assertEqual(unconfirmed['local']['stopped'], 'identity_not_confirmed')
+        self.assertEqual([row['name'] for row in IdCards().list()], ['driver-card'])
+
+    def test_issuance_selects_saved_card_and_only_the_choice_is_recorded(self):
+        self.save_card('driver-card', 'driver')
+        self.begin_identity()
+        count = len(self.services.calls)
+        with patch.object(onesign, 'prepare_identity', wraps=onesign.prepare_identity) as prepare:
+            prepared = self.stage('prepare-id', {'id_card': 'driver-card'}, identity_capture=self.saved_choice())
+        self.assertEqual(prepared['outcome'], 'success', prepared)
+        self.assertEqual(prepared['result']['next_stage'], 'identity')
+        self.assertEqual(len(self.services.calls), count)
+        kind, jpeg, fields = prepare.call_args.args[1:]
+        self.assertEqual((kind, fields), ('driver', dict(CARD_FIELDS, **DRIVER_FIELDS)))
+        self.assertEqual(onesign.jpeg_size(jpeg), (1024, 640))
+        self.assertEqual(prepared['input'].get('id_card'), 'driver-card')
+        self.assert_private(prepared, CARD_PASSPHRASE, '합성 이름', '1000000', '123456')
+        self.assertEqual(self.stage('identity')['outcome'], 'success')
+        self.assertEqual(self.stage('account', account_number=fixture.SOURCE, account_password='6049')['outcome'], 'success')
+        self.assertEqual(IdCards().load('driver-card', CARD_PASSPHRASE)['kind'], 'driver')  # Still available.
+
+    def test_saved_card_problems_stop_before_the_bank_and_can_be_corrected(self):
+        self.save_card()
+        self.begin_identity()
+        count = len(self.services.calls)
+        for extra, choice, code in (({'id_card': 'resident-card'}, self.saved_choice('SYNTHETIC-other'),
+                                     'incorrect_passphrase_or_damaged_id_card'),
+                                    ({'id_card': 'resident-card'}, self.saved_choice(confirmation=''), 'identity_not_confirmed'),
+                                    ({'id_card': 'missing'}, self.saved_choice(), 'id_card_not_found'),
+                                    ({'id_card': 'resident-card'}, json.dumps({'passphrase': CARD_PASSPHRASE}),
+                                     'invalid_identity_capture')):
+            with self.subTest(code=code):
+                stopped = self.stage('prepare-id', extra, identity_capture=choice)
+                self.assertEqual((stopped['outcome'], stopped['local']['stopped']), ('not_started', code), stopped)
+                self.assertFalse(stopped['attempt'].get('sent'))
+                self.assert_private(stopped, CARD_PASSPHRASE, 'SYNTHETIC-other')
+        self.assertEqual(len(self.services.calls), count)
+        prepared = self.stage('prepare-id', {'id_card': 'resident-card'}, identity_capture=self.saved_choice())
+        self.assertEqual(prepared['outcome'], 'success', prepared)
+
+    def test_card_choice_is_accepted_only_by_identity_preparation(self):
+        with patch('finance_cli.server.app.start_with_secrets', return_value='started') as start:
+            store = {'vault_passphrase': fixture.PASSWORD}
+            for name, value, private, code in (
+                    ('hana.onesign.issue.identity', {'name': 'synthetic', 'send': True, 'id_card': 'card'}, store,
+                     'input_fields_not_accepted'),
+                    ('hana.onesign.issue.prepare-id', {'name': 'synthetic', 'id_card': '../card'},
+                     {**store, 'identity_capture': 'x'}, 'invalid_name'),
+                    ('idcard.add', {'name': 'card', 'kind': 'driver'}, {'idcard_passphrase': 'x', 'identity_capture': 'x'},
+                     'input_fields_not_accepted')):
+                with self.subTest(name=name):
+                    refused = self.post('/jobs', {'name': name, 'input': value, 'secrets': private})
+                    self.assertEqual((refused.status_code, refused.json()['error']), (400, code))
+            start.assert_not_called()
+        self.assertEqual(self.get('/jobs').json()['jobs'], [])
+
+    def test_saved_card_rename_and_remove_need_no_passphrase(self):
+        self.save_card()
+        self.save_card('other')
+        renamed = self.post('/id-cards/resident-card/rename', {'new_name': 'card-2020'})
+        self.assertEqual(renamed.json(), {'renamed': True, 'ref': 'card-2020', 'previous_ref': 'resident-card',
+                                          'network_used': False})
+        self.assertEqual(IdCards().load('card-2020', CARD_PASSPHRASE)['fields'], CARD_FIELDS)
+        taken = self.post('/id-cards/card-2020/rename', {'new_name': 'other'})
+        self.assertEqual((taken.status_code, taken.json()['error']), (409, 'id_card_name_exists'))
+        bad = self.post('/id-cards/card-2020/rename', {'new_name': '../x'})
+        self.assertEqual((bad.status_code, bad.json()['error']), (400, 'invalid_name'))
+        mismatch = self.post('/id-cards/card-2020/remove', {'confirm': 'other'})
+        self.assertEqual((mismatch.status_code, mismatch.json()['error']), (400, 'removal_confirmation_mismatch'))
+        removed = self.post('/id-cards/card-2020/remove', {'confirm': 'card-2020'})
+        self.assertEqual(removed.json(), {'removed': True, 'ref': 'card-2020', 'blob_removed': True, 'network_used': False})
+        self.assertEqual([row['name'] for row in self.get('/id-cards').json()['id_cards']], ['other'])
+        missing = self.post('/id-cards/card-2020/remove', {'confirm': 'card-2020'})
+        self.assertEqual((missing.status_code, missing.json()['error']), (404, 'id_card_not_found'))
+        extra = self.post('/id-cards/other/remove', {'confirm': 'other', 'passphrase': CARD_PASSPHRASE})
+        self.assertEqual((extra.status_code, extra.json()['error']), (400, 'input_fields_not_accepted'))
+        self.client.cookies.clear()
+        self.assertEqual(self.get('/id-cards').status_code, 401)

@@ -513,19 +513,21 @@ function profileCard(p) {
 
 async function settingsView(ctx) {
   await refreshModel();
-  const [credentials, devices] = await Promise.all([api.get('/credentials'), api.get('/auth/devices')]);
+  const [credentials, devices, saved] = await Promise.all([api.get('/credentials'), api.get('/auth/devices'), api.get('/id-cards')]);
   state.credentials = credentials.credentials;
+  const cards = saved.id_cards;
   const logins = [...state.logins].sort((a, b) => Number(a.disabled) - Number(b.disabled));
   const usage = c => {
     const names = [...new Set((c.in_use || []).map(r => r.source === 'target_signing' ? `${r.login_name} › ${r.name}` : r.name))];
     return names.length ? tag(`연결 ${names.length}개 사용 중`, 'info') + `<span class="meta">${esc(names.join(', '))}</span>` : tag('미사용', 'neutral');
   };
   const credentialRows = state.credentials.map(c => `<div class="setting-row"><span><strong>${esc(c.ref)}</strong><span class="meta">${esc(c.type === 'joint' ? '공동인증서' : '하나인증서 저장소')}${c.type === 'joint' ? ' · ' + esc(String(c.format).toUpperCase()) : ''}${c.fingerprint ? ' · 지문 ' + esc(c.fingerprint.slice(0, 8)) : ''}</span><span class="credential-usage">${usage(c)}</span></span><div class="row-actions">${c.type === 'onesign' ? (state.vaults[c.ref] ? tag('암호 기억 중') + ui.button('잠그기', `data-action="lock-vault" data-store="${esc(c.ref)}"`) : tag('잠김', 'neutral') + ui.button('잠금 해제', `data-action="unlock-vault" data-store="${esc(c.ref)}"`)) : ''}${ui.button('이름 변경', `data-action="rename-credential" data-kind="${esc(c.type)}" data-ref="${esc(c.ref)}"`)}${ui.button('삭제', `data-action="remove-credential" data-kind="${esc(c.type)}" data-ref="${esc(c.ref)}"`, 'secondary danger-text')}</div></div>`).join('');
+  const cardRows = cards.map(c => `<div class="setting-row"><span><strong>${esc(c.name)}</strong><span class="meta">${c.kind === 'driver' ? '운전면허증' : '주민등록증'} · 발급일 ${esc(c.issue_date)} · 보관 ${ui.time(c.saved_at)}</span></span><div class="row-actions">${ui.button('이름 변경', `data-action="rename-credential" data-kind="idcard" data-ref="${esc(c.name)}"`)}${ui.button('삭제', `data-action="remove-credential" data-kind="idcard" data-ref="${esc(c.name)}"`, 'secondary danger-text')}</div></div>`).join('');
   const deviceRows = devices.devices.map(d => `<div class="setting-row"><span><strong>${esc(d.name)}</strong><span class="meta">등록 ${ui.time(d.created_at)} · 마지막 사용 ${ui.time(d.last_seen_at)}${d.active ? '' : ' · 비활성'}</span></span><div class="row-actions">${d.current ? tag('현재 브라우저') : ''}${d.active ? ui.button(d.current ? '로그아웃' : '접속 해제', `data-action="revoke-device" data-device="${esc(d.id)}" data-current="${d.current}"`) : ''}</div></div>`).join('');
   return heading('연결·인증서', '기관 로그인과 업무 대상, 프로필을 관리해요.', ui.button('인증서 발급·가져오기', 'data-action="certificate-add"', 'secondary', 'plus') + (logins.length ? ui.button('기관 연결 추가', 'data-action="add-login-dialog"', 'primary', 'plus') : '')) +
     `<div class="connection-list">${logins.length ? logins.map(connectionCard).join('') : onboarding()}</div>` +
     `<section class="section-block"><div class="section-head"><div><h2>업무 프로필</h2><p class="meta">대상을 묶어 개인·사업장·법인별로 보는 이름표예요. 권한이나 명의 확인 근거는 아니에요.</p></div>${ui.button('프로필 추가', 'data-action="new-profile"', 'secondary', 'plus')}</div><div class="profile-grid">${state.profiles.map(profileCard).join('') || '<p class="field-help">프로필이 없어요. 대상을 등록하면 현재 프로필에 자동으로 넣어요.</p>'}</div></section>` +
-    `<details class="advanced-block"><summary><span>인증서 보관함과 접속 기기</span><span class="meta">인증서 ${state.credentials.length} · 기기 ${devices.devices.filter(d => d.active).length}</span>${icon('arrow')}</summary><div class="settings-grid"><section class="panel"><div class="panel-heading"><h2>인증서</h2>${ui.button('발급·가져오기', 'data-action="certificate-add"', 'primary')}</div><div class="settings-body">${credentialRows || '<p class="field-help">보관한 인증서가 없어요.</p>'}<p class="field-help">사용하지 않는 인증서는 여기서 이름을 바꾸거나 삭제할 수 있어요. 공동인증서 가져오기·하나인증서 신규 발급은 위 버튼에서 진행해요. 공동·금융인증서 신규 발급은 미지원이에요. 내보내기·설정 추출·기기 등록 파일은 서버에서 관리해요: <span class="code">fin cert joint import|export</span>, <span class="code">fin hana onesign init|export-identity</span>, <span class="code">fin server registration</span>. 연결이 쓰고 있는 인증서는 먼저 그 연결을 해제해야 이름 변경·삭제가 돼요.</p></div></section><section class="panel"><div class="panel-heading"><h2>웹앱 접속 기기</h2></div><div class="settings-body">${deviceRows}<p class="field-help">새 기기는 서버에서 <span class="code">fin server enroll</span>로 만든 일회성 코드로 등록해요. 기관 세션과는 별개예요.</p></div></section></div></details>`;
+    `<details class="advanced-block"><summary><span>인증서·신분증 보관함과 접속 기기</span><span class="meta">인증서 ${state.credentials.length} · 신분증 ${cards.length} · 기기 ${devices.devices.filter(d => d.active).length}</span>${icon('arrow')}</summary><div class="settings-grid"><section class="panel"><div class="panel-heading"><h2>인증서</h2>${ui.button('발급·가져오기', 'data-action="certificate-add"', 'primary')}</div><div class="settings-body">${credentialRows || '<p class="field-help">보관한 인증서가 없어요.</p>'}<p class="field-help">사용하지 않는 인증서는 여기서 이름을 바꾸거나 삭제할 수 있어요. 공동인증서 가져오기·하나인증서 신규 발급은 위 버튼에서 진행해요. 공동·금융인증서 신규 발급은 미지원이에요. 내보내기·설정 추출·기기 등록 파일은 서버에서 관리해요: <span class="code">fin cert joint import|export</span>, <span class="code">fin hana onesign init|export-identity</span>, <span class="code">fin server registration</span>. 연결이 쓰고 있는 인증서는 먼저 그 연결을 해제해야 이름 변경·삭제가 돼요.</p></div></section><section class="panel"><div class="panel-heading"><h2>신분증</h2>${ui.button('신분증 보관', 'data-action="idcard-add"', 'primary')}</div><div class="settings-body">${cardRows || '<p class="field-help">보관한 신분증이 없어요.</p>'}<p class="field-help">신분증 사진과 확인한 정보를 보관 암호로 암호화해 두고, 하나인증서 발급의 신분증 확인 단계에서 골라 써요. 이름과 주민번호·사진은 암호화되어 이 목록에는 종류와 발급일만 보여요. 내보내기는 서버에서 <span class="code">fin idcard export</span>로 해요.</p></div></section><section class="panel"><div class="panel-heading"><h2>웹앱 접속 기기</h2></div><div class="settings-body">${deviceRows}<p class="field-help">새 기기는 서버에서 <span class="code">fin server enroll</span>로 만든 일회성 코드로 등록해요. 기관 세션과는 별개예요.</p></div></section></div></details>`;
 }
 
 /* Add-login dialog: method and credential options follow the chosen institution. */
@@ -917,13 +919,13 @@ export const actions = {
   'rename-credential': (ctx, button) => {
     const {kind, ref} = button.dataset;
     if (credentialInUse(kind, ref, '이름 변경')) return;
-    ui.showDialog(`${ref} 이름 변경`, `<form data-submit="save-credential-name" data-kind="${esc(kind)}" data-ref="${esc(ref)}" autocomplete="off"><div class="field"><label for="credential-rename">새 이름</label><input id="credential-rename" name="new_name" value="${esc(ref)}" required maxlength="64" pattern="[A-Za-z0-9][A-Za-z0-9_.-]{0,63}" spellcheck="false"></div><p class="field-help">영문·숫자로 시작하고 영문·숫자·<span class="code">_ . -</span>만 쓸 수 있어요. 이름만 바뀌고 인증서와 키는 그대로예요.${kind === 'onesign' ? ' 기억 중인 저장소 암호도 새 이름으로 이어져요.' : ''}</p><p class="form-error" id="credential-rename-error" role="alert"></p><div class="dialog-actions"><button type="button" class="button secondary" data-ui="close">취소</button><button class="button primary" type="submit">저장</button></div></form>`);
+    ui.showDialog(`${ref} 이름 변경`, `<form data-submit="save-credential-name" data-kind="${esc(kind)}" data-ref="${esc(ref)}" autocomplete="off"><div class="field"><label for="credential-rename">새 이름</label><input id="credential-rename" name="new_name" value="${esc(ref)}" required maxlength="64" pattern="[A-Za-z0-9][A-Za-z0-9_.-]{0,63}" spellcheck="false"></div><p class="field-help">영문·숫자로 시작하고 영문·숫자·<span class="code">_ . -</span>만 쓸 수 있어요. ${kind === 'idcard' ? '이름만 바뀌고 보관한 신분증은 그대로예요.' : '이름만 바뀌고 인증서와 키는 그대로예요.'}${kind === 'onesign' ? ' 기억 중인 저장소 암호도 새 이름으로 이어져요.' : ''}</p><p class="form-error" id="credential-rename-error" role="alert"></p><div class="dialog-actions"><button type="button" class="button secondary" data-ui="close">취소</button><button class="button primary" type="submit">저장</button></div></form>`);
   },
   'save-credential-name': async (ctx, form) => {
     const {kind, ref} = form.dataset;
     const newName = String(new FormData(form).get('new_name') || '').trim();
     try {
-      await api.post(`/credentials/${encodeURIComponent(kind)}/${encodeURIComponent(ref)}/rename`, {new_name: newName});
+      await api.post(`${storePath(kind, ref)}/rename`, {new_name: newName});
       ui.closeDialog(); ui.toast(`${ref} → ${newName}로 바꿨어요.`); await afterModel(ctx);
     } catch (error) {
       document.querySelector('#credential-rename-error').textContent = error.code === 'credential_in_use'
@@ -932,17 +934,18 @@ export const actions = {
   },
   'remove-credential': (ctx, button) => {
     const {kind, ref} = button.dataset;
-    const label = kind === 'joint' ? '공동인증서' : '하나인증서 저장소';
+    const label = {joint: '공동인증서', onesign: '하나인증서 저장소', idcard: '신분증'}[kind];
     if (credentialInUse(kind, ref, '삭제')) return;
-    const backup = kind === 'joint' ? `fin cert export ${ref} --output …` : `fin hana onesign export-identity --name ${ref} --output …`;
-    ui.showDialog(`${ref} 삭제`, `<form data-submit="confirm-remove-credential" data-kind="${esc(kind)}" data-ref="${esc(ref)}" autocomplete="off"><p class="dialog-note danger-note">이 ${label}를 이 서버에서 지워요. 되돌릴 수 없고, 백업이 없으면 다시 가져오거나 새로 발급해야 해요.${kind === 'onesign' ? ' 기기 식별자와 인증서 기록이 함께 지워지고, 기억 중인 저장소 암호도 잊어요.' : ''} 필요하면 먼저 서버에서 <span class="code">${esc(backup)}</span>로 백업하세요.</p><div class="field"><label for="remove-confirm">확인을 위해 이름 <strong>${esc(ref)}</strong>을 입력하세요</label><input id="remove-confirm" name="confirm" required autocomplete="off" spellcheck="false"></div><p class="form-error" id="remove-error" role="alert"></p><div class="dialog-actions"><button type="button" class="button secondary" data-ui="close">취소</button><button class="button primary" type="submit">삭제</button></div></form>`);
+    const backup = {joint: `fin cert export ${ref} --output …`, onesign: `fin hana onesign export-identity --name ${ref} --output …`,
+      idcard: `fin idcard export ${ref} --output …`}[kind];
+    ui.showDialog(`${ref} 삭제`, `<form data-submit="confirm-remove-credential" data-kind="${esc(kind)}" data-ref="${esc(ref)}" autocomplete="off"><p class="dialog-note danger-note">이 ${label}${kind === 'idcard' ? '을' : '를'} 이 서버에서 지워요. 되돌릴 수 없고, 백업이 없으면 ${kind === 'idcard' ? '사진과 정보를 다시 보관해야 해요.' : '다시 가져오거나 새로 발급해야 해요.'}${kind === 'onesign' ? ' 기기 식별자와 인증서 기록이 함께 지워지고, 기억 중인 저장소 암호도 잊어요.' : ''} 필요하면 먼저 서버에서 <span class="code">${esc(backup)}</span>로 백업하세요.</p><div class="field"><label for="remove-confirm">확인을 위해 이름 <strong>${esc(ref)}</strong>을 입력하세요</label><input id="remove-confirm" name="confirm" required autocomplete="off" spellcheck="false"></div><p class="form-error" id="remove-error" role="alert"></p><div class="dialog-actions"><button type="button" class="button secondary" data-ui="close">취소</button><button class="button primary" type="submit">삭제</button></div></form>`);
   },
   'confirm-remove-credential': async (ctx, form) => {
     const {kind, ref} = form.dataset;
     const confirm = String(new FormData(form).get('confirm') || '');
     if (confirm !== ref) { document.querySelector('#remove-error').textContent = '입력한 이름이 달라요.'; return; }
     try {
-      await api.post(`/credentials/${encodeURIComponent(kind)}/${encodeURIComponent(ref)}/remove`, {confirm});
+      await api.post(`${storePath(kind, ref)}/remove`, {confirm});
       ui.closeDialog(); ui.toast(`${ref}을 삭제했어요.`); await afterModel(ctx);
     } catch (error) {
       document.querySelector('#remove-error').textContent = error.code === 'credential_in_use'
@@ -971,6 +974,11 @@ export const actions = {
     } catch (error) { ui.toast(ui.message(error.code)); }
   },
 };
+
+/* Saved ID cards have their own store; certificates share the credential endpoints. */
+function storePath(kind, ref) {
+  return kind === 'idcard' ? `/id-cards/${encodeURIComponent(ref)}` : `/credentials/${encodeURIComponent(kind)}/${encodeURIComponent(ref)}`;
+}
 
 /* A credential some connection or profile uses cannot be renamed or removed here. */
 function credentialInUse(kind, ref, verb) {
