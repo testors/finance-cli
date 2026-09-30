@@ -356,7 +356,7 @@ async function accountsView(ctx) {
   const logins = scopeLogins('hana');
   if (!logins.length) {
     return heading('내 계좌', '은행 로그인별 계좌와 조회 시각을 확인해요.') + setupNotice('hana-accounts') +
-      empty(profile() ? '이 프로필에 하나은행 계좌 대상이 없어요. 연결·인증서에서 계좌를 조회해 등록하고 프로필에 넣으세요.' : '하나은행 로그인이 없어요. 연결·인증서에서 추가하세요.',
+      empty(profile() ? '이 프로필에 하나은행 계좌가 없어요. 전체에서 조회한 계좌를 선택해 프로필에 넣을 수 있어요.' : '하나은행 로그인이 없어요. 연결·인증서에서 추가하세요.',
         '<button class="button primary" data-view="settings">연결·인증서</button>');
   }
   const jobs = await Promise.all(logins.map(row => latest(accountsJobName(row), {login_id: row.id})));
@@ -373,7 +373,7 @@ async function accountsView(ctx) {
     if (!rows.length) unknown += 1;
     for (const account of rows) if (typeof account.balance === 'number') { total += account.balance; counted += 1; }
     const sameSession = job && job.session_id && job.session_id === row.current_session_id && row.method === 'joint_certificate';
-    return `<section class="panel"><div class="panel-heading"><div><h2>${esc(row.display_name)}</h2><p class="meta">${esc(ui.METHOD[row.method])} · ${job?.observed_at ? '조회 ' + ui.time(job.observed_at) : '미조회'}</p></div><div class="pill-row">${readiness(row)}${ui.verification(verification)}</div></div>${panel('job-' + row.id, job && (job.status !== 'finished' || job.outcome !== 'success') ? job : null)}${rows.length ? `<div class="table-wrap"><table class="table data"><thead><tr><th>계좌</th><th>번호</th><th>통화</th><th class="num">잔액</th><th>대상</th></tr></thead><tbody>${rows.map(a => `<tr><td>${esc(a.label)}</td><td>${esc(a.account_number)}</td><td>${esc(a.currency)}</td><td class="num">${state.hidden ? '••••••' : money(a.balance)}</td><td>${mapping[a.ref] ? tag('등록됨') : `<button class="text-button" data-action="register-candidate" data-job="${esc(job.id)}" data-login="${esc(row.id)}" data-ref="${esc(a.ref)}">대상 등록</button>`}</td></tr>`).join('')}</tbody></table></div>` : `<div class="empty-state">${job ? outcomeNote(job) || '표시할 계좌가 없어요.' : '아직 조회하지 않았어요.'}</div>`}<div class="section-actions">${canQuery(row) && !sameSession ? ui.button('잔액 조회', `data-action="accounts-query" data-login="${esc(row.id)}"`, 'primary', 'refresh') : ''}${loginButton(row, !canQuery(row) || sameSession)}${sameSession ? '<span class="muted-block">이 세션의 계좌 조회는 이미 기록했어요. 새로 로그인하면 다시 조회할 수 있어요.</span>' : ''}</div></section>`;
+    return `<section class="panel"><div class="panel-heading"><div><h2>${esc(row.display_name)}</h2><p class="meta">${esc(ui.METHOD[row.method])} · ${job?.observed_at ? '조회 ' + ui.time(job.observed_at) : '미조회'}</p></div><div class="pill-row">${readiness(row)}${ui.verification(verification)}</div></div>${panel('job-' + row.id, job && (job.status !== 'finished' || job.outcome !== 'success') ? job : null)}${rows.length ? `<div class="table-wrap"><table class="table data"><thead><tr><th>계좌</th><th>번호</th><th>통화</th><th class="num">잔액</th></tr></thead><tbody>${rows.map(a => `<tr><td>${esc(a.label)}</td><td>${esc(a.account_number)}</td><td>${esc(a.currency)}</td><td class="num">${state.hidden ? '••••••' : money(a.balance)}</td></tr>`).join('')}</tbody></table></div>` : `<div class="empty-state">${job ? outcomeNote(job) || '표시할 계좌가 없어요.' : '아직 조회하지 않았어요.'}</div>`}<div class="section-actions">${canQuery(row) && !sameSession ? ui.button('잔액 조회', `data-action="accounts-query" data-login="${esc(row.id)}"`, 'primary', 'refresh') : ''}${loginButton(row, !canQuery(row) || sameSession)}${sameSession ? '<span class="muted-block">이 세션의 계좌 조회는 이미 기록했어요. 새로 로그인하면 다시 조회할 수 있어요.</span>' : ''}</div></section>`;
   }).join('');
   return heading('내 계좌', '은행 로그인별로 모아 보고, 로그인 상태와 조회 시각을 구별해요.') + setupNotice('hana-accounts') +
     `<section class="balance-overview"><div><div class="balance-label">조회한 계좌 잔액 합계<button class="icon-button" data-action="privacy" aria-label="${state.hidden ? '잔액 표시' : '잔액 숨기기'}">${icon('eye')}</button></div><div class="total-balance number">${counted ? (state.hidden ? '••••••' : money(total)) : '—'}<small>원</small></div><div class="balance-meta"><span>${counted}개 계좌 합산</span>${unknown ? `<span>미조회 ${unknown}곳은 합계에서 제외</span>` : ''}</div></div><div class="overview-side"><p>필요할 때, 바로 이체하세요.</p><button class="button on-dark" data-view="transfer">이체하기 ${icon('transfer')}</button></div></section><div class="stack">${panels}</div>`;
@@ -381,7 +381,7 @@ async function accountsView(ctx) {
 
 async function historyView(ctx) {
   const list = accountTargets();
-  if (!list.length) return heading('거래 내역', '계좌별 입출금 내역을 조회해요.') + setupNotice('hana-history') + empty('조회한 계좌 대상이 없어요. 내 계좌에서 잔액을 조회하고 계좌를 대상으로 등록하세요.', '<button class="button primary" data-view="accounts">내 계좌</button>');
+  if (!list.length) return heading('거래 내역', '계좌별 입출금 내역을 조회해요.') + setupNotice('hana-history') + empty('조회한 계좌가 없어요. 내 계좌에서 계좌를 조회하면 바로 사용할 수 있어요.', '<button class="button primary" data-view="accounts">내 계좌</button>');
   const today = bankDate();
   const week = bankDate(6);
   return heading('거래 내역', '계좌별 입출금 내역을 조회해요. 다음 페이지는 직접 요청해야 가져와요.') + setupNotice('hana-history') +
@@ -400,7 +400,7 @@ function historyRows(job, append = false) {
 async function transferView(ctx) {
   const list = accountTargets('onesign');
   const presets = [10000, 50000, 100000];
-  if (!list.length) return heading('이체', '보내기 전에 받는 분과 금액을 확인하세요.') + setupNotice('hana-transfer') + empty('하나인증서 로그인으로 조회한 출금 계좌 대상이 없어요. 하나인증서로 로그인해 계좌를 조회하고 대상으로 등록하세요.', '<button class="button primary" data-view="settings">연결·인증서</button>');
+  if (!list.length) return heading('이체', '보내기 전에 받는 분과 금액을 확인하세요.') + setupNotice('hana-transfer') + empty('하나인증서로 로그인하고 계좌를 조회하면 출금 계좌를 선택할 수 있어요.', '<button class="button primary" data-view="settings">연결·인증서</button>');
   return heading('이체', '보내기 전에 받는 분과 금액을 확인하세요.') + setupNotice('hana-transfer') +
     `<div class="steps"><span class="active"><b>1</b>정보 입력</span><i></i><span><b>2</b>내용 확인</span><i></i><span><b>3</b>완료</span></div>` +
     note('하나인증서 로그인 한 번으로 잔액·거래 내역·이체 내역을 조회하고 이체할 수 있어요. 이체 후에도 조회는 계속 가능해요. 다음 이체를 준비할 때는 새 로그인이 필요해요. 이 기능은 실서버 미검증이에요.') +
@@ -482,7 +482,7 @@ function loginStatus(row) {
 }
 
 function verifyAction(row) {
-  return row.institution === 'hometax' ? ['discover', '사용자·사업장 확인'] : ['accounts-query', '계좌 조회·등록'];
+  return row.institution === 'hometax' ? ['discover', '사용자·사업장 확인'] : ['accounts-query', '계좌 조회'];
 }
 
 /* The one button the user most likely needs next. */
@@ -499,7 +499,8 @@ function signingLines(row) {
   const lines = [];
   if (row.institution === 'hometax') lines.push(['계산서 발급 인증서', row.signing?.invoice_sign?.ref, 'signing']);
   if (row.method === 'onesign') {
-    lines.push(['이체 서명', row.signing?.transfer_sign?.ref, 'signing']);
+    if (row.signing?.transfer_sign?.ref && row.signing.transfer_sign.ref !== row.credential?.ref)
+      lines.push(['별도 이체 인증서', row.signing.transfer_sign.ref, 'signing']);
     const store = row.credential?.ref;
     if (store) lines.push(['저장소 암호', state.vaults[store] ? '서버 메모리에 기억 중' : '잠김 · 작업마다 입력', state.vaults[store] ? 'lock-vault' : 'unlock-vault', store]);
   }
@@ -522,11 +523,11 @@ function connectionCard(row) {
   const addTarget = canQuery(row) && !row.disabled && targets.length
     ? `<button type="button" class="text-button" data-action="${verify}" data-login="${esc(row.id)}">${verifyLabel} ${icon('arrow')}</button>` : '';
   const emptyTargets = row.disabled ? '' : !canQuery(row)
-    ? `<p class="target-empty">로그인하면 ${row.institution === 'hometax' ? '사용자·사업장' : '계좌'}을 확인해 대상으로 등록할 수 있어요.</p>`
-    : `<p class="target-empty">아직 등록한 대상이 없어요. <strong>${esc(verifyLabel)}</strong>을 실행하고 결과에서 등록하세요.</p>`;
+    ? `<p class="target-empty">${row.institution === 'hana' ? '로그인 후 계좌를 조회하면 자동으로 연결돼요.' : '로그인하면 사용자·사업장을 확인해 선택할 수 있어요.'}</p>`
+    : `<p class="target-empty">${row.institution === 'hana' ? '아직 조회한 계좌가 없어요. 계좌를 조회하면 바로 사용할 수 있어요.' : '사용자·사업장 확인을 실행하고 결과에서 선택하세요.'}</p>`;
   return `<section class="panel connection-card ${row.disabled ? 'disabled' : ''}" aria-labelledby="login-${esc(row.id)}">
     <div class="connection-head"><div class="bank-symbol">${symbol}</div><div class="connection-title"><h2 id="login-${esc(row.id)}">${esc(row.display_name)}</h2><p class="meta">${esc(ui.INSTITUTION[row.institution])} · ${esc(ui.METHOD[row.method])}${row.credential?.ref ? ' · ' + esc(row.credential.ref) : ''}</p></div><div class="login-status">${loginStatus(row)}</div><div class="connection-actions">${primaryAction(row, targets)}<button type="button" class="icon-button" data-action="login-menu" data-login="${esc(row.id)}" aria-label="${esc(row.display_name)} 더보기">${icon('more')}</button></div></div>
-    <div class="connection-targets"><div class="connection-subhead"><h3>대상 ${targets.length ? `<span class="count">${targets.length}</span>` : ''}</h3>${addTarget}</div>${targets.length ? targets.map(targetRow).join('') : emptyTargets}</div>
+    <div class="connection-targets"><div class="connection-subhead"><h3>${row.institution === 'hana' ? '계좌' : '대상'} ${targets.length ? `<span class="count">${targets.length}</span>` : ''}</h3>${addTarget}</div>${targets.length ? targets.map(targetRow).join('') : emptyTargets}</div>
     ${signingLines(row) ? `<div class="connection-settings">${signingLines(row)}</div>` : ''}
     <div id="job-${esc(row.id)}"></div></section>`;
 }
@@ -534,7 +535,7 @@ function connectionCard(row) {
 function onboarding() {
   const steps = [['인증서 발급·가져오기', '공동인증서를 가져오거나 하나인증서를 신규 발급해 보관해요. 금융인증서 발급은 아직 미지원이에요.'],
     ['기관 연결 추가', '기관·로그인 방법·인증서를 골라요. 저장만 하고 기관에는 접속하지 않아요.'],
-    ['로그인하고 대상 등록', '로그인 후 사용자·사업장 확인이나 계좌 조회 결과에서 업무 대상을 등록해요.']];
+    ['로그인하고 조회', '은행 계좌는 조회하면 자동으로 연결돼요. 홈택스는 사용자·사업장을 확인해 선택하세요. 업무 프로필은 필요할 때만 만들면 돼요.']];
   return `<section class="panel onboarding"><div class="panel-heading"><div><h2>처음 연결하기</h2><p class="meta">세 단계면 업무를 시작할 수 있어요.</p></div></div><ol class="onboarding-steps">${steps.map(([t, d], i) => `<li><b>${i + 1}</b><div><strong>${t}</strong><p>${d}</p></div></li>`).join('')}</ol><div class="onboarding-actions">${ui.button('인증서 발급·가져오기', 'data-action="certificate-add"')}${ui.button('기관 연결 추가', 'data-action="add-login-dialog"', 'primary')}<p class="field-help">기존 CLI 인증서 프로필이 있으면 서버에서 <span class="code">fin server import-profiles</span>로 가져올 수 있어요.</p></div></section>`;
 }
 
@@ -558,7 +559,7 @@ async function settingsView(ctx) {
   const deviceRows = devices.devices.map(d => `<div class="setting-row"><span><strong>${esc(d.name)}</strong><span class="meta">등록 ${ui.time(d.created_at)} · 마지막 사용 ${ui.time(d.last_seen_at)}${d.active ? '' : ' · 비활성'}</span></span><div class="row-actions">${d.current ? tag('현재 브라우저') : ''}${d.active ? ui.button(d.current ? '로그아웃' : '접속 해제', `data-action="revoke-device" data-device="${esc(d.id)}" data-current="${d.current}"`) : ''}</div></div>`).join('');
   return heading('연결·인증서', '기관 로그인과 업무 대상, 프로필을 관리해요.', ui.button('인증서 발급·가져오기', 'data-action="certificate-add"', 'secondary', 'plus') + (logins.length ? ui.button('기관 연결 추가', 'data-action="add-login-dialog"', 'primary', 'plus') : '')) +
     `<div class="connection-list">${logins.length ? logins.map(connectionCard).join('') : onboarding()}</div>` +
-    `<section class="section-block"><div class="section-head"><div><h2>업무 프로필</h2><p class="meta">대상을 묶어 개인·사업장·법인별로 보는 이름표예요. 권한이나 명의 확인 근거는 아니에요.</p></div>${ui.button('프로필 추가', 'data-action="new-profile"', 'secondary', 'plus')}</div><div class="profile-grid">${state.profiles.map(profileCard).join('') || '<p class="field-help">프로필이 없어요. 대상을 등록하면 현재 프로필에 자동으로 넣어요.</p>'}</div></section>` +
+    `<section class="section-block"><div class="section-head"><div><h2>업무 프로필</h2><p class="meta">대상을 묶어 개인·사업장·법인별로 보는 이름표예요. 권한이나 명의 확인 근거는 아니에요.</p></div>${ui.button('프로필 추가', 'data-action="new-profile"', 'secondary', 'plus')}</div><div class="profile-grid">${state.profiles.map(profileCard).join('') || '<p class="field-help">프로필 없이 전체에서 바로 사용할 수 있어요. 필요한 경우에만 계좌·사업장을 묶으세요.</p>'}</div></section>` +
     `<details class="advanced-block"><summary><span>인증서·신분증 보관함과 접속 기기</span><span class="meta">인증서 ${state.credentials.length} · 신분증 ${cards.length} · 기기 ${devices.devices.filter(d => d.active).length}</span>${icon('arrow')}</summary><div class="settings-grid"><section class="panel"><div class="panel-heading"><h2>인증서</h2>${ui.button('발급·가져오기', 'data-action="certificate-add"', 'primary')}</div><div class="settings-body">${credentialRows || '<p class="field-help">보관한 인증서가 없어요.</p>'}<p class="field-help">사용하지 않는 인증서는 여기서 이름을 바꾸거나 삭제할 수 있어요. 공동인증서 가져오기·하나인증서 신규 발급은 위 버튼에서 진행해요. 공동·금융인증서 신규 발급은 미지원이에요. 내보내기·설정 추출·기기 등록 파일은 서버에서 관리해요: <span class="code">fin cert joint import|export</span>, <span class="code">fin hana onesign init|export-identity</span>, <span class="code">fin server registration</span>. 연결이 쓰고 있는 인증서는 먼저 그 연결을 해제해야 이름 변경·삭제가 돼요.</p></div></section><section class="panel"><div class="panel-heading"><h2>신분증</h2>${ui.button('신분증 보관', 'data-action="idcard-add"', 'primary')}</div><div class="settings-body">${cardRows || '<p class="field-help">보관한 신분증이 없어요.</p>'}<p class="field-help">신분증 사진과 확인한 정보를 보관 암호로 암호화해 두고, 하나인증서 발급의 신분증 확인 단계에서 골라 써요. 이름과 주민번호·사진은 암호화되어 이 목록에는 종류와 발급일만 보여요. 내보내기는 서버에서 <span class="code">fin idcard export</span>로 해요.</p></div></section><section class="panel"><div class="panel-heading"><h2>웹앱 접속 기기</h2></div><div class="settings-body">${deviceRows}<p class="field-help">새 기기는 서버에서 <span class="code">fin server enroll</span>로 만든 일회성 코드로 등록해요. 기관 세션과는 별개예요.</p></div></section></div></details>`;
 }
 
@@ -703,7 +704,8 @@ export const actions = {
       if (!secrets) return;
     }
     await runForLogin(ctx, accountsJobName(row), row, {}, {secrets, onDone: async job => {
-      if (state.view === 'settings') candidatesDialog(ctx, job, row.id); else await render();
+      if (job.local?.account_linking_failed) ui.toast('은행 조회는 완료됐지만 계좌를 연결하지 못했어요. 저장소 상태를 확인하세요.');
+      await afterModel(ctx);
     }});
   },
   extend: async (ctx, button) => {
@@ -854,10 +856,11 @@ export const actions = {
     if (!row.disabled) {
       item('login', row.current_session_id ? '다시 로그인' : '로그인', onesign ? '새 세션을 만들어요' : '');
       if (hometax) { item('session-check', '세션 확인', '저장된 세션이 아직 유효한지 확인해요'); item('discover', '사용자·사업장 확인', '대상을 추가로 등록해요'); }
-      if (row.institution === 'hana') item('accounts-query', '계좌 조회·등록', '대상을 추가로 등록해요');
+      if (row.institution === 'hana') item('accounts-query', '계좌 조회', '조회된 계좌는 자동으로 연결돼요');
       if (row.institution === 'hana' && !onesign) item('extend', '로그인 연장');
       if (hometax) item('signing', '계산서 발급 인증서');
-      if (onesign) item('signing', '이체 서명 수단');
+      if (onesign && row.signing?.transfer_sign?.ref && row.signing.transfer_sign.ref !== row.credential?.ref)
+        item('signing', '별도 이체 인증서', '로그인 인증서 사용으로 되돌릴 수 있어요');
     }
     item('sessions', '세션 기록');
     item('rename-login', '이름 변경');
@@ -918,7 +921,7 @@ export const actions = {
     const hometax = row.institution === 'hometax';
     const purpose = hometax ? 'invoice_sign' : 'transfer_sign';
     const kind = hometax ? 'joint' : 'onesign';
-    ui.showDialog(hometax ? '발급용 인증서' : '이체 서명 수단', `<form data-submit="save-signing" data-login="${esc(row.id)}" data-purpose="${purpose}" data-method="${hometax ? 'joint_certificate' : 'onesign'}"><div class="field"><label for="signing-ref">자격 증명</label><select id="signing-ref" name="credential"><option value="">지정 해제</option>${state.credentials.filter(c => c.type === kind).map(c => `<option value="${esc(c.ref)}" ${row.signing?.[purpose]?.ref === c.ref ? 'selected' : ''}>${esc(c.ref)}</option>`).join('')}</select></div><p class="dialog-note">바꾸면 설정 revision이 올라가 세션 재확인이 필요하고, 확인 대기 중인 초안·이체는 무효가 돼요. 만료·실패 시 다른 인증서로 자동 전환하지 않아요.</p><div class="dialog-actions"><button type="button" class="button secondary" data-ui="close">취소</button><button class="button primary" type="submit">저장</button></div></form>`);
+    ui.showDialog(hometax ? '발급용 인증서' : '이체 서명 수단', `<form data-submit="save-signing" data-login="${esc(row.id)}" data-purpose="${purpose}" data-method="${hometax ? 'joint_certificate' : 'onesign'}"><div class="field"><label for="signing-ref">자격 증명</label><select id="signing-ref" name="credential"><option value="">${hometax ? '지정 해제' : '로그인 인증서 사용'}</option>${state.credentials.filter(c => c.type === kind).map(c => `<option value="${esc(c.ref)}" ${row.signing?.[purpose]?.ref === c.ref ? 'selected' : ''}>${esc(c.ref)}</option>`).join('')}</select></div><p class="dialog-note">바꾸면 설정 revision이 올라가 세션 재확인이 필요하고, 확인 대기 중인 초안·이체는 무효가 돼요. 만료·실패 시 다른 인증서로 자동 전환하지 않아요.</p><div class="dialog-actions"><button type="button" class="button secondary" data-ui="close">취소</button><button class="button primary" type="submit">저장</button></div></form>`);
   },
   'save-signing': async (ctx, form) => {
     const row = login(form.dataset.login);

@@ -67,6 +67,8 @@ def create_app(config, *, db=None, dispatcher=True, vaults=None):
 
     @asynccontextmanager
     async def lifespan(app):
+        with db.write() as con:
+            model.restore_hana_accounts(con)
         if worker:
             worker.start()
         try:

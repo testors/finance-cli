@@ -1,10 +1,11 @@
 """Institution logins, verified targets, business profiles and session metadata.
 
-Targets are only registered from a finished verification job's stored result,
-never from identifiers a browser sends. Profile names and types are display
-data; nothing here infers a person, business or permission from them.
+Targets come from finished verification jobs, never identifiers a browser sends.
+Successful Hana account queries link their accounts automatically. Profile names
+and types are display data; nothing here infers a person, business or permission.
 """
 import re
+import sqlite3
 import unicodedata
 
 from .db import dumps, loads, new_id, now
@@ -310,14 +311,62 @@ def update_target(con, target_id, *, expected_revision=None, name=None, signing=
 
 
 def signing_for(con, login, target, purpose):
-    """The explicit signing reference: target setting first, then the login default."""
+    """Use explicit settings first; Hana OneSign transfers share the login credential."""
     if purpose == 'login':
         return loads(login['credential'])
     if target is not None:
         value = loads(target['signing'], {}).get(purpose)
         if value:
             return value
-    return loads(login['signing'], {}).get(purpose)
+    value = loads(login['signing'], {}).get(purpose)
+    if value:
+        return value
+    if purpose == 'transfer_sign' and login['institution'] == 'hana' and login['method'] == 'onesign':
+        credential = loads(login['credential'])
+        return {'method': 'onesign', **credential} if credential else None
+    return None
+
+
+HANA_ACCOUNT_JOBS = ('hana.accounts.list', 'hana.onesign.accounts')
+
+
+def link_hana_accounts(con, job):
+    """Link a successful account response locally; never change its verdict.
+
+    A savepoint keeps malformed rows from partially updating the account list.
+    Existing names, disabled flags and profile groups stay.
+    """
+    if job['name'] not in HANA_ACCOUNT_JOBS or job['status'] != 'finished' or job['outcome'] != 'success':
+        return True
+    login = con.execute('SELECT * FROM logins WHERE id=?', (job['login_id'],)).fetchone()
+    if login is None or login['institution'] != 'hana' or login['disabled'] \
+            or login['revision'] != job['login_revision']:
+        return True
+    if loads(job['service_verdict'], {}).get('accepted') is not True:
+        return True
+    con.execute('SAVEPOINT account_linking')
+    try:
+        for candidate in loads(job['attempt'], {}).get('target_candidates') or []:
+            if candidate['kind'] != 'account':
+                raise ValueError('account_candidate_required')
+            register_target(con, login['id'], job, candidate['ref'])
+    except (ValueError, TypeError, KeyError, sqlite3.Error):
+        con.execute('ROLLBACK TO account_linking')
+        return False
+    finally:
+        con.execute('RELEASE account_linking')
+    return True
+
+
+def restore_hana_accounts(con):
+    """Use the latest saved successful query per current login, with no bank I/O."""
+    rows = con.execute('''SELECT j.* FROM logins l JOIN jobs j ON j.id=(
+        SELECT id FROM jobs WHERE login_id=l.id AND login_revision=l.revision
+        AND name IN (?, ?) AND status='finished' AND outcome='success'
+        ORDER BY observed_at DESC, created_at DESC, id DESC LIMIT 1)
+        WHERE l.institution='hana' AND l.disabled=0''', HANA_ACCOUNT_JOBS).fetchall()
+    for job in rows:
+        link_hana_accounts(con, job)
 
 
 # Business profiles

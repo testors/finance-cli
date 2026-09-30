@@ -43,9 +43,9 @@ class HanaCase(ServerCase):
 
     def register_account(self, login_id, job):
         ref = job['result']['accounts'][0]['ref']
-        response = self.post(f'/logins/{login_id}/targets', {'job_id': job['id'], 'candidate': ref})
-        self.assertEqual(response.status_code, 200, response.text)
-        return response.json()
+        target_id = job['result']['candidate_targets'][ref]
+        targets = self.get(f'/logins/{login_id}/targets').json()['targets']
+        return next(target for target in targets if target['id'] == target_id)
 
 
 class JointPathTests(HanaCase):
@@ -241,8 +241,7 @@ class OneSignPathTests(HanaCase):
                                        functools.partial(onesign_transfer.operate, exchange=self.services)))
         self.enroll()
         self.login = self.post('/logins', {'institution': 'hana', 'method': 'onesign', 'name': '하나 하나인증서',
-                                           'credential': 'synthetic', 'signing': {
-                                               'transfer_sign': {'method': 'onesign', 'credential': 'synthetic'}}}).json()
+                                           'credential': 'synthetic'}).json()
         self.vault = {'vault_passphrase': onesign_fixture.PASSWORD}
 
     def signed_in(self):

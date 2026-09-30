@@ -11,6 +11,7 @@ import json
 import os
 from pathlib import Path
 import shutil
+import sqlite3
 import sys
 
 from finance_cli.core import storage
@@ -379,6 +380,16 @@ def persist(db, ctx, result, *, job=None, step=None, adapter=None):
                      dumps(attempt), at, at if result.observed else None,
                      at if status == 'finished' else None, job_id))
         db.event(con, job_id, 'step_finished', step=step, status=status, outcome=result.outcome, stopped=code)
+    if status == 'finished' and adapter.name in model.HANA_ACCOUNT_JOBS:
+        # Commit the bank verdict before this local follow-up can fail.
+        try:
+            with db.write() as con:
+                saved = con.execute('SELECT * FROM jobs WHERE id=?', (job_id,)).fetchone()
+                if not model.link_hana_accounts(con, saved):
+                    local = {**loads(saved['local'], {}), 'account_linking_failed': True}
+                    con.execute('UPDATE jobs SET local=? WHERE id=?', (dumps(local), job_id))
+        except (sqlite3.Error, OSError):
+            print('Account linking failed after the bank result was saved.', file=sys.stderr)
     return status
 
 

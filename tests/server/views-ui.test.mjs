@@ -283,6 +283,33 @@ test('new and disabled logins show appropriate actions', async t => {
   }
 });
 
+test('bank accounts need no target registration or separate default transfer signer', async t => {
+  const ui = await setup(t, 'onesign', 'ready');
+  ui.state.cache.set('hana.onesign.accounts|login||', {id: 'saved', status: 'finished', outcome: 'success',
+    result: {accounts: [{ref: 'account-1', label: '합성 계좌', account_number: '12345678901234', balance: 100}],
+      candidate_targets: {'account-1': 'target'}}});
+  for (const view of ['accounts', 'settings']) {
+    ui.document.querySelector('main').innerHTML = await ui.views[view](ui.ctx);
+    assert.equal(ui.document.querySelector('[data-action="register-candidate"]'), null);
+    assert.equal(ui.document.querySelector('[data-action="signing"]'), null);
+    assert.doesNotMatch(ui.document.querySelector('main').textContent, /대상 등록|계좌 조회·등록|이체 서명/);
+  }
+  await ui.actions['login-menu'](ui.ctx, {dataset: {login: 'login'}});
+  assert.equal(ui.document.querySelector('[data-run="signing"]'), null);
+  assert.equal(ui.calls.length, 0);
+  assert.equal(ui.asked.length, 0);
+});
+
+test('account query completion refreshes the model without a registration dialog or more bank requests', async t => {
+  const ui = await setup(t, 'onesign', 'ready', {vault_passphrase: 'synthetic'});
+  ui.state.view = 'settings';
+  await ui.actions['accounts-query'](ui.ctx, {dataset: {login: 'login'}});
+  assert.equal(ui.calls.length, 1);
+  await ui.calls[0].options.onDone({status: 'finished', outcome: 'success', result: {accounts: []}});
+  assert.equal(ui.document.querySelector('[data-action="register-candidate"]'), null);
+  assert.equal(ui.calls.length, 1);
+});
+
 test('coverage explains partial live evidence and distinguishes login paths without bank requests', async t => {
   const ui = await setup(t);
   ui.state.capabilities = {verification_reviewed_at: '2026-10-01', features: [{
