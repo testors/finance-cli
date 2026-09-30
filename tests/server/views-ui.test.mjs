@@ -12,6 +12,7 @@ async function setup(t, method = 'onesign', readiness = 'query_only', secret = {
   t.after(() => dom.window.close());
   dom.window.HTMLDialogElement.prototype.close = function () { this.open = false; };
   const context = dom.getInternalVMContext();
+  context.Date.now = () => Date.parse('2026-09-30T16:00:00Z');
   const row = {id: 'login', institution: 'hana', method, readiness, display_name: '합성 연결',
     credential: {ref: 'synthetic'}, current_session_id: 'session', session: {state: 'consumed'}};
   const target = {id: 'target', login_id: row.id, kind: 'account', display_name: '합성 계좌', identity: {account_number: '••••1234'}};
@@ -54,6 +55,8 @@ for (const method of ['onesign', 'joint_certificate']) {
     for (const view of ['history', 'inquiry']) {
       ui.document.querySelector('main').innerHTML = await ui.views[view](ui.ctx);
       assert.equal(ui.document.querySelector('[name="target_id"]').value, 'target');
+      assert.equal(ui.document.querySelector('[name="end_date"]').value, '2026-10-01');
+      assert.equal(ui.document.querySelector('[name="start_date"]').value, view === 'history' ? '2026-09-25' : '2026-09-01');
       assert.doesNotMatch(ui.document.body.textContent, /공동인증서 로그인으로 조회한 계좌 대상이 없어요/);
     }
     assert.equal(ui.calls.length, 0);

@@ -324,6 +324,9 @@ function accountSelect(list, id = 'account', label = '계좌') {
   return `<label class="field-inline">${esc(label)}<select name="target_id" id="${id}" required>${list.map(t => `<option value="${esc(t.id)}">${esc(t.display_name)} · ${esc(t.identity?.account_number || '')} (${esc(login(t.login_id)?.display_name)})</option>`).join('')}</select></label>`;
 }
 
+// Bank query dates follow Korea time even before 09:00 KST or from an overseas browser.
+const bankDate = (daysAgo = 0) => new Date(Date.now() + 9 * 3600000 - daysAgo * 86400000).toISOString().slice(0, 10);
+
 function accountsJobName(row) { return row.method === 'onesign' ? 'hana.onesign.accounts' : 'hana.accounts.list'; }
 
 async function runHanaQuery(ctx, suffix, fields, options) {
@@ -363,8 +366,8 @@ async function accountsView(ctx) {
 async function historyView(ctx) {
   const list = accountTargets();
   if (!list.length) return heading('거래 내역', '계좌별 입출금 내역을 조회해요.') + setupNotice('hana-history') + empty('조회한 계좌 대상이 없어요. 내 계좌에서 잔액을 조회하고 계좌를 대상으로 등록하세요.', '<button class="button primary" data-view="accounts">내 계좌</button>');
-  const today = new Date().toISOString().slice(0, 10);
-  const week = new Date(Date.now() - 6 * 86400000).toISOString().slice(0, 10);
+  const today = bankDate();
+  const week = bankDate(6);
   return heading('거래 내역', '계좌별 입출금 내역을 조회해요. 다음 페이지는 직접 요청해야 가져와요.') + setupNotice('hana-history') +
     `<section class="panel"><form class="filter-bar" data-submit="history-query">${accountSelect(list)}<label class="field-inline">시작일<input type="date" name="start_date" value="${week}" required></label><label class="field-inline">종료일<input type="date" name="end_date" value="${today}" required></label><label class="field-inline">구분<select name="direction"><option value="all">전체</option><option value="deposit">입금</option><option value="withdrawal">출금</option></select></label><label class="field-inline">정렬<select name="order"><option value="desc">최신순</option><option value="asc">과거순</option></select></label><label class="field-inline">검색<input name="search" maxlength="25"></label><button class="button primary" type="submit">${icon('refresh')}조회</button></form>${panel('job-panel', null)}<div id="results"><div class="empty-state">계좌와 기간을 정해 조회하세요. 이 세션에서 계좌 조회를 먼저 해야 해요.</div></div></section>`;
 }
@@ -391,8 +394,8 @@ async function transferView(ctx) {
 async function inquiryView(ctx) {
   const list = accountTargets();
   if (!list.length) return heading('이체 내역', '이체 결과를 확인하세요.') + setupNotice('hana-inquiry') + empty('조회한 계좌 대상이 없어요.', '<button class="button primary" data-view="accounts">내 계좌</button>');
-  const today = new Date().toISOString().slice(0, 10);
-  const month = new Date(Date.now() - 30 * 86400000).toISOString().slice(0, 10);
+  const today = bankDate();
+  const month = bankDate(30);
   return heading('이체 내역', '완료된 이체와 처리 결과를 확인하세요.') + setupNotice('hana-inquiry') +
     `<section class="panel"><form class="filter-bar" data-submit="inquiry-query">${accountSelect(list)}<label class="field-inline">시작일<input type="date" name="start_date" value="${month}" required></label><label class="field-inline">종료일<input type="date" name="end_date" value="${today}" required></label><button class="button primary" type="submit">${icon('refresh')}조회</button></form>${panel('job-panel', null)}<div id="results"></div><div class="list-footer">행을 누르면 이체 상세를 조회해요.</div></section>`;
 }
