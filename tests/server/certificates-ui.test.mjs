@@ -10,7 +10,7 @@ const options = {hana: {settings: [{name: 'synthetic', version: '1.0.27'}], carr
   {code: '6', name: 'KT', terms_digest: 'kt-review', terms: [{title: 'KT 필수 약관', urls: ['https://example.invalid/kt']}]},
 ]}};
 
-async function setup(t, result = {}, {lost = false, unlockFailed = false} = {}) {
+async function setup(t, result = {}, {lost = false, unlockFailed = false, terminal = {}} = {}) {
   const dom = new JSDOM('<dialog id="detail-dialog"><div id="dialog-content"></div></dialog><div id="toast"></div>',
     {url: 'http://127.0.0.1:8740', runScripts: 'outside-only'});
   t.after(() => dom.window.close());
@@ -35,7 +35,7 @@ async function setup(t, result = {}, {lost = false, unlockFailed = false} = {}) 
     else if (path === '/api/v1/certificates/options') data = options;
     else if (path === '/api/v1/credentials') data = {credentials: result.ready ? [{type: 'onesign', ref: 'synthetic'}] : []};
     else if (path === '/api/v1/jobs' && init.method === 'POST') data = {id: 'jb_synthetic', status: 'running'};
-    else if (path === '/api/v1/jobs/jb_synthetic') data = {id: 'jb_synthetic', status: 'finished', outcome: 'success', result};
+    else if (path === '/api/v1/jobs/jb_synthetic') data = {id: 'jb_synthetic', status: 'finished', outcome: 'success', result, ...terminal};
     else throw new Error('Unexpected API ' + path);
     return {ok: true, json: async () => data};
   };
@@ -113,6 +113,34 @@ test('driver identity inputs are required only in the driver branch', async t =>
   ui.actions['certificate-id-kind']({}, select);
   assert.ok([...driver.querySelectorAll('input')].every(i => i.disabled));
   assert.equal(ui.document.querySelector('[name="send"]'), null);
+  assert.match(ui.document.body.textContent, /비율을 유지해 자동 축소/);
+  assert.match(ui.document.body.textContent, /원본 파일은 바꾸지 않으며/);
+});
+
+test('local identity input errors show the reason and open a new form only on user action', async t => {
+  const ui = await setup(t, {}, {terminal: {name: 'hana.onesign.issue.prepare-id', outcome: 'not_started',
+    local: {stopped: 'identity_jpeg_required'}, attempt: {}}});
+  ui.cached.synthetic = true;
+  await ui.actions['certificate-hana-inspect']({}, ui.target({name: 'synthetic'}));
+  await ui.actions['certificate-hana-submit']({}, ui.document.querySelector('form'));
+  assert.match(ui.document.body.textContent, /JPEG\(.jpg·.jpeg\) 파일이어야/);
+  assert.match(ui.document.body.textContent, /은행에 신분증을 보내기 전/);
+  const edit = ui.document.querySelector('[data-stage="prepare-id"]');
+  assert.equal(edit.textContent, '신분증 입력 수정');
+  await ui.actions['certificate-hana-next']({}, edit);
+  assert.ok(ui.document.querySelector('[name="image"]'));
+  assert.equal(ui.document.querySelector('[name="send"]'), null);
+  assert.equal(ui.requests.filter(r => r.path === '/api/v1/jobs' && r.method === 'POST').length, 1);
+});
+
+test('identity requests already reserved never offer the input correction shortcut', async t => {
+  const ui = await setup(t, {}, {terminal: {name: 'hana.onesign.issue.identity', outcome: 'unknown',
+    local: {stopped: 'identity_jpeg_required'}, attempt: {sent: true}}});
+  ui.cached.synthetic = true;
+  await ui.actions['certificate-hana-inspect']({}, ui.target({name: 'synthetic'}));
+  await ui.actions['certificate-hana-submit']({}, ui.document.querySelector('form'));
+  assert.equal(ui.document.querySelector('[data-stage="prepare-id"]'), null);
+  assert.match(ui.document.body.textContent, /다시 전송하지 말고 작업 기록을 확인/);
 });
 
 test('issue sends approval and PIN as private inputs once, then offers completion', async t => {

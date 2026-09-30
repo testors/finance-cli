@@ -1,13 +1,18 @@
 """Certificate setup and one-shot issuance stages. Private inputs travel only in the worker pipe."""
 import base64
 import hashlib
+import io
 import json
 import re
+import warnings
+
+from PIL import Image, ImageOps
 
 from finance_cli.core.paths import data_home
 from finance_cli.credentials.registry import Registry, name as credential_name
 from finance_cli.services.hana import onesign, onesign_signup_protocol as signup, store
 from finance_cli.services.hana.onesign_state import State
+from finance_cli.services.hana.onesign_crypto import ProtocolError
 
 from .base import Adapter, InputError, Step, StepResult, Stop, dict_input, pick
 from .hana import safe_code, verdict
@@ -34,6 +39,40 @@ def decode_file(value, limit):
     if not raw or len(raw) > limit:
         raise Stop('certificate_file_size_not_accepted')
     return raw
+
+
+def identity_jpeg(value):
+    """Prepare the user's JPEG in memory; never write an unencrypted photo."""
+    try:
+        raw = base64.b64decode(value, validate=True)
+    except (ValueError, TypeError):
+        raise Stop('identity_jpeg_invalid') from None
+    if not raw:
+        raise Stop('identity_image_required')
+    if len(raw) > IMAGE_LIMIT:
+        raise Stop('identity_image_too_large')
+    if raw[:2] != b'\xff\xd8':
+        raise Stop('identity_jpeg_required')
+    try:
+        with warnings.catch_warnings():
+            warnings.simplefilter('error', Image.DecompressionBombWarning)
+            with Image.open(io.BytesIO(raw), formats=('JPEG',)) as original:
+                photo = ImageOps.exif_transpose(original)
+                if photo.width > 1024:
+                    photo = photo.resize((1024, max(1, round(photo.height * 1024 / photo.width))), Image.Resampling.LANCZOS)
+                output = io.BytesIO()
+                # Re-encode pixels only: no EXIF, GPS, comments or original filename.
+                photo = photo.convert('RGB')
+                photo.info.clear()
+                photo.save(output, format='JPEG', quality=95, subsampling=0)
+                prepared = output.getvalue()
+    except (Image.DecompressionBombError, Image.DecompressionBombWarning):
+        raise Stop('identity_image_dimensions_too_large') from None
+    except (OSError, ValueError):
+        raise Stop('identity_jpeg_invalid') from None
+    if len(prepared) > IMAGE_LIMIT:
+        raise Stop('identity_image_too_large')
+    return prepared
 
 
 def next_stage(value):
@@ -151,7 +190,10 @@ class OneSignIssuance(Adapter):
             inputs = self.inputs(ctx, current)
             if self.stage == 'prepare-id':
                 capture = inputs['capture']
-                result = onesign.prepare_identity(state, capture['kind'], capture['jpeg'], capture['fields'])
+                try:
+                    result = onesign.prepare_identity(state, capture['kind'], capture['jpeg'], capture['fields'])
+                except ProtocolError as error:
+                    raise Stop(safe_code(error, 'invalid_identity_capture')) from None
             else:
                 if self.remote:
                     ctx.reserve()
@@ -221,19 +263,21 @@ class OneSignIssuance(Adapter):
                 allowed = {'name', 'issueDate', 'birthDate', 'resident'} | \
                     ({'regionCode', 'driver1', 'driver2', 'driver3'} if kind == 'driver' else set())
                 if kind not in ('resident', 'driver') or set(capture) != {'kind', 'fields', 'image', 'confirmation'} \
-                        or set(fields) != allowed or capture['confirmation'] != '본인 신분증' \
+                        or not isinstance(fields, dict) or set(fields) != allowed \
                         or not all(isinstance(v, str) for v in fields.values()):
                     raise ValueError()
-                if not re.fullmatch('[0-9]{6}', fields['birthDate']) or not re.fullmatch('[0-9]{7}', fields['resident']) \
-                        or not re.fullmatch('[0-9]{4}\\.[0-9]{2}\\.[0-9]{2}', fields['issueDate']):
-                    raise ValueError()
-                if kind == 'driver' and any(not re.fullmatch('[0-9]{' + str(size) + '}', fields[key])
-                        for key, size in zip(('regionCode', 'driver1', 'driver2', 'driver3'), (2, 2, 6, 2))):
-                    raise ValueError()
-                jpeg = decode_file(capture['image'], IMAGE_LIMIT)
-                onesign.jpeg_size(jpeg)
             except (ValueError, TypeError, KeyError):
                 raise Stop('invalid_identity_capture') from None
+            if capture['confirmation'] != '본인 신분증':
+                raise Stop('identity_not_confirmed')
+            if not re.fullmatch('[0-9]{6}', fields['birthDate']) or not re.fullmatch('[0-9]{7}', fields['resident']):
+                raise Stop('resident_number_format')
+            if not re.fullmatch(r'[0-9]{4}\.[0-9]{2}\.[0-9]{2}', fields['issueDate']):
+                raise Stop('identity_date_format')
+            if kind == 'driver' and any(not re.fullmatch('[0-9]{' + str(size) + '}', fields[key])
+                    for key, size in zip(('regionCode', 'driver1', 'driver2', 'driver3'), (2, 2, 6, 2))):
+                raise Stop('driver_number_format')
+            jpeg = identity_jpeg(capture['image'])
             inputs = {'capture': {'kind': kind, 'fields': fields, 'jpeg': jpeg}}
         return inputs
 

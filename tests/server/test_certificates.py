@@ -5,6 +5,7 @@ import functools
 import io
 import json
 import sys
+from types import SimpleNamespace
 from unittest.mock import patch
 
 from support import ROOT, ServerCase
@@ -13,6 +14,7 @@ import test_hana_onesign as fixture
 from test_certificate import synthetic_material
 
 from Crypto.PublicKey import ECC
+from PIL import Image
 from cryptography.hazmat.primitives.serialization import pkcs12, load_der_private_key, BestAvailableEncryption
 from cryptography import x509
 from finance_cli.core import storage
@@ -20,8 +22,19 @@ from finance_cli.credentials.joint import crypto
 from finance_cli.credentials.registry import Registry
 from finance_cli.server import jobs, worker
 from finance_cli.server.adapters import certificates
+from finance_cli.server.adapters.base import Stop
 from finance_cli.services.hana import onesign, onesign_setup, onesign_signup_protocol as signup
 from finance_cli.services.hana.onesign_state import State
+
+
+def synthetic_jpeg(width=512, height=256, orientation=1):
+    image = Image.new('RGB', (width, height), 'white')
+    metadata = Image.Exif()
+    metadata[274] = orientation
+    metadata[270] = 'SYNTHETIC-PRIVATE-METADATA'
+    output = io.BytesIO()
+    image.save(output, format='JPEG', exif=metadata, comment=b'SYNTHETIC-PRIVATE-COMMENT')
+    return output.getvalue()
 
 
 class CertificateTests(ServerCase):
@@ -54,7 +67,7 @@ class CertificateTests(ServerCase):
                             certificates.OneSignIssuance(stage).remote else {})},
                             {'vault_passphrase': fixture.PASSWORD, **secrets})
 
-    def before_issue(self):
+    def before_issue(self, kind='resident', jpeg=None):
         self.setup_identity()
         profile = {'name': '합성 이름', 'birth7': '9001011', 'phone': '01000000000', 'carrier': '4'}
         self.assertEqual(self.stage('profile', phone_profile=json.dumps(profile),
@@ -65,13 +78,19 @@ class CertificateTests(ServerCase):
         self.assertEqual(verified['result']['next_stage'], 'consent')
         self.assertEqual(self.stage('consent', agreement=verified['result']['terms_digest'])['outcome'], 'success')
         self.assertEqual(self.stage('begin-id')['outcome'], 'success')
-        jpeg = b'\xff\xd8\xff\xc0\x00\x11\x08\x01\x00\x02\x00' + bytes(10)
-        capture = {'kind': 'resident', 'fields': {'name': '합성 이름', 'issueDate': '2020.02.29',
+        jpeg = jpeg if jpeg is not None else synthetic_jpeg()
+        capture = {'kind': kind, 'fields': {'name': '합성 이름', 'issueDate': '2020.02.29',
                     'birthDate': '900101', 'resident': '1000000'},
                    'image': base64.b64encode(jpeg).decode(), 'confirmation': '본인 신분증'}
-        self.assertEqual(self.stage('prepare-id', identity_capture=json.dumps(capture))['outcome'], 'success')
+        if kind == 'driver':
+            capture['fields'].update(regionCode='11', driver1='20', driver2='123456', driver3='78')
+        count = len(self.services.calls)
+        prepared = self.stage('prepare-id', identity_capture=json.dumps(capture))
+        self.assertEqual(prepared['outcome'], 'success', prepared)
+        self.assertEqual(len(self.services.calls), count)
         self.assertEqual(self.stage('identity')['outcome'], 'success')
         self.assertEqual(self.stage('account', account_number=fixture.SOURCE, account_password='6049')['outcome'], 'success')
+        return prepared
 
     def assert_private(self, job, *needles):
         text = json.dumps(job, ensure_ascii=False)
@@ -215,6 +234,55 @@ class CertificateTests(ServerCase):
         no = self.stage('issue', new_pin=fixture.PIN, new_pin_confirmation=fixture.PIN, issue_confirmation='no')
         self.assertEqual(no['local']['stopped'], 'issuance_not_confirmed')
         self.assertEqual(len(self.services.calls), count)
+
+    def test_web_driver_photo_is_prepared_locally_at_service_dimensions(self):
+        raw = synthetic_jpeg(2400, 1500)
+        with patch.object(onesign, 'prepare_identity', wraps=onesign.prepare_identity) as prepare:
+            job = self.before_issue('driver', raw)
+        self.assertEqual(onesign.jpeg_size(prepare.call_args.args[2]), (1024, 640))
+        self.assertEqual(job['result']['next_stage'], 'identity')
+        self.assertFalse(job['result']['network_used'])
+        self.assertFalse(job['attempt'].get('sent'))
+        self.assertIsNone(job['service_verdict'])
+        self.assert_private(job, base64.b64encode(raw).decode(), fixture.PASSWORD, 'SYNTHETIC-PRIVATE-METADATA')
+
+    def test_photo_orientation_aspect_ratio_and_metadata_removal(self):
+        for width, height, orientation, expected in ((2400, 1500, 1, (1024, 640)),
+                (800, 2000, 6, (1024, 410)), (600, 400, 1, (600, 400))):
+            with self.subTest(orientation=orientation, dimensions=(width, height)):
+                raw = synthetic_jpeg(width, height, orientation)
+                prepared = certificates.identity_jpeg(base64.b64encode(raw).decode())
+                self.assertEqual(onesign.jpeg_size(prepared), expected)
+                with Image.open(io.BytesIO(prepared)) as photo:
+                    photo.load()
+                    self.assertEqual(photo.format, 'JPEG')
+                    self.assertEqual(dict(photo.getexif()), {})
+                    self.assertNotIn('comment', photo.info)
+                self.assertNotIn(b'SYNTHETIC-PRIVATE', prepared)
+
+    def test_identity_input_errors_keep_specific_safe_reasons(self):
+        valid = {'kind': 'driver', 'fields': {'name': '합성 이름', 'issueDate': '2020.02.29',
+                 'birthDate': '900101', 'resident': '1000000', 'regionCode': '11',
+                 'driver1': '20', 'driver2': '123456', 'driver3': '78'},
+                 'image': base64.b64encode(synthetic_jpeg()).decode(), 'confirmation': '본인 신분증'}
+        cases = [('image', 'not-base64', 'identity_jpeg_invalid'),
+                 ('image', base64.b64encode(b'\x89PNG\r\n\x1a\nSYNTHETIC').decode(), 'identity_jpeg_required'),
+                 ('image', base64.b64encode(b'\xff\xd8SYNTHETIC-broken').decode(), 'identity_jpeg_invalid'),
+                 ('issueDate', '20200229', 'identity_date_format'),
+                 ('driver2', '12345', 'driver_number_format'),
+                 ('resident', '100000', 'resident_number_format'),
+                 ('confirmation', 'no', 'identity_not_confirmed')]
+        for field, value, code in cases:
+            with self.subTest(code=code):
+                capture = copy.deepcopy(valid)
+                (capture['fields'] if field in capture['fields'] else capture)[field] = value
+                with self.assertRaises(Stop) as stopped:
+                    certificates.OneSignIssuance('prepare-id').inputs(
+                        SimpleNamespace(secrets={'identity_capture': json.dumps(capture)}), {})
+                self.assertEqual(stopped.exception.code, code)
+        with patch.object(Image, 'MAX_IMAGE_PIXELS', 100), self.assertRaises(Stop) as stopped:
+            certificates.identity_jpeg(valid['image'])
+        self.assertEqual(stopped.exception.code, 'identity_image_dimensions_too_large')
 
     def test_terms_changed_and_invalid_phone_stop_without_reserving(self):
         self.setup_identity()

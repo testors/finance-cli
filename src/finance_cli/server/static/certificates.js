@@ -9,6 +9,10 @@ const STATES = {new: '시작 전', profiled: '휴대폰 정보 확인', authenti
 const TITLES = {profile: '휴대폰 정보·약관', authenticate: '앱 인증', 'request-sms': 'SMS 요청',
   'verify-sms': 'SMS 확인', consent: '가입 약관', 'begin-id': '신분증 확인 시작', 'prepare-id': '신분증 입력',
   identity: '신분증 확인', account: '본인 계좌 확인', issue: '인증서 발급', complete: '가입 완료'};
+const IDENTITY_INPUT_ERRORS = new Set(['invalid_identity_capture', 'identity_jpeg_required', 'identity_jpeg_invalid',
+  'identity_image_required', 'identity_image_too_large', 'identity_image_dimensions_too_large',
+  'identity_name_required', 'identity_date_format', 'identity_date_invalid', 'resident_number_format',
+  'driver_number_format', 'identity_not_confirmed']);
 const field = (name, label, attrs = '') => `<div class="field"><label for="cert-${name}">${label}</label><input id="cert-${name}" name="${name}" required autocomplete="off" ${attrs}></div>`;
 const password = () => field('vault_passphrase', '저장소 암호', 'type="password"');
 function vaultFields(name = null) {
@@ -37,8 +41,11 @@ function showProgress(name, job, {rememberFailed = false} = {}) {
   const stopped = job.local?.stopped;
   const issued = result.certificate_issued === true;
   const ready = result.ready === true;
+  const correctable = job.name === 'hana.onesign.issue.prepare-id' && job.outcome === 'not_started'
+    && job.attempt && !job.attempt.sent && IDENTITY_INPUT_ERRORS.has(stopped);
   const text = ready ? '하나인증서 발급과 가입이 완료되었어요. 기관 연결을 추가한 뒤 별도로 로그인하세요.'
     : issued ? '인증서 발급이 확인되었어요. 등록·가입 완료 여부는 아래 상태를 함께 확인하세요.'
+    : correctable ? '은행에 신분증을 보내기 전 입력 검사에서 중단됐어요. 아래 오류를 확인하고 신분증 입력 수정에서 사진과 정보를 다시 입력하세요.'
     : stopped || job.outcome === 'unknown' || !next && !ready ? '이 단계가 중단되었거나 결과를 확인하지 못했어요. 다시 전송하지 말고 작업 기록을 확인하세요.'
     : next === 'profile' ? '저장소를 만들었어요. 다음은 휴대폰 정보·약관 입력이에요. 아직 SMS를 요청하지 않았어요.'
     : next === 'authenticate' ? '휴대폰 정보와 약관 동의를 저장했어요. 아직 SMS를 요청하지 않았어요. 아래 앱 인증 계속을 누른 뒤, SMS 요청 단계까지 진행하세요.'
@@ -48,7 +55,7 @@ function showProgress(name, job, {rememberFailed = false} = {}) {
   ui.showDialog('하나인증서 발급 진행', `${note(text)}${rememberFailed ? note('이 단계는 완료했지만 저장소 암호를 기억하지 못했어요. 다음 단계에서 다시 입력하세요.') : ''}${ui.statusTags(job)}${next && !ready ? '<p class="field-help">완료·성공 표시는 방금 실행한 한 단계의 결과예요. 인증서 발급 전체가 끝났다는 뜻은 아니에요.</p>' : ''}
     <p>저장소: <strong>${esc(name)}</strong></p><p class="meta">휴대폰 확인: ${esc(STATES[result.signup_state] || '미확인')} · 발급: ${esc(STATES[result.issuance_state] || '미확인')}</p>
     ${stopped ? `<p class="form-error">${esc(ui.message(stopped))}</p>` : ''}
-    <div class="dialog-actions">${button('작업 기록', 'data-view="activity"')}${next && job.outcome === 'success' ? button(TITLES[next] + ' 계속', `data-action="certificate-hana-next" data-name="${esc(name)}" data-stage="${esc(next)}" data-job="${esc(job.id)}"`, 'primary') : ready ? button('기관 연결 추가', 'data-action="add-login-dialog"', 'primary') : button('닫기', 'data-ui="close"')}</div>`);
+    <div class="dialog-actions">${button('작업 기록', 'data-view="activity"')}${correctable ? button('신분증 입력 수정', `data-action="certificate-hana-next" data-name="${esc(name)}" data-stage="prepare-id" data-job="${esc(job.id)}"`, 'primary') : next && job.outcome === 'success' ? button(TITLES[next] + ' 계속', `data-action="certificate-hana-next" data-name="${esc(name)}" data-stage="${esc(next)}" data-job="${esc(job.id)}"`, 'primary') : ready ? button('기관 연결 추가', 'data-action="add-login-dialog"', 'primary') : button('닫기', 'data-ui="close"')}</div>`);
 }
 
 async function start(form, name, input, secrets, onDone, {rememberStore = null} = {}) {
@@ -93,7 +100,7 @@ async function stageDialog(name, stage, progress = {}) {
       + `<div class="field"><label for="cert-carrier">통신사</label><select id="cert-carrier" name="carrier" data-change="certificate-carrier">${carriers.map(c => `<option value="${esc(c.code)}">${esc(c.name)}</option>`).join('')}</select></div><div id="certificate-terms">${terms(carriers[0].terms)}</div>` + agree();
   } else if (stage === 'verify-sms') fields = note('SMS 요청 후 180초 안에 확인하세요. 시간 초과나 중단 후 자동 재요청하지 않아요.') + field('sms', 'SMS 인증번호', 'type="password" inputmode="numeric" pattern="[0-9]{6}" maxlength="6"');
   else if (stage === 'consent') fields = note('선택 상품은 신청하지 않아요. 마케팅 동의는 기존 동의를 유지하거나 미동의로 처리해요.') + terms(progress.terms || []) + agree();
-  else if (stage === 'prepare-id') fields = note('본인의 마스킹하지 않은 신분증 카드 영역 JPEG를 선택하세요. 가로 1024픽셀 이하, 8 MiB 이하입니다. 입력과 사진은 암호화 저장소에만 보관해요.')
+  else if (stage === 'prepare-id') fields = note('본인의 마스킹하지 않은 신분증 카드 영역 JPEG를 선택하세요(8 MiB 이하). 사진의 회전 정보를 반영하고, 가로 1024픽셀을 넘으면 비율을 유지해 자동 축소해요. 원본 파일은 바꾸지 않으며, 입력과 처리한 사진은 암호화 저장소에만 보관해요.')
     + '<div class="field"><label for="cert-id-kind">신분증 종류</label><select id="cert-id-kind" name="kind" data-change="certificate-id-kind"><option value="resident">주민등록증</option><option value="driver">운전면허증</option></select></div>'
     + field('image', '신분증 JPEG', 'type="file" accept="image/jpeg"') + field('id_name', '신분증 이름', 'maxlength="60"')
     + field('issueDate', '발급일 (YYYY.MM.DD)', 'pattern="[0-9]{4}\\.[0-9]{2}\\.[0-9]{2}" maxlength="10"')
