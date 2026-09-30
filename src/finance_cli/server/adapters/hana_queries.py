@@ -2,10 +2,11 @@
 import json
 import time
 
-from finance_cli.services.hana import inquiry, ledger, ledger_protocol as protocol, onesign_queries, security
+from finance_cli.services.hana import inquiry, ledger, ledger_protocol as protocol, onesign, onesign_queries, security
 from .base import InputError, Step, StepResult, Stop, mask_account, pick
 from .hana import (OneSignReadAdapter, History, HistoryDetail, TransferHistory, Security, account_number,
-                   compact, outcome, safe_code, verdict, ROW_LIMIT)
+                   compact, observe_accounts, outcome, require_accounts_result, safe_code,
+                   validate_history_controls, verdict, ROW_LIMIT)
 from .hometax import scalar_row
 
 DISPLAY_FIELDS = ('date', 'time', 'type', 'name', 'amount', 'balance', 'currency', 'variation', 'extra', 'memo')
@@ -51,9 +52,20 @@ class Query(OneSignReadAdapter):
             result.pop('search', None)
         return result
 
+    def ensure_accounts(self, ctx, source):
+        if 'accounts' in source.state.snapshot()['sessions'][source.session]:
+            return []
+        ctx.reserve()
+        result = onesign.operate(source.state, 'accounts', 'web-' + ctx.job['id'] + '-accounts',
+                                 session=source.session, send=True)
+        stages = observe_accounts(ctx, result)
+        require_accounts_result(result)
+        return stages
+
 
 def perform(ctx, source, draft, config, observation):
     ctx.reserve()
+    ctx.observe(outcome='unknown')
     return source.perform(*draft, config, observation, send=True)
 
 
@@ -88,7 +100,9 @@ class OneSignHistory(Query):
     validate = History.validate
 
     def query(self, ctx, source):
-        config, receipts, stages = self.config(ctx, source), {}, []
+        validate_history_controls(ctx)
+        stages = self.ensure_accounts(ctx, source)
+        config, receipts = self.config(ctx, source), {}
         for stage in ('clock', 'account', 'page'):
             draft = ledger.prepare(source, stage, config, clock=receipts.get('clock'), account_info=receipts.get('account'))
             result = perform(ctx, source, draft, config, ctx.job['id'])
@@ -174,8 +188,10 @@ class OneSignHistoryExport(HistoryFollowUp):
                           result={**pick(report, SUMMARY_FIELDS), 'artifact_ids': artifacts})
 
 
-def inquiry_result(ctx, source, result, kind):
+def inquiry_result(ctx, source, result, kind, stages=None):
     service, rows, local = verdict(result), None, {}
+    if stages:
+        service['stages'] = stages
     ctx.observe(service_verdict=service, outcome=outcome(result['accepted']))
     if result['accepted'] is True:
         try:
@@ -196,9 +212,11 @@ class OneSignTransferHistory(Query):
     validate = TransferHistory.validate
 
     def query(self, ctx, source):
+        validate_history_controls(ctx, transfer=True)
+        stages = self.ensure_accounts(ctx, source)
         config = self.config(ctx, source)
         result = perform(ctx, source, inquiry.prepare(source, 'history', config), config, ctx.job['id'])
-        return inquiry_result(ctx, source, result, 'history')
+        return inquiry_result(ctx, source, result, 'history', stages)
 
 
 class OneSignTransferDetail(Query):
