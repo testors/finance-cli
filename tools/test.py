@@ -18,6 +18,7 @@ def main():
                 for name, directory in [('shared', 'tests'), ('hometax', 'tests/hometax'), ('giro', 'tests/giro'),
                                                   ('server', 'tests/server')]]
     commands.append(('hometax-node', ['node', '--test', *[str(p) for p in sorted((ROOT / 'tests/hometax').glob('*.test.mjs'))]]))
+    commands.append(('server-ui', ['node', '--experimental-vm-modules', '--test', str(ROOT / 'tests/server/certificates-ui.test.mjs')]))
     reports = []
     for name, command in commands:
         start = time.monotonic()

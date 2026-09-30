@@ -6,9 +6,9 @@ _registry = None
 def load():
     global _registry
     if _registry is None:
-        from . import giro, hometax, hana
+        from . import giro, hometax, hana, certificates
         items = {}
-        for module in (giro, hometax, hana):
+        for module in (giro, hometax, hana, certificates):
             for adapter in module.ADAPTERS:
                 if adapter.name in items:
                     raise RuntimeError('duplicate_adapter')

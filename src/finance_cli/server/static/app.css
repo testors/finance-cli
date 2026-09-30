@@ -294,3 +294,4 @@ dialog.wide{max-width:860px}
   .onboarding-steps{padding-inline:18px}.onboarding-actions{padding-inline:18px}.onboarding-actions .button{width:100%}
   .heading-actions .button.primary{background:var(--green);color:#fff;border-radius:50%;width:40px;min-width:40px}
 }
+.button.danger-text{color:#a4453e}

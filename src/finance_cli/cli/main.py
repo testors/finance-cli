@@ -15,7 +15,7 @@ def output(value):
 def capabilities():
     return {'schema_version': 1, 'services': {
         'hana': {'offline': ['protocol', 'shared-certificate-login-signature', 'onesign-vault-bundle',
-                            'user-package-settings-extraction', 'onesign-identity-initialization', 'onesign-identity-removal'],
+                            'user-package-settings-extraction', 'onesign-identity-initialization', 'onesign-identity-removal', 'onesign-identity-rename'],
                  'live': ['app-authentication', 'joint-certificate-login', 'accounts', 'transfer-history-query',
                           'ledger-history', 'security-inquiry', 'login-extension', 'onesign-new-issuance',
                           'onesign-signed-login', 'onesign-krw-transfer'],
@@ -36,8 +36,8 @@ def capabilities():
                         'financial': {'scope': 'offline crypto library', 'remote_management': False}},
         'web': {'optional_dependency': 'finance-cli[web]', 'command': 'fin server',
                 'scope': ['browser-enrollment', 'business-profiles', 'institution-logins-and-targets', 'jobs',
-                          'hana', 'hometax', 'giro-bills'],
-                'server_managed': ['certificate-import-export', 'onesign-issuance-and-setup', 'runtime-install',
+                          'hana', 'hometax', 'giro-bills', 'joint-certificate-import', 'onesign-staged-issuance'],
+                'server_managed': ['certificate-export', 'onesign-settings-and-bundle-transfer', 'runtime-install',
                                    'device-registration-files'],
                 'binding': 'loopback', 'remote_access': 'https reverse proxy', 'live_tested': False},
         'network_used': False}

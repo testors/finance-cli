@@ -18,7 +18,7 @@ class CapabilityTests(ServerCase):
         self.enroll()
         states = {f['id']: f for f in self.get('/capabilities').json()['features']}
         self.assertEqual(states['giro-live']['status'], 'planned')
-        self.assertEqual(states['hana-issuance']['status'], 'local_only')
+        self.assertEqual(states['hana-issuance']['status'], 'available')
         self.assertEqual(states['hometax-tax']['verification'], 'live_untested')
         self.assertEqual(states['giro-bills']['verification'], 'offline')
         unknown = self.post('/jobs', {'name': 'giro.live.pay'})
@@ -135,6 +135,105 @@ class SecretHandoffTests(ServerCase):
         self.assertEqual((finished['outcome'], finished['local']['stopped']), ('not_started', 'onesign_store_not_opened'))
         self.assertIn('step_started', [e['kind'] for e in finished['events']])
         self.assertFalse(self.leaked())
+
+
+
+class RemovalTests(ServerCase):
+    def setUp(self):
+        super().setUp()
+        self.enroll()
+        synthetic_certificate('login-cert')
+
+    def hometax_login(self):
+        return self.post('/logins', {'institution': 'hometax', 'method': 'joint_certificate', 'name': '홈택스',
+                                     'credential': 'login-cert'}).json()
+
+    def test_credential_removal_needs_the_name_and_no_references(self):
+        login = self.hometax_login()
+        mismatch = self.post('/credentials/joint/login-cert/remove', {'confirm': 'login'})
+        self.assertEqual(mismatch.json()['error'], 'removal_confirmation_mismatch')
+        in_use = self.post('/credentials/joint/login-cert/remove', {'confirm': 'login-cert'})
+        self.assertEqual((in_use.status_code, in_use.json()['error']), (409, 'credential_in_use'))
+        self.assertEqual(in_use.json()['references'][0]['login_id'], login['id'])
+        self.assertEqual(self.post(f"/logins/{login['id']}/remove", {'expected_revision': 1}).status_code, 200)
+        removed = self.post('/credentials/joint/login-cert/remove', {'confirm': 'login-cert'})
+        self.assertEqual(removed.status_code, 200, removed.text)
+        self.assertEqual(self.get('/credentials').json()['credentials'], [])
+
+    def test_credential_rename_keeps_the_key_and_refuses_while_referenced(self):
+        from finance_cli.credentials.registry import Registry
+        fingerprint = Registry().entry('login-cert')['certificate_id']
+        login = self.hometax_login()
+        in_use = self.post('/credentials/joint/login-cert/rename', {'new_name': 'renamed'})
+        self.assertEqual((in_use.status_code, in_use.json()['error']), (409, 'credential_in_use'))
+        self.post(f"/logins/{login['id']}/remove", {'expected_revision': 1})
+        bad = self.post('/credentials/joint/login-cert/rename', {'new_name': '../escape'})
+        self.assertEqual(bad.json()['error'], 'invalid_name')
+        renamed = self.post('/credentials/joint/login-cert/rename', {'new_name': 'renamed'})
+        self.assertEqual(renamed.status_code, 200, renamed.text)
+        self.assertEqual(Registry().entry('renamed')['certificate_id'], fingerprint)
+        self.assertEqual([c['ref'] for c in self.get('/credentials').json()['credentials']], ['renamed'])
+        missing = self.post('/credentials/joint/login-cert/rename', {'new_name': 'again'})
+        self.assertEqual((missing.status_code, missing.json()['error']), (404, 'credential_not_found'))
+
+    def test_connection_removal_keeps_history_and_deletes_session_files(self):
+        from finance_cli.server import model
+        from finance_cli.server.config import private_directory
+        from test_foundation import insert_job
+        login = self.hometax_login()
+        session_file = private_directory('sessions', 'hometax') / 'sf_test.json'
+        session_file.write_text('{"cookie_jar": "SYNTHETIC-COOKIE"}')
+        with self.db.write() as con:
+            session = model.add_session(con, login_id=login['id'], location='server/sessions/hometax/sf_test.json',
+                                        revision=1, job_id='jb_x')
+            model.set_pointer(con, login['id'], session)
+        finished = insert_job(self.db, login_id=login['id'], name='hometax.tax.dues')
+        waiting = insert_job(self.db, login_id=login['id'], name='hometax.invoice.prepare', status='awaiting_input')
+        running = insert_job(self.db, login_id=login['id'], name='hometax.tax.dues', status='running')
+        busy = self.post(f"/logins/{login['id']}/remove", {'expected_revision': 1})
+        self.assertEqual((busy.status_code, busy.json()['error']), (409, 'login_has_active_jobs'))
+        with self.db.write() as con:
+            con.execute("UPDATE jobs SET status='finished' WHERE id=?", (running,))
+        stale = self.post(f"/logins/{login['id']}/remove", {'expected_revision': 0})
+        self.assertEqual(stale.json()['error'], 'revision_conflict')
+        result = self.post(f"/logins/{login['id']}/remove", {'expected_revision': 1}).json()
+        self.assertEqual((result['removed'], result['session_files_removed'], result['institution_logout']),
+                         (True, 1, False))
+        self.assertFalse(session_file.exists())
+        self.assertEqual(self.get('/logins').json()['logins'], [])
+        self.assertEqual(self.get(f'/jobs/{finished}').json()['status'], 'finished')
+        self.assertEqual(self.get(f'/jobs/{waiting}').json()['status'], 'cancelled')
+        self.assertEqual(len(self.get('/credentials').json()['credentials']), 1)  # Certificates stay.
+
+    def test_onesign_connection_removal_never_touches_the_store(self):
+        from finance_cli.core import storage
+        from finance_cli.server import model
+        path = storage.directory(self.home)
+        for part in ('hana', 'identities', 'synthetic'):
+            path = storage.directory(path / part)
+        login = self.post('/logins', {'institution': 'hana', 'method': 'onesign', 'name': '하나인증서',
+                                      'credential': 'synthetic'}).json()
+        with self.db.write() as con:
+            model.add_session(con, login_id=login['id'], location='hana/identities/synthetic', revision=1,
+                              job_id='jb_x', name='websession')
+        result = self.post(f"/logins/{login['id']}/remove", {'expected_revision': 1}).json()
+        self.assertEqual(result['session_files_removed'], 0)
+        self.assertTrue(path.is_dir())
+        self.app.state.vaults._items['synthetic'] = 'remembered'  # As if unlocked earlier.
+        self.assertEqual(self.post('/credentials/onesign/synthetic/rename', {'new_name': 'main2'}).status_code, 200)
+        self.assertFalse(path.exists())
+        path = path.with_name('main2')
+        self.assertTrue(path.is_dir())
+        self.assertEqual(self.app.state.vaults.get('main2'), 'remembered')
+        self.assertEqual([c['ref'] for c in self.get('/credentials').json()['credentials'] if c['type'] == 'onesign'],
+                         ['main2'])
+        busy_lock = path / 'operation.lock'
+        with storage.lock(busy_lock):
+            refused = self.post('/credentials/onesign/main2/remove', {'confirm': 'main2'})
+        self.assertEqual(refused.json()['error'], 'resource_busy')
+        self.assertEqual(self.post('/credentials/onesign/main2/remove', {'confirm': 'main2'}).status_code, 200)
+        self.assertIsNone(self.app.state.vaults.get('main2'))
+        self.assertFalse(path.exists())
 
 
 if __name__ == '__main__':

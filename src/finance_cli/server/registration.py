@@ -58,6 +58,17 @@ def link(con, login_id, *, expected_revision, app_profile=None, login_input=None
     return {'login': row, 'linked': sorted(changes), 'contents_stored_in_database': False, 'network_used': False}
 
 
+def remove(login_id):
+    """Delete a removed connection's copied registration files, if any."""
+    import shutil
+    from .config import server_home
+    if not model.REGISTRATION_KEY.fullmatch(login_id):
+        return
+    path = storage.no_symlinks(server_home() / 'registrations' / login_id)
+    if path.is_dir():
+        shutil.rmtree(path, ignore_errors=True)
+
+
 def path_for(login_row, key):
     """Absolute path of a linked registration file for a worker; None when missing."""
     reference = json.loads(login_row['registration'] or '{}').get(key)

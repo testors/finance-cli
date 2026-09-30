@@ -165,6 +165,42 @@ def _bump(con, login_id, revision):
     return revision + 1
 
 
+def remove_login(con, login_id, *, expected_revision):
+    """Remove a connection and what hangs off it; job history keeps its fixed snapshot.
+
+    Refused while a job of this login is queued or running. Prepared jobs that
+    wait for confirmation are cancelled (nothing of them was sent). Returns the
+    private session locations the caller deletes after the transaction commits;
+    OneSign stores are never among them.
+    """
+    row = get_login(con, login_id, raw=True)
+    if expected_revision != row['revision']:
+        raise Conflict('revision_conflict')
+    if con.execute("SELECT 1 FROM jobs WHERE login_id=? AND status IN ('queued', 'running')", (login_id,)).fetchone():
+        raise Conflict('login_has_active_jobs')
+    at = now()
+    cancelled = con.execute("UPDATE jobs SET status='cancelled', awaiting=NULL, updated_at=?, finished_at=?,"
+                            " local=json_set(local, '$.cancelled_reason', 'login_removed')"
+                            " WHERE login_id=? AND status='awaiting_input'", (at, at, login_id)).rowcount
+    sessions = [dict(r) for r in con.execute('SELECT location, name FROM sessions WHERE login_id=?', (login_id,))]
+    targets = [r[0] for r in con.execute('SELECT id FROM targets WHERE login_id=?', (login_id,))]
+    con.executemany('DELETE FROM profile_targets WHERE target_id=?', [(t,) for t in targets])
+    con.execute('DELETE FROM session_pointers WHERE login_id=?', (login_id,))
+    con.execute('DELETE FROM sessions WHERE login_id=?', (login_id,))
+    con.execute('DELETE FROM targets WHERE login_id=?', (login_id,))
+    con.execute('DELETE FROM logins WHERE id=?', (login_id,))
+    files = []
+    for session in sessions:
+        location = session['location'] or ''
+        if location.startswith(('server/sessions/', 'server/jobs/')):
+            files.append(location)  # Hometax session files and report-run copies: cookies and storage.
+        elif location.startswith('hana/sessions/') and (session['name'] or '').startswith('web'):
+            files.append(location)  # Joint-certificate session directories this server created.
+    return {'login_id': login_id, 'removed': True, 'targets_removed': len(targets), 'sessions_removed': len(sessions),
+            'confirmations_cancelled': cancelled, 'history_kept': True, 'institution_logout': False,
+            '_files': files}
+
+
 def registration_value(con, login_id, key):
     row = get_login(con, login_id, raw=True)
     return loads(row['registration'], {}).get(key)

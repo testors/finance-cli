@@ -7,7 +7,7 @@ import sys
 import warnings
 
 from . import onesign, onesign_setup, onesign_bundle, onesign_transfer
-from .onesign_state import State, remove_identity
+from .onesign_state import State, remove_identity, rename_identity
 from .onesign_crypto import require
 
 
@@ -108,6 +108,9 @@ def add_parsers(sub,onesign_sub):
     common(item); item.add_argument('--settings',required=True)
     item=onesign_sub.add_parser('remove',help='인증서 저장소 삭제; 프로필·웹 로그인이 참조 중이면 거절, 접속 없음')
     common(item)
+    item=onesign_sub.add_parser('rename',help='인증서 저장소 이름 변경; 참조 중이면 거절, 복호화·접속 없음')
+    item.add_argument('--name',required=True)
+    item.add_argument('--new-name',required=True)
     for action in ('enroll','issue','login','accounts','new-session','inspect','export-identity','activate'):
         item=onesign_sub.add_parser(action,help={'enroll':'SMS·신분증·계좌 확인부터 신규 발급까지 순서대로 진행',
             'issue':'신규 발급의 한 단계 실행','login':'새 세션에서 앱 인증과 하나인증서 서명 로그인',
@@ -159,6 +162,10 @@ def dispatch(args):
         local=args.action=='issue' and args.stage in ('profile','consent','prepare-id')
         if not local:
             return {'operation':args.action,'stages':[*onesign.PHONE,'begin-id','prepare-id',*onesign.ISSUE[1:]] if args.action=='enroll' else [],'network_used':False,'next':'same_command_with_send'}
+    if args.operation=='onesign' and args.action=='rename':
+        from finance_cli.core.credential_refs import guard
+        guard('onesign',args.name)
+        return rename_identity(args.name,args.new_name)
     if args.operation=='onesign' and args.action=='remove':
         from finance_cli.core.credential_refs import guard
         guard('onesign',args.name)
