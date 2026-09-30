@@ -329,6 +329,48 @@ def create_app(config, *, db=None, dispatcher=True, vaults=None):
                            code) from None
         return {'renamed': True, 'type': kind, 'ref': result['name'], 'previous_ref': ref, 'network_used': False}
 
+    # Saved identity cards ---------------------------------------------------
+    # Listing reads the index only (name, kind, card issue date, saved time). Saving
+    # goes through the idcard.add job so the photo and numbers stay in the worker pipe.
+
+    @app.get(API + '/id-cards')
+    def get_id_cards():
+        from finance_cli.credentials.id_cards import IdCards
+        return {'id_cards': run(IdCards().list), 'network_used': False}
+
+    def id_card_change(function, *args):
+        try:
+            return function(*args)
+        except BlockingIOError:
+            raise ApiError(409, 'resource_busy') from None
+        except ValueError as exc:
+            code = code_of(exc)
+            raise ApiError(404 if code.endswith('not_found') else 409 if code == 'id_card_name_exists' else 400,
+                           code) from None
+
+    @app.post(API + '/id-cards/{ref}/rename')
+    async def rename_id_card(ref: str, request: Request):
+        value = await body(request)
+        if set(value) - {'new_name'}:
+            raise ApiError(400, 'input_fields_not_accepted')
+        if not isinstance(value.get('new_name'), str):
+            raise ApiError(400, 'invalid_name')
+        from finance_cli.credentials.id_cards import IdCards
+        result = await run_in_threadpool(id_card_change, IdCards().rename, ref, value['new_name'])
+        return {'renamed': True, 'ref': result['name'], 'previous_ref': ref, 'network_used': False}
+
+    @app.post(API + '/id-cards/{ref}/remove')
+    async def remove_id_card(ref: str, request: Request):
+        """Delete one saved card without decrypting it; the name must be typed to confirm."""
+        value = await body(request)
+        if set(value) - {'confirm'}:
+            raise ApiError(400, 'input_fields_not_accepted')
+        if value.get('confirm') != ref:
+            raise ApiError(400, 'removal_confirmation_mismatch')
+        from finance_cli.credentials.id_cards import IdCards
+        result = await run_in_threadpool(id_card_change, IdCards().remove, ref)
+        return {'removed': True, 'ref': ref, 'blob_removed': result['blob_removed'], 'network_used': False}
+
     @app.get(API + '/logins')
     def get_logins():
         with db.read() as con:

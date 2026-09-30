@@ -24,7 +24,8 @@ const RUNNING = {init: '저장소를 준비하고 있어요.', profile: '휴대�
 const IDENTITY_INPUT_ERRORS = new Set(['invalid_identity_capture', 'identity_jpeg_required', 'identity_jpeg_invalid',
   'identity_image_required', 'identity_image_too_large', 'identity_image_dimensions_too_large',
   'identity_name_required', 'identity_date_format', 'identity_date_invalid', 'resident_number_format',
-  'driver_number_format', 'identity_not_confirmed']);
+  'driver_number_format', 'identity_not_confirmed', 'identity_name_invalid', 'incorrect_passphrase_or_damaged_id_card',
+  'id_card_not_found', 'passphrase_minimum_4_characters']);
 const field = (name, label, attrs = '') => `<div class="field"><label for="cert-${name}">${label}</label><input id="cert-${name}" name="${name}" required ${attrs.includes('autocomplete=') ? '' : 'autocomplete="off"'} ${attrs}></div>`;
 const password = () => field('vault_passphrase', '저장소 암호', 'type="password"');
 function vaultFields(name = null) {
@@ -36,6 +37,35 @@ const nameField = () => field('name', '보관할 이름', 'maxlength="64" patter
 const controls = title => `<p class="form-error" id="certificate-error" role="alert"></p><div class="dialog-actions"><button type="button" class="button secondary" data-ui="close">취소</button><button type="submit" class="button primary">${esc(title)}</button></div>`;
 const terms = rows => `<ul>${rows.map(row => `<li>${esc(row.title)}${row.urls.map((url, i) => ` <a href="${esc(url)}" target="_blank" rel="noopener noreferrer">약관 ${i + 1}</a>`).join('')}</li>`).join('')}</ul>`;
 const agree = () => '<label class="check"><input type="checkbox" name="agree" required> 위 필수 약관을 읽고 동의합니다</label>';
+
+const IMAGE_LIMIT = 8 * 1024 * 1024;
+const KIND_LABEL = {resident: '주민등록증', driver: '운전면허증'};
+const identityFields = () => note('본인의 신분증 카드 영역 JPEG를 선택하세요(8 MiB 이하). 사진은 비율을 유지해 자동 축소하며 원본 파일은 바꾸지 않아요.')
+  + '<div class="field"><label for="cert-id-kind">신분증 종류</label><select id="cert-id-kind" name="kind" data-change="certificate-id-kind"><option value="resident">주민등록증</option><option value="driver">운전면허증</option></select></div>'
+  + field('image', '신분증 JPEG', 'type="file" accept="image/jpeg"') + '<div class="certificate-grid">'
+  + field('id_name', '신분증 이름', 'maxlength="60"') + field('issueDate', '발급일 (YYYY.MM.DD)', 'pattern="[0-9]{4}\\.[0-9]{2}\\.[0-9]{2}" maxlength="10"')
+  + field('birthDate', '주민번호 앞 6자리', 'type="password" inputmode="numeric" pattern="[0-9]{6}" maxlength="6"')
+  + field('resident', '주민번호 뒤 7자리', 'type="password" inputmode="numeric" pattern="[0-9]{7}" maxlength="7"') + '</div>'
+  + '<div id="certificate-driver" hidden><div class="certificate-grid">' + ['regionCode', 'driver1', 'driver2', 'driver3'].map((key, i) => field(key, ['면허번호 지역 2자리', '면허번호 두 번째 구간 2자리', '면허번호 세 번째 구간 6자리', '면허번호 네 번째 구간 2자리'][i], `type="password" inputmode="numeric" pattern="[0-9]{${i === 2 ? 6 : 2}}" disabled`)).join('') + '</div></div>'
+  + '<label class="check"><input type="checkbox" name="identity_confirmed" required> 본인의 마스킹하지 않은 신분증이며, 입력한 정보를 확인했습니다</label>';
+// Saved cards come first; the direct form stays available for a card that is not saved.
+const identityChoice = cards => `<div class="field"><label for="cert-id-source">신분증</label><select id="cert-id-source" name="id_source" data-change="certificate-id-source">${cards.map(c => `<option value="${esc(c.name)}">${esc(c.name)} · ${esc(KIND_LABEL[c.kind] || c.kind)} · 발급일 ${esc(c.issue_date)}</option>`).join('')}<option value="">직접 입력</option></select></div>`
+  + `<div id="certificate-id-saved">${field('idcard_passphrase', '신분증 보관 암호', 'type="password"')}<label class="check"><input type="checkbox" name="saved_confirmed" required> 보관 후 재발급받지 않은 현재 유효한 본인 신분증입니다</label></div>`
+  + `<div id="certificate-id-direct" hidden>${identityFields()}</div>`;
+
+async function captureOf(data) {
+  const kind = data.get('kind'), fields = {name: data.get('id_name'), issueDate: data.get('issueDate'), birthDate: data.get('birthDate'), resident: data.get('resident')};
+  if (kind === 'driver') for (const key of ['regionCode', 'driver1', 'driver2', 'driver3']) fields[key] = data.get(key);
+  const file = data.get('image');
+  if (!(file instanceof File) || !file.size) throw new Error('identity_image_required');
+  if (file.size > IMAGE_LIMIT) throw new Error('identity_image_too_large');
+  return JSON.stringify({kind, fields, image: await file64(file, IMAGE_LIMIT), confirmation: data.get('identity_confirmed') ? '본인 신분증' : ''});
+}
+
+function toggle(block, on) {
+  block.hidden = !on;
+  block.querySelectorAll('input, select').forEach(input => { input.disabled = !on; });
+}
 
 async function file64(file, limit) {
   if (!(file instanceof File) || !file.size || file.size > limit) throw new Error('certificate_file_size_not_accepted');
@@ -98,7 +128,8 @@ async function start(form, name, input, secrets, onDone) {
 }
 
 async function stageDialog(name, stage, progress = {}, warning = '') {
-  const [options, vaults] = await Promise.all([api.get('/certificates/options'), api.get('/vaults')]);
+  const [options, vaults, saved] = await Promise.all([api.get('/certificates/options'), api.get('/vaults'), api.get('/id-cards')]);
+  const cards = saved.id_cards;
   state.vaults = Object.fromEntries(vaults.vaults.map(v => [v.name, v.unlocked]));
   let fields = '', before = '', digest = progress.terms_digest || '';
   const phone = ['init', 'profile'].includes(stage);
@@ -109,6 +140,8 @@ async function stageDialog(name, stage, progress = {}, warning = '') {
     before = stores.length ? `<div class="certificate-resume"><strong>진행 중인 발급 이어하기</strong>${stores.map(c => button(c.ref, `data-action="certificate-hana-inspect" data-name="${esc(c.ref)}"`)).join('')}</div>` : '';
     fields += `<details class="certificate-settings"><summary>저장소 설정</summary>${nameField()}<div class="field"><label for="cert-settings">서비스 설정</label><select id="cert-settings" name="settings" required>${options.hana.settings.map(row => `<option value="${esc(row.name)}">${esc(row.name)}</option>`).join('')}</select></div></details>`;
     if (!options.hana.settings.length) fields += note('서버에 하나인증서 서비스 설정이 필요해요. 설정을 준비한 뒤 발급할 수 있어요.');
+    before += cards.length ? `<p class="field-help">보관한 신분증 ${cards.length}개를 신분증 확인 단계에서 골라 쓸 수 있어요.</p>`
+      : `<div class="certificate-resume"><span class="field-help">신분증을 먼저 보관해 두면 인증문자 확인 뒤 사진을 준비하느라 은행 세션이 기다리는 일이 없어요.</span>${button('신분증 먼저 보관', 'data-action="idcard-add"')}</div>`;
   }
   fields += vaultFields(stage === 'init' ? null : name);
   if (phone) {
@@ -118,14 +151,7 @@ async function stageDialog(name, stage, progress = {}, warning = '') {
   }
   if (stage === 'verify-sms') fields += note('인증문자를 요청했어요. 문자가 도착하면 요청 후 180초 안에 인증번호를 입력하세요.') + field('sms', 'SMS 인증번호', 'type="password" inputmode="numeric" pattern="[0-9]{6}" maxlength="6" autocomplete="one-time-code"');
   if (stage === 'consent') fields += `<details><summary>하나인증서 가입 필수 약관</summary>${terms(progress.terms || [])}</details>${agree()}`;
-  if (capture) fields += note('본인의 신분증 카드 영역 JPEG를 선택하세요(8 MiB 이하). 사진은 비율을 유지해 자동 축소하며 원본 파일은 바꾸지 않아요.')
-    + '<div class="field"><label for="cert-id-kind">신분증 종류</label><select id="cert-id-kind" name="kind" data-change="certificate-id-kind"><option value="resident">주민등록증</option><option value="driver">운전면허증</option></select></div>'
-    + field('image', '신분증 JPEG', 'type="file" accept="image/jpeg"') + '<div class="certificate-grid">'
-    + field('id_name', '신분증 이름', 'maxlength="60"') + field('issueDate', '발급일 (YYYY.MM.DD)', 'pattern="[0-9]{4}\\.[0-9]{2}\\.[0-9]{2}" maxlength="10"')
-    + field('birthDate', '주민번호 앞 6자리', 'type="password" inputmode="numeric" pattern="[0-9]{6}" maxlength="6"')
-    + field('resident', '주민번호 뒤 7자리', 'type="password" inputmode="numeric" pattern="[0-9]{7}" maxlength="7"') + '</div>'
-    + '<div id="certificate-driver" hidden><div class="certificate-grid">' + ['regionCode', 'driver1', 'driver2', 'driver3'].map((key, i) => field(key, ['면허번호 지역 2자리', '면허번호 두 번째 구간 2자리', '면허번호 세 번째 구간 6자리', '면허번호 네 번째 구간 2자리'][i], `type="password" inputmode="numeric" pattern="[0-9]{${i === 2 ? 6 : 2}}" disabled`)).join('') + '</div></div>'
-    + '<label class="check"><input type="checkbox" name="identity_confirmed" required> 본인의 마스킹하지 않은 신분증이며, 입력한 정보를 확인했습니다</label>';
+  if (capture) fields += cards.length ? identityChoice(cards) : identityFields();
   if (stage === 'account') fields += field('account_number', '본인 하나은행 계좌번호', 'inputmode="numeric" pattern="[0-9]{8,20}" maxlength="20"')
     + field('account_password', '계좌 비밀번호', 'type="password" inputmode="numeric" pattern="[0-9]{4}" maxlength="4"');
   if (stage === 'issue') fields += note('하나인증서에 사용할 PIN을 정하세요. 저장소 암호와 별개예요.')
@@ -147,6 +173,8 @@ async function stageDialog(name, stage, progress = {}, warning = '') {
     form.elements.name.value = candidate;
     form.querySelector('button[type="submit"]').disabled = !options.hana.settings.length;
   }
+  const source = form.querySelector('[name="id_source"]');
+  if (source) certificateActions['certificate-id-source']({}, source);
   if (stage === 'inspect' && state.vaults[name]) await submitWizard(form);
 }
 
@@ -157,7 +185,7 @@ async function submitWizard(form) {
   form.dataset.started = 'true';
   let data = new FormData(form), name = stage === 'init' ? data.get('name') : form.dataset.name;
   let vault = data.has('vault_passphrase') ? {vault_passphrase: data.get('vault_passphrase')} : {};
-  let privateInputs = {}, holder, last = null, issued = false, submitted = false, warning = '';
+  let privateInputs = {}, holder, last = null, issued = false, submitted = false, warning = '', idCard = '';
   const settings = stage === 'init' ? data.get('settings') : null;
   const remember = data.get('remember_vault') === 'on';
   try {
@@ -165,12 +193,10 @@ async function submitWizard(form) {
       phone_profile: JSON.stringify({name: data.get('customer_name'), birth7: data.get('birth7'), phone: data.get('phone'), carrier: data.get('carrier')}), agreement: data.get('agree') ? form.dataset.digest : ''};
     if (chain.includes('consent')) privateInputs.consent = {agreement: data.get('agree') ? form.dataset.digest : ''};
     if (chain.includes('prepare-id')) {
-      const kind = data.get('kind'), fields = {name: data.get('id_name'), issueDate: data.get('issueDate'), birthDate: data.get('birthDate'), resident: data.get('resident')};
-      if (kind === 'driver') for (const key of ['regionCode', 'driver1', 'driver2', 'driver3']) fields[key] = data.get(key);
-      const file = data.get('image');
-      if (!(file instanceof File) || !file.size) throw new Error('identity_image_required');
-      if (file.size > 8 * 1024 * 1024) throw new Error('identity_image_too_large');
-      privateInputs['prepare-id'] = {identity_capture: JSON.stringify({kind, fields, image: await file64(file, 8 * 1024 * 1024), confirmation: data.get('identity_confirmed') ? '본인 신분증' : ''})};
+      idCard = data.get('id_source') || '';
+      privateInputs['prepare-id'] = {identity_capture: idCard
+        ? JSON.stringify({passphrase: data.get('idcard_passphrase'), confirmation: data.get('saved_confirmed') ? '본인 신분증' : ''})
+        : await captureOf(data)};
     }
     if (stage === 'verify-sms') privateInputs[stage] = {sms: data.get('sms')};
     if (stage === 'account') privateInputs[stage] = {account_number: data.get('account_number'), account_password: data.get('account_password')};
@@ -189,7 +215,8 @@ async function submitWizard(form) {
       holder.textContent = RUNNING[current];
       submitted = true;
       const job = await api.post('/jobs', {name: 'hana.onesign.issue.' + current,
-        input: {name, ...(current === 'init' ? {settings} : {}), ...(REMOTE.has(current) ? {send: true} : {})},
+        input: {name, ...(current === 'init' ? {settings} : {}), ...(current === 'prepare-id' && idCard ? {id_card: idCard} : {}),
+          ...(REMOTE.has(current) ? {send: true} : {})},
         secrets: {...vault, ...privateInputs[current]}, idempotency_key: 'web-' + crypto.randomUUID()});
       delete privateInputs[current];
       last = await follow(job.id, () => {});
@@ -260,5 +287,28 @@ export const certificateActions = {
     driver.hidden = select.value !== 'driver';
     driver.querySelectorAll('input').forEach(input => { input.disabled = driver.hidden; });
   },
+  'certificate-id-source': (ctx, select) => {
+    const saved = select.value !== '';
+    toggle(document.querySelector('#certificate-id-saved'), saved);
+    toggle(document.querySelector('#certificate-id-direct'), !saved);
+    if (!saved) certificateActions['certificate-id-kind'](ctx, document.querySelector('[name="kind"]'));
+  },
   'certificate-hana-submit': (ctx, form) => submitWizard(form),
+  'idcard-add': () => {
+    ui.showDialog('신분증 보관', `<form data-submit="idcard-save" autocomplete="off">${note('본인 신분증의 카드 영역 사진과 확인한 정보를 신분증 보관 암호로 암호화해 이 서버에 보관해요. 기관에는 접속하지 않아요. 보관한 신분증은 하나인증서 발급의 신분증 확인 단계에서 골라 써요.')}<div class="certificate-grid">${field('name', '보관할 이름', 'maxlength="64" pattern="[A-Za-z0-9][A-Za-z0-9_.-]{0,63}" placeholder="예: resident-card"')}${field('idcard_passphrase', '신분증 보관 암호 (4자 이상)', 'type="password" minlength="4"')}${field('idcard_passphrase_confirmation', '보관 암호 확인', 'type="password" minlength="4"')}</div>${identityFields()}${controls('보관')}</form>`, {wide: true});
+  },
+  'idcard-save': async (ctx, form) => {
+    if (form.dataset.started || !form.reportValidity()) return;
+    const data = new FormData(form);
+    try {
+      if (data.get('idcard_passphrase') !== data.get('idcard_passphrase_confirmation')) throw new Error('passphrase_confirmation_mismatch');
+      const secrets = {idcard_passphrase: data.get('idcard_passphrase'), identity_capture: await captureOf(data)};
+      await start(form, 'idcard.add', {name: data.get('name')}, secrets, job => {
+        ui.showDialog('신분증 보관 결과', `${ui.statusTags(job)}<p>${job.result?.saved ? '신분증을 암호화해 보관했어요. 하나인증서 발급의 신분증 확인 단계에서 골라 쓸 수 있어요.' : esc(ui.message(job.local?.stopped || 'id_card_not_saved'))}</p><div class="dialog-actions">${button('연결·인증서', 'data-view="settings"')}${button('하나인증서 발급', 'data-action="certificate-hana"', 'primary')}</div>`);
+      });
+    } catch (error) {
+      form.querySelectorAll('input[type="password"]').forEach(input => { input.value = ''; });
+      document.querySelector('#certificate-error').textContent = ui.message(error.code || error.message);
+    }
+  },
 };

@@ -36,6 +36,12 @@ fin hana onesign enroll --name main --run enroll-1 \
 
 `init`에서 4자 이상의 저장소 암호를 입력합니다. 발급은 약관 확인 → 앱 인증 → SMS 요청·확인 → 가입 동의 → 신분증 확인 → 본인 계좌 확인 → 새 PIN 확인 → 인증서 발급·등록 → 가입 완료 순서입니다. SMS·계좌 비밀번호·PIN은 숨김 입력받으며, 인증서 발급 직전에 `발급`을 입력해야 합니다. SMS 확인은 180초 안에 진행합니다. 선택 상품은 신청하지 않고 기존 마케팅 동의가 없으면 미동의로 처리합니다.
 
+신분증을 `fin idcard add`로 먼저 보관했다면 `--image` 대신 `--id-card 이름`을 지정합니다. `enroll`은 첫 원격 단계 전에 신분증 보관 암호와 현재 유효한 본인 신분증인지 확인을 받아 신분증을 열어 두므로, SMS 확인 뒤 신분증 입력을 기다리지 않습니다. 신분증 종류는 보관한 신분증을 따르며 `--kind`는 무시합니다. 자세한 보관 방법은 [신분증 보관](guide.md#신분증-보관)을 참고하세요.
+
+```sh
+fin hana onesign enroll --name main --run enroll-1 --id-card resident-card --send
+```
+
 이미지는 본인의 마스킹하지 않은 신분증 카드 영역 JPEG(가로 1024픽셀 이하, 8 MiB 이하)여야 합니다. CLI가 OCR을 수행하지 않으므로 카드의 이름·발급일·주민번호를 직접 확인해 입력합니다. 운전면허증은 `--kind driver`를 선택하고 면허번호도 입력합니다. 서버의 이미지·신원 확인을 통과해야 다음 단계로 진행합니다. 준비한 이미지 자체는 CLI가 삭제하지 않습니다.
 
 단계별 실행이 필요하면 `onesign issue --stage STAGE --name main --run 새이름`을 사용합니다. 원격 단계에는 `--send`를 붙입니다.
@@ -45,7 +51,7 @@ profile → authenticate → request-sms → verify-sms → consent → begin-id
 → prepare-id → identity → account → issue → complete
 ```
 
-`prepare-id`에는 `--kind`와 `--image`를 지정합니다. 이미 시도한 원격 단계·실행 이름은 다시 사용할 수 없습니다. 정상적으로 완료된 단계 다음부터 진행할 수 있지만, 시간 초과·중단·실패한 단계를 자동으로 이어 보내지 않습니다. 새 이름으로 실행해도 같은 인증서의 중단된 발급을 재시도할 수 없습니다.
+`prepare-id`에는 `--kind`와 `--image`, 또는 보관한 신분증의 `--id-card`를 지정합니다. 이미 시도한 원격 단계·실행 이름은 다시 사용할 수 없습니다. 정상적으로 완료된 단계 다음부터 진행할 수 있지만, 시간 초과·중단·실패한 단계를 자동으로 이어 보내지 않습니다. 새 이름으로 실행해도 같은 인증서의 중단된 발급을 재시도할 수 없습니다.
 
 ```sh
 fin hana onesign inspect --name main

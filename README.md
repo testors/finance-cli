@@ -70,6 +70,13 @@ fin cert joint rename personal personal-2024   # 별칭만 변경
 fin cert joint remove personal-2024            # 프로필·웹 로그인이 참조 중이면 거절
 ```
 
+신분증도 같은 방식으로 보관해 두고 발급 단계에서 골라 씁니다. 사진과 확인한 정보를 보관 암호로 봉인하며, 인덱스에는 이름·종류·신분증 발급일만 남습니다. 현재는 하나인증서 신규 발급의 신분증 확인에서 선택할 수 있습니다([신분증 보관](docs/guide.md#신분증-보관)).
+
+```sh
+fin idcard add resident-card --image /path/to/my-id-card.jpg
+fin idcard list
+```
+
 개인키 평문과 비밀번호를 파일로 저장하지 않습니다. 프로세스 메모리의 완전 소거를 보장하지는 않습니다. 현재 공통 저장소는 사용자가 입력한 비밀번호를 사용하며 키체인 암호 자동 저장·조회는 연결하지 않았습니다.
 
 ## 기관 명령

@@ -30,6 +30,7 @@ from finance_cli.cli.main import main
 rows = []
 for args, source in (
     (['cert','list'], ''),
+    (['idcard','list'], ''),
     (['capabilities'], ''),
     (['hana','encode-header'], '{"CHNL_SYS_HDPT":{"synthetic":true}}'),
     (['hana','session','list'], ''),

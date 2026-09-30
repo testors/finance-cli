@@ -33,10 +33,12 @@ def capabilities():
         'giro': {'offline': ['auth-plan', 'request-plan', 'bills', 'certificate-validation', 'codeguard'],
                  'live': ['explicit PIN-free bootstrap probes'], 'live_login': False}},
         'credentials': {'joint': ['import-npki', 'import-pfx', 'list', 'show', 'export', 'remove', 'rename', 'hometax-selection', 'hana-signing'],
+                        'id_cards': ['add', 'list', 'show', 'export', 'rename', 'remove', 'hana-onesign-issuance-selection'],
                         'financial': {'scope': 'offline crypto library', 'remote_management': False}},
         'web': {'optional_dependency': 'finance-cli[web]', 'command': 'fin server',
                 'scope': ['browser-enrollment', 'business-profiles', 'institution-logins-and-targets', 'jobs',
-                          'hana', 'hometax', 'giro-bills', 'joint-certificate-import', 'onesign-staged-issuance'],
+                          'hana', 'hometax', 'giro-bills', 'joint-certificate-import', 'id-card-storage',
+                          'onesign-staged-issuance'],
                 'server_managed': ['certificate-export', 'onesign-settings-and-bundle-transfer', 'runtime-install',
                                    'device-registration-files'],
                 'binding': 'loopback', 'remote_access': 'https reverse proxy', 'live_tested': False},
@@ -196,6 +198,7 @@ def dispatch(argv):
         print('''사용법: fin [--home DATA_DIRECTORY] [--format legacy|json-v1] <명령> ...
 
   cert        공동인증서 NPKI/PFX 암호화 보관·조회·내보내기
+  idcard      신분증 사진·정보 암호화 보관·확인·내보내기 (발급 단계에서 선택)
   profile     프로필·기관별 인증서 선택
   hana        하나은행 로그인·조회·하나인증서 발급·원화 이체 (통신 시 --send)
   hometax     홈택스 로그인·조회·보고서·세금계산서 (통신 시 --send)
@@ -222,6 +225,9 @@ def dispatch(argv):
             output({'data': str(data_home()), 'hometax_runtime': str(runtime_home()), 'network_used': False})
         elif command == 'cert':
             return cert_main(rest)
+        elif command == 'idcard':
+            from .id_cards import main as run
+            return run(rest)
         elif command == 'profile':
             return profile_main(rest)
         elif command == 'hana':

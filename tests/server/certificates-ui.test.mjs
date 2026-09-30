@@ -12,7 +12,9 @@ const options = {hana: {settings: [{name: 'synthetic', version: '1.0.27'}], carr
   {code: '6', name: 'KT', terms_digest: 'kt-review', terms: [{title: 'KT 필수 약관', urls: ['https://example.invalid/kt']}]},
 ]}};
 
-async function setup(t, {stage = 'init', overrides = {}, lost = '', closeAt = '', unlockFailed = false, refreshFailed = false} = {}) {
+const CARD = {name: 'resident-card', kind: 'resident', issue_date: '2020.02.29', saved_at: 1700000000};
+
+async function setup(t, {stage = 'init', overrides = {}, lost = '', closeAt = '', unlockFailed = false, refreshFailed = false, cards = []} = {}) {
   const dom = new JSDOM('<dialog id="detail-dialog"><div id="dialog-content"></div></dialog><div id="toast"></div>',
     {url: 'http://127.0.0.1:8740', runScripts: 'outside-only'});
   t.after(() => dom.window.close());
@@ -40,7 +42,13 @@ async function setup(t, {stage = 'init', overrides = {}, lost = '', closeAt = ''
     } else if (path === '/api/v1/vaults') data = {vaults: Object.entries(cached).map(([name, unlocked]) => ({name, unlocked}))};
     else if (path === '/api/v1/certificates/options') data = options;
     else if (path === '/api/v1/credentials') data = {credentials: created ? [{type: 'onesign', ref: 'synthetic'}] : []};
-    else if (path === '/api/v1/jobs' && init.method === 'POST') {
+    else if (path === '/api/v1/id-cards') data = {id_cards: cards, network_used: false};
+    else if (path === '/api/v1/jobs' && init.method === 'POST' && input.name === 'idcard.add') {
+      const id = 'jb_' + (completed.size + 1);
+      completed.set(id, {id, name: input.name, status: 'finished', outcome: 'success', local: {}, attempt: {},
+        result: {name: input.input.name, kind: 'resident', saved: true, network_used: false}});
+      data = {id, status: 'running'};
+    } else if (path === '/api/v1/jobs' && init.method === 'POST') {
       const current = input.name.split('.').at(-1), id = 'jb_' + (completed.size + 1);
       if (current === lost) throw new Error('Synthetic connection loss');
       if (current !== 'inspect') assert.equal(current, next, 'only the next service stage may execute');
@@ -100,7 +108,15 @@ async function setup(t, {stage = 'init', overrides = {}, lost = '', closeAt = ''
     document.querySelector('[name="image"]').required = false; // Native picker validity is represented by selectedFiles above.
   };
   const pin = () => { fill('new_pin', '604928'); fill('new_pin_confirmation', '604928'); };
-  return {actions, document, window, requests, cached, form, fill, check, jobs, names, submit, resume, phone, identity, pin};
+  const saved = () => {
+    if (document.querySelector('[name="agree"]')) check('agree');
+    fill('idcard_passphrase', 'SYNTHETIC-card-passphrase'); check('saved_confirmed');
+  };
+  const photo = target => {
+    selectedFiles.set(target, new window.File(['SYNTHETIC-JPEG'], 'synthetic.jpg', {type: 'image/jpeg'}));
+    target.querySelector('[name="image"]').required = false;
+  };
+  return {actions, document, window, requests, cached, form, fill, check, jobs, names, submit, resume, phone, identity, pin, saved, photo};
 }
 
 test('onboarding exposes supported certificate types and preserves joint import controls', async t => {
@@ -311,4 +327,85 @@ test('unconfigured new issuance disables only its own submit', async t => {
     assert.equal(ui.form().querySelector('button[type="submit"]').disabled,true);
     assert.equal(enrollment.querySelector('button').disabled,false);
   } finally { options.hana.settings = original; }
+});
+
+test('new issuance suggests saving an ID card first, or counts the saved ones', async t => {
+  const empty = await setup(t); await empty.actions['certificate-hana']();
+  assert.equal(empty.document.querySelectorAll('[data-action="idcard-add"]').length, 1);
+  const stocked = await setup(t, {cards: [CARD]}); await stocked.actions['certificate-hana']();
+  assert.equal(stocked.document.querySelector('[data-action="idcard-add"]'), null);
+  assert.match(stocked.document.body.textContent, /보관한 신분증 1개/);
+});
+
+test('a saved ID card replaces the photo form and only its name and passphrase are sent', async t => {
+  const ui = await setup(t, {stage: 'consent', cards: [CARD]}); await ui.resume();
+  const direct = ui.document.querySelector('#certificate-id-direct');
+  assert.ok(direct.hidden); assert.ok([...direct.querySelectorAll('input, select')].every(i => i.disabled));
+  assert.match(ui.document.querySelector('[name="id_source"]').textContent, /resident-card · 주민등록증 · 발급일 2020\.02\.29/);
+  ui.saved(); await ui.submit();
+  assert.deepEqual(ui.names(), ['inspect', 'consent', 'begin-id', 'prepare-id', 'identity']);
+  const prepare = ui.jobs()[3].input;
+  assert.equal(prepare.input.id_card, 'resident-card');
+  assert.deepEqual(Object.keys(prepare.secrets), ['identity_capture']);
+  assert.deepEqual(JSON.parse(prepare.secrets.identity_capture), {passphrase: 'SYNTHETIC-card-passphrase', confirmation: '본인 신분증'});
+  assert.ok(ui.jobs().every(r => !JSON.stringify(r.input.input).includes('SYNTHETIC-card-passphrase')));
+  assert.equal(ui.jobs()[4].input.input.id_card, undefined);
+  assert.equal(ui.form().dataset.stage, 'account');
+  assert.equal(ui.window.localStorage.length, 0); assert.equal(ui.window.sessionStorage.length, 0);
+});
+
+test('choosing direct entry restores the photo form for a card that is not saved', async t => {
+  const ui = await setup(t, {stage: 'prepare-id', cards: [CARD]}); await ui.resume();
+  const select = ui.document.querySelector('[name="id_source"]'); select.value = '';
+  ui.actions['certificate-id-source']({}, select);
+  assert.ok(ui.document.querySelector('#certificate-id-saved').hidden);
+  assert.equal(ui.document.querySelector('[name="idcard_passphrase"]').disabled, true);
+  assert.equal(ui.document.querySelector('[name="id_name"]').disabled, false);
+  assert.ok([...ui.document.querySelectorAll('#certificate-driver input')].every(i => i.disabled));
+  ui.identity(); await ui.submit();
+  assert.deepEqual(ui.names(), ['inspect', 'prepare-id', 'identity']);
+  assert.equal(ui.jobs()[1].input.input.id_card, undefined);
+  assert.equal(JSON.parse(ui.jobs()[1].input.secrets.identity_capture).fields.resident, '1000000');
+});
+
+test('a wrong saved-card passphrase stops before identity and offers correction', async t => {
+  const ui = await setup(t, {stage: 'prepare-id', cards: [CARD], overrides: {'prepare-id': {outcome: 'not_started',
+    local: {stopped: 'incorrect_passphrase_or_damaged_id_card'}, result: null}}});
+  await ui.resume(); ui.saved(); await ui.submit();
+  assert.deepEqual(ui.names(), ['inspect', 'prepare-id']);
+  assert.match(ui.document.body.textContent, /신분증 보관 암호가 맞지 않거나/);
+  assert.equal(ui.document.querySelector('[data-action="certificate-hana-inspect"]').textContent, '신분증 입력 수정');
+});
+
+test('saving an ID card is one local job with the photo and numbers only in its secrets', async t => {
+  const ui = await setup(t); ui.actions['idcard-add']();
+  const form = ui.document.querySelector('[data-submit="idcard-save"]');
+  ui.fill('name', 'resident-card'); ui.fill('idcard_passphrase', 'SYNTHETIC-card-passphrase');
+  ui.fill('idcard_passphrase_confirmation', 'SYNTHETIC-card-passphrase');
+  ui.fill('id_name', '합성 이름'); ui.fill('issueDate', '2020.02.29'); ui.fill('birthDate', '900101'); ui.fill('resident', '1000000');
+  ui.check('identity_confirmed'); ui.photo(form);
+  await ui.actions['idcard-save']({}, form);
+  assert.equal(ui.jobs().length, 1);
+  const job = ui.jobs()[0].input;
+  assert.deepEqual([job.name, job.input], ['idcard.add', {name: 'resident-card'}]);
+  assert.deepEqual(Object.keys(job.secrets).sort(), ['idcard_passphrase', 'identity_capture']);
+  const capture = JSON.parse(job.secrets.identity_capture);
+  assert.deepEqual([capture.kind, capture.fields.birthDate, capture.confirmation], ['resident', '900101', '본인 신분증']);
+  assert.ok(capture.image.length > 0);
+  assert.match(ui.document.body.textContent, /신분증을 암호화해 보관했어요/);
+  assert.equal(ui.document.querySelectorAll('[data-action="certificate-hana"]').length, 1);
+  assert.equal(ui.window.localStorage.length, 0); assert.equal(ui.window.sessionStorage.length, 0);
+});
+
+test('a mismatched ID card passphrase confirmation sends nothing', async t => {
+  const ui = await setup(t); ui.actions['idcard-add']();
+  const form = ui.document.querySelector('[data-submit="idcard-save"]');
+  ui.fill('name', 'resident-card'); ui.fill('idcard_passphrase', 'SYNTHETIC-card-passphrase');
+  ui.fill('idcard_passphrase_confirmation', 'SYNTHETIC-other');
+  ui.fill('id_name', '합성 이름'); ui.fill('issueDate', '2020.02.29'); ui.fill('birthDate', '900101'); ui.fill('resident', '1000000');
+  ui.check('identity_confirmed'); ui.photo(form);
+  await ui.actions['idcard-save']({}, form);
+  assert.equal(ui.jobs().length, 0);
+  assert.match(ui.document.querySelector('#certificate-error').textContent, /확인 입력이 달라요/);
+  assert.equal(ui.document.querySelector('[name="idcard_passphrase"]').value, '');
 });

@@ -1,14 +1,11 @@
 """Certificate setup and one-shot issuance stages. Private inputs travel only in the worker pipe."""
 import base64
 import hashlib
-import io
 import json
 import re
-import warnings
-
-from PIL import Image, ImageOps
 
 from finance_cli.core.paths import data_home
+from finance_cli.credentials import id_cards
 from finance_cli.credentials.registry import Registry, name as credential_name
 from finance_cli.services.hana import onesign, onesign_signup_protocol as signup, store
 from finance_cli.services.hana.onesign_state import State
@@ -18,7 +15,6 @@ from .base import Adapter, InputError, Step, StepResult, Stop, dict_input, pick
 from .hana import safe_code, verdict
 
 FILE_LIMIT = 2 * 1024 * 1024
-IMAGE_LIMIT = 8 * 1024 * 1024
 STAGES = (*onesign.PHONE, 'begin-id', 'prepare-id', *onesign.ISSUE[1:])
 LABELS = dict(zip(STAGES, ('휴대폰 정보·약관', '앱 인증', 'SMS 요청', 'SMS 확인', '가입 약관',
                           '신분증 확인 시작', '신분증 입력', '신분증 확인', '본인 계좌 확인', '인증서 발급', '가입 완료')))
@@ -47,32 +43,45 @@ def identity_jpeg(value):
         raw = base64.b64decode(value, validate=True)
     except (ValueError, TypeError):
         raise Stop('identity_jpeg_invalid') from None
-    if not raw:
-        raise Stop('identity_image_required')
-    if len(raw) > IMAGE_LIMIT:
-        raise Stop('identity_image_too_large')
-    if raw[:2] != b'\xff\xd8':
-        raise Stop('identity_jpeg_required')
     try:
-        with warnings.catch_warnings():
-            warnings.simplefilter('error', Image.DecompressionBombWarning)
-            with Image.open(io.BytesIO(raw), formats=('JPEG',)) as original:
-                photo = ImageOps.exif_transpose(original)
-                if photo.width > 1024:
-                    photo = photo.resize((1024, max(1, round(photo.height * 1024 / photo.width))), Image.Resampling.LANCZOS)
-                output = io.BytesIO()
-                # Re-encode pixels only: no EXIF, GPS, comments or original filename.
-                photo = photo.convert('RGB')
-                photo.info.clear()
-                photo.save(output, format='JPEG', quality=95, subsampling=0)
-                prepared = output.getvalue()
-    except (Image.DecompressionBombError, Image.DecompressionBombWarning):
-        raise Stop('identity_image_dimensions_too_large') from None
-    except (OSError, ValueError):
-        raise Stop('identity_jpeg_invalid') from None
-    if len(prepared) > IMAGE_LIMIT:
-        raise Stop('identity_image_too_large')
-    return prepared
+        return id_cards.prepare_jpeg(raw)
+    except ValueError as error:
+        raise Stop(safe_code(error, 'identity_jpeg_invalid')) from None
+
+
+def identity_capture(secret):
+    """A directly entered card: reviewed text and photo, confirmed as the user's own."""
+    try:
+        capture = json.loads(secret)
+        if not isinstance(capture, dict) or set(capture) != {'kind', 'fields', 'image', 'confirmation'}:
+            raise ValueError()
+    except (ValueError, TypeError):
+        raise Stop('invalid_identity_capture') from None
+    if capture['confirmation'] != '본인 신분증':
+        raise Stop('identity_not_confirmed')
+    try:
+        fields = id_cards.check_fields(capture['kind'], capture['fields'])
+    except ValueError as error:
+        raise Stop(safe_code(error, 'invalid_identity_capture')) from None
+    return {'kind': capture['kind'], 'fields': fields, 'jpeg': identity_jpeg(capture['image'])}
+
+
+def saved_identity(alias, secret):
+    """A card from the ID card store, opened with its passphrase and confirmed as still valid."""
+    try:
+        choice = json.loads(secret)
+        if not isinstance(choice, dict) or set(choice) != {'passphrase', 'confirmation'} \
+                or not isinstance(choice['passphrase'], str):
+            raise ValueError()
+    except (ValueError, TypeError):
+        raise Stop('invalid_identity_capture') from None
+    if choice['confirmation'] != '본인 신분증':
+        raise Stop('identity_not_confirmed')
+    try:
+        card = id_cards.IdCards().load(alias, choice['passphrase'])
+    except (ValueError, OSError) as error:
+        raise Stop(safe_code(error, 'id_card_not_opened')) from None
+    return {'kind': card['kind'], 'fields': card['fields'], 'jpeg': card['jpeg']}
 
 
 def next_stage(value):
@@ -155,8 +164,11 @@ class OneSignIssuance(Adapter):
         self.steps = {'run': Step('run', secrets=('vault_passphrase', *FIELDS.get(stage, ())), sends=self.remote)}
 
     def validate(self, value, login=None):
-        data = dict_input(value, ('name', 'settings', 'send'), ('name',))
+        data = dict_input(value, ('name', 'settings', 'send', *(('id_card',) if self.stage == 'prepare-id' else ())),
+                          ('name',))
         credential_name(data['name'])
+        if 'id_card' in data:
+            credential_name(data['id_card'])
         if self.stage == 'init':
             credential_name(data.get('settings'))
         elif 'settings' in data:
@@ -257,29 +269,36 @@ class OneSignIssuance(Adapter):
             inputs = {'new_pin': lambda: (secret['new_pin'], secret['new_pin_confirmation']),
                       'confirm_issue': lambda: True}
         elif self.stage == 'prepare-id':
-            try:
-                capture = json.loads(secret['identity_capture'])
-                kind, fields = capture['kind'], capture['fields']
-                allowed = {'name', 'issueDate', 'birthDate', 'resident'} | \
-                    ({'regionCode', 'driver1', 'driver2', 'driver3'} if kind == 'driver' else set())
-                if kind not in ('resident', 'driver') or set(capture) != {'kind', 'fields', 'image', 'confirmation'} \
-                        or not isinstance(fields, dict) or set(fields) != allowed \
-                        or not all(isinstance(v, str) for v in fields.values()):
-                    raise ValueError()
-            except (ValueError, TypeError, KeyError):
-                raise Stop('invalid_identity_capture') from None
-            if capture['confirmation'] != '본인 신분증':
-                raise Stop('identity_not_confirmed')
-            if not re.fullmatch('[0-9]{6}', fields['birthDate']) or not re.fullmatch('[0-9]{7}', fields['resident']):
-                raise Stop('resident_number_format')
-            if not re.fullmatch(r'[0-9]{4}\.[0-9]{2}\.[0-9]{2}', fields['issueDate']):
-                raise Stop('identity_date_format')
-            if kind == 'driver' and any(not re.fullmatch('[0-9]{' + str(size) + '}', fields[key])
-                    for key, size in zip(('regionCode', 'driver1', 'driver2', 'driver3'), (2, 2, 6, 2))):
-                raise Stop('driver_number_format')
-            jpeg = identity_jpeg(capture['image'])
-            inputs = {'capture': {'kind': kind, 'fields': fields, 'jpeg': jpeg}}
+            saved = ctx.input.get('id_card')
+            inputs = {'capture': saved_identity(saved, secret['identity_capture']) if saved
+                      else identity_capture(secret['identity_capture'])}
         return inputs
 
 
-ADAPTERS = [CertificateImport(), *(OneSignIssuance(stage) for stage in ('init', 'inspect', *STAGES))]
+class IdCardAdd(Adapter):
+    name = 'idcard.add'
+    title = '신분증 보관'
+    area = 'common'
+    requires_login = False
+    secret_limits = {'identity_capture': 12 * 1024 * 1024}
+    steps = {'run': Step('run', secrets=('idcard_passphrase', 'identity_capture'), sends=False)}
+
+    def validate(self, value, login=None):
+        data = dict_input(value, ('name',), ('name',))
+        credential_name(data['name'])
+        return data
+
+    def run(self, ctx, step):
+        try:
+            card = identity_capture(ctx.secrets['identity_capture'])
+            result = id_cards.IdCards().add(ctx.input['name'], card['kind'], card['fields'], card['jpeg'],
+                                            ctx.secrets['idcard_passphrase'])
+        except ValueError as error:
+            raise Stop(safe_code(error, 'id_card_not_saved')) from None
+        finally:
+            ctx.secrets = None
+        return StepResult(outcome='success', result=pick(result, ('name', 'kind', 'saved', 'network_used')),
+                          local={'completed': True, 'network_used': False})
+
+
+ADAPTERS = [CertificateImport(), IdCardAdd(), *(OneSignIssuance(stage) for stage in ('init', 'inspect', *STAGES))]
