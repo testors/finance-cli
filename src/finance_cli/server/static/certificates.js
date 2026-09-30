@@ -1,7 +1,7 @@
 /* Certificate onboarding. Sensitive files and fields are passed once, never placed in jobs or browser storage. */
 import {api, follow} from './api.js';
 import * as ui from './ui.js';
-import {refreshModel, state} from './app.js';
+import {applyRemember, refreshModel, rememberField, secretFields, state} from './app.js';
 
 const {esc, button, note} = ui;
 const REMOTE = new Set(['authenticate', 'request-sms', 'verify-sms', 'begin-id', 'identity', 'account', 'issue', 'complete']);
@@ -11,6 +11,11 @@ const TITLES = {profile: '휴대폰 정보·약관', authenticate: '앱 인증',
   identity: '신분증 확인', account: '본인 계좌 확인', issue: '인증서 발급', complete: '가입 완료'};
 const field = (name, label, attrs = '') => `<div class="field"><label for="cert-${name}">${label}</label><input id="cert-${name}" name="${name}" required autocomplete="off" ${attrs}></div>`;
 const password = () => field('vault_passphrase', '저장소 암호', 'type="password"');
+function vaultFields(name = null) {
+  const fields = secretFields([['vault_passphrase', '저장소 암호']], name);
+  return fields.length ? password() + rememberField(fields, name || 'new')
+    : '<p class="field-help">서버 메모리에 기억한 저장소 암호를 사용해요. 연결·인증서 화면의 잠그기로 암호를 지울 수 있어요.</p>';
+}
 const nameField = () => field('name', '보관할 이름', 'maxlength="64" pattern="[A-Za-z0-9][A-Za-z0-9_.-]{0,63}" placeholder="예: personal"');
 const controls = title => `<p class="form-error" id="certificate-error" role="alert"></p><div class="dialog-actions"><button type="button" class="button secondary" data-ui="close">취소</button><button type="submit" class="button primary">${esc(title)}</button></div>`;
 const terms = rows => `<ul>${rows.map(row => `<li>${esc(row.title)}${row.urls.map((url, i) => ` <a href="${esc(url)}" target="_blank" rel="noopener noreferrer">약관 ${i + 1}</a>`).join('')}</li>`).join('')}</ul>`;
@@ -26,7 +31,7 @@ async function file64(file, limit) {
   });
 }
 
-function showProgress(name, job) {
+function showProgress(name, job, {rememberFailed = false} = {}) {
   const result = job.result || {};
   const next = result.next_stage;
   const stopped = job.local?.stopped;
@@ -35,14 +40,18 @@ function showProgress(name, job) {
   const text = ready ? '하나인증서 발급과 가입이 완료되었어요. 기관 연결을 추가한 뒤 별도로 로그인하세요.'
     : issued ? '인증서 발급이 확인되었어요. 등록·가입 완료 여부는 아래 상태를 함께 확인하세요.'
     : stopped || job.outcome === 'unknown' || !next && !ready ? '이 단계가 중단되었거나 결과를 확인하지 못했어요. 다시 전송하지 말고 작업 기록을 확인하세요.'
-    : '이 단계의 처리를 완료했어요.';
-  ui.showDialog('하나인증서 발급 진행', `${note(text)}${ui.statusTags(job)}
+    : next === 'profile' ? '저장소를 만들었어요. 다음은 휴대폰 정보·약관 입력이에요. 아직 SMS를 요청하지 않았어요.'
+    : next === 'authenticate' ? '휴대폰 정보와 약관 동의를 저장했어요. 아직 SMS를 요청하지 않았어요. 아래 앱 인증 계속을 누른 뒤, SMS 요청 단계까지 진행하세요.'
+    : next === 'request-sms' ? '앱 인증을 완료했어요. 아직 SMS를 요청하지 않았어요. 아래 SMS 요청 계속을 눌러 실제 통신을 승인하고 SMS를 요청하세요.'
+    : next === 'verify-sms' ? 'SMS 요청 절차가 완료되었어요. 휴대폰에 실제로 도착했는지는 확인되지 않았어요. 문자를 받으면 SMS 확인 계속을 눌러 요청 후 180초 안에 인증번호를 입력하세요.'
+    : '이 단계의 처리를 완료했어요. 다음 단계는 아래 계속 버튼에서 진행하세요.';
+  ui.showDialog('하나인증서 발급 진행', `${note(text)}${rememberFailed ? note('이 단계는 완료했지만 저장소 암호를 기억하지 못했어요. 다음 단계에서 다시 입력하세요.') : ''}${ui.statusTags(job)}${next && !ready ? '<p class="field-help">완료·성공 표시는 방금 실행한 한 단계의 결과예요. 인증서 발급 전체가 끝났다는 뜻은 아니에요.</p>' : ''}
     <p>저장소: <strong>${esc(name)}</strong></p><p class="meta">휴대폰 확인: ${esc(STATES[result.signup_state] || '미확인')} · 발급: ${esc(STATES[result.issuance_state] || '미확인')}</p>
     ${stopped ? `<p class="form-error">${esc(ui.message(stopped))}</p>` : ''}
     <div class="dialog-actions">${button('작업 기록', 'data-view="activity"')}${next && job.outcome === 'success' ? button(TITLES[next] + ' 계속', `data-action="certificate-hana-next" data-name="${esc(name)}" data-stage="${esc(next)}" data-job="${esc(job.id)}"`, 'primary') : ready ? button('기관 연결 추가', 'data-action="add-login-dialog"', 'primary') : button('닫기', 'data-ui="close"')}</div>`);
 }
 
-async function start(form, name, input, secrets, onDone) {
+async function start(form, name, input, secrets, onDone, {rememberStore = null} = {}) {
   if (form.dataset.started) return;
   form.dataset.started = 'true';
   // One key per submitted form. A lost HTTP response never leads to an automatic re-send.
@@ -53,9 +62,15 @@ async function start(form, name, input, secrets, onDone) {
     ui.showDialog('인증서 작업 진행', '<p>서버에서 처리하고 있어요. 창을 닫아도 작업은 계속되며 다시 전송하지 않아요.</p><div id="certificate-progress"></div>' + button('작업 기록', 'data-view="activity"'));
     const holder = document.querySelector('#certificate-progress');
     const final = await follow(job.id, value => { if (holder.isConnected) holder.innerHTML = ui.statusTags(value); });
+    let rememberFailed = false;
+    if (rememberStore && final.result?.created === true) {
+      try { await applyRemember({vault_passphrase: secrets.vault_passphrase, remember_vault: 'on'}, rememberStore); }
+      catch (error) { rememberFailed = true; } // Keep the completed job's result visible.
+    }
+    secrets = null;
     await refreshModel();
     state.credentials = (await api.get('/credentials')).credentials;
-    if (holder.isConnected) await onDone(final);
+    if (holder.isConnected) await onDone(final, {rememberFailed});
   } catch (error) {
     // Even a transport error may follow an accepted job. Show history instead of offering a retry.
     form.reset();
@@ -66,13 +81,14 @@ async function start(form, name, input, secrets, onDone) {
 }
 
 async function stageDialog(name, stage, progress = {}) {
-  const options = await api.get('/certificates/options');
+  const [options, vaults] = await Promise.all([api.get('/certificates/options'), api.get('/vaults')]);
+  state.vaults = Object.fromEntries(vaults.vaults.map(v => [v.name, v.unlocked]));
   let fields = '';
   let digest = progress.terms_digest || '';
   if (stage === 'profile') {
     const carriers = options.hana.carriers;
     digest = carriers[0].terms_digest;
-    fields = field('customer_name', '이름', 'maxlength="60"') + field('birth7', '생년월일 6자리 + 주민번호 뒤 첫 자리', 'type="password" inputmode="numeric" pattern="[0-9]{6}[1-4]" maxlength="7"')
+    fields = note('휴대폰 정보와 약관 동의를 저장하는 단계예요. 저장한 뒤 앱 인증 → SMS 요청을 진행해야 문자를 요청해요.') + field('customer_name', '이름', 'maxlength="60"') + field('birth7', '생년월일 6자리 + 주민번호 뒤 첫 자리', 'type="password" inputmode="numeric" pattern="[0-9]{6}[1-4]" maxlength="7"')
       + field('phone', '본인 휴대폰 번호', 'type="tel" pattern="0[0-9]{9,10}" maxlength="11"')
       + `<div class="field"><label for="cert-carrier">통신사</label><select id="cert-carrier" name="carrier" data-change="certificate-carrier">${carriers.map(c => `<option value="${esc(c.code)}">${esc(c.name)}</option>`).join('')}</select></div><div id="certificate-terms">${terms(carriers[0].terms)}</div>` + agree();
   } else if (stage === 'verify-sms') fields = note('SMS 요청 후 180초 안에 확인하세요. 시간 초과나 중단 후 자동 재요청하지 않아요.') + field('sms', 'SMS 인증번호', 'type="password" inputmode="numeric" pattern="[0-9]{6}" maxlength="6"');
@@ -93,8 +109,10 @@ async function stageDialog(name, stage, progress = {}) {
     + field('new_pin_confirmation', '새 PIN 확인', 'type="password" inputmode="numeric" pattern="[0-9]{6}" maxlength="6"')
     + field('issue_confirmation', '확인을 위해 “발급” 입력', 'pattern="발급"');
   else if (stage === 'inspect') fields = note('저장된 상태만 확인해요. 기관에는 접속하지 않아요. 중단된 단계를 재실행하지 않아요.');
+  else if (stage === 'authenticate') fields = note('은행 앱 인증을 진행해요. 이 단계가 완료되면 SMS 요청을 별도로 진행해야 해요.');
+  else if (stage === 'request-sms') fields = note('실제 기관 통신을 승인하고 SMS 요청을 누르면, 저장한 휴대폰 정보로 인증문자를 요청해요. 받은 인증번호는 다음 SMS 확인 단계에서 입력하세요.');
   else fields = note('이 단계의 요청만 한 번 전송해요. 다음 단계는 별도로 승인하며 로그인·이체는 실행하지 않아요.');
-  ui.showDialog('하나인증서 · ' + (TITLES[stage] || '발급 상태 확인'), `<form data-submit="certificate-hana-submit" data-name="${esc(name)}" data-stage="${esc(stage)}" data-digest="${esc(digest)}" autocomplete="off"><p class="meta">${esc(name)} · 실서버 미검증</p>${password()}${fields}${REMOTE.has(stage) ? '<label class="check"><input type="checkbox" name="send" required> 이 단계의 실제 기관 통신을 승인합니다</label>' : '<p class="field-help">이 단계에서는 기관에 접속하지 않아요.</p>'}${controls(stage === 'issue' ? '하나인증서 발급' : stage === 'inspect' ? '상태 확인' : '이 단계 실행')}</form>`, {wide: stage === 'prepare-id' || stage === 'profile' || stage === 'consent'});
+  ui.showDialog('하나인증서 · ' + (TITLES[stage] || '발급 상태 확인'), `<form data-submit="certificate-hana-submit" data-name="${esc(name)}" data-stage="${esc(stage)}" data-digest="${esc(digest)}" autocomplete="off"><p class="meta">${esc(name)} · 실서버 미검증</p>${vaultFields(name)}${fields}${REMOTE.has(stage) ? '<label class="check"><input type="checkbox" name="send" required> 이 단계의 실제 기관 통신을 승인합니다</label>' : '<p class="field-help">이 단계에서는 기관에 접속하지 않아요.</p>'}${controls(({profile: '휴대폰 정보·동의 저장', authenticate: '앱 인증 실행', 'request-sms': 'SMS 요청', 'verify-sms': 'SMS 확인', issue: '하나인증서 발급', inspect: '상태 확인'})[stage] || '이 단계 실행')}</form>`, {wide: stage === 'prepare-id' || stage === 'profile' || stage === 'consent'});
 }
 
 export const certificateActions = {
@@ -128,12 +146,13 @@ export const certificateActions = {
     const options = await api.get('/certificates/options');
     state.credentials = (await api.get('/credentials')).credentials;
     const stores = state.credentials.filter(c => c.type === 'onesign');
-    ui.showDialog('하나인증서 신규 발급', `${note('지원 버전 1.0.27의 서비스 설정을 서버에서 먼저 추출·구성해야 해요. 설정 추출은 fin hana setup extract / configure를 사용하세요. 공동·금융인증서를 발급하는 기능과는 별개입니다.')}<form data-submit="certificate-hana-init" autocomplete="off">${nameField()}<div class="field"><label for="cert-settings">서버에 준비한 서비스 설정</label><select id="cert-settings" name="settings" required>${options.hana.settings.map(row => `<option value="${esc(row.name)}">${esc(row.name)} · ${esc(row.version)}</option>`).join('')}</select>${!options.hana.settings.length ? '<p class="field-help">준비된 설정이 없어요. 서버에서 설정을 먼저 구성하세요.</p>' : ''}</div>${password()}${controls('새 저장소 만들기')}</form>${stores.length ? '<hr><h3>기존 저장소의 발급 진행 확인</h3>' + stores.map(c => button(c.ref, `data-action="certificate-hana-inspect" data-name="${esc(c.ref)}"`)).join(' ') : ''}`);
+    ui.showDialog('하나인증서 신규 발급', `${note('지원 버전 1.0.27의 서비스 설정을 서버에서 먼저 추출·구성해야 해요. 설정 추출은 fin hana setup extract / configure를 사용하세요. 공동·금융인증서를 발급하는 기능과는 별개입니다.')}<form data-submit="certificate-hana-init" autocomplete="off">${nameField()}<div class="field"><label for="cert-settings">서버에 준비한 서비스 설정</label><select id="cert-settings" name="settings" required>${options.hana.settings.map(row => `<option value="${esc(row.name)}">${esc(row.name)} · ${esc(row.version)}</option>`).join('')}</select>${!options.hana.settings.length ? '<p class="field-help">준비된 설정이 없어요. 서버에서 설정을 먼저 구성하세요.</p>' : ''}</div>${vaultFields()}${controls('새 저장소 만들기')}</form>${stores.length ? '<hr><h3>기존 저장소의 발급 진행 확인</h3>' + stores.map(c => button(c.ref, `data-action="certificate-hana-inspect" data-name="${esc(c.ref)}"`)).join(' ') : ''}`);
     if (!options.hana.settings.length) document.querySelector('[data-submit="certificate-hana-init"] button[type="submit"]').disabled = true;
   },
   'certificate-hana-init': async (ctx, form) => {
+    if (form.dataset.started) return;
     const data = new FormData(form), name = data.get('name');
-    await start(form, 'hana.onesign.issue.init', {name, settings: data.get('settings')}, {vault_passphrase: data.get('vault_passphrase')}, job => showProgress(name, job));
+    await start(form, 'hana.onesign.issue.init', {name, settings: data.get('settings')}, {vault_passphrase: data.get('vault_passphrase')}, (job, options) => showProgress(name, job, options), {rememberStore: data.get('remember_vault') === 'on' ? name : null});
   },
   'certificate-hana-inspect': (ctx, target) => stageDialog(target.dataset.name, 'inspect'),
   'certificate-hana-next': async (ctx, target) => {
@@ -154,9 +173,11 @@ export const certificateActions = {
     driver.querySelectorAll('input').forEach(input => { input.disabled = driver.hidden; });
   },
   'certificate-hana-submit': async (ctx, form) => {
+    if (form.dataset.started) return;
     const data = new FormData(form), stage = form.dataset.stage, name = form.dataset.name;
-    const secrets = {vault_passphrase: data.get('vault_passphrase')};
+    const secrets = data.has('vault_passphrase') ? {vault_passphrase: data.get('vault_passphrase')} : {};
     try {
+      if (REMOTE.has(stage) && data.get('send') !== 'on') throw new Error('send_approval_required');
       if (stage === 'profile') {
         secrets.phone_profile = JSON.stringify({name: data.get('customer_name'), birth7: data.get('birth7'), phone: data.get('phone'), carrier: data.get('carrier')});
         secrets.agreement = data.get('agree') ? form.dataset.digest : '';
@@ -167,6 +188,8 @@ export const certificateActions = {
         if (kind === 'driver') for (const key of ['regionCode', 'driver1', 'driver2', 'driver3']) fields[key] = data.get(key);
         secrets.identity_capture = JSON.stringify({kind, fields, image: await file64(data.get('image'), 8 * 1024 * 1024), confirmation: data.get('identity_confirmation')});
       } else for (const key of stage === 'verify-sms' ? ['sms'] : stage === 'account' ? ['account_number', 'account_password'] : stage === 'issue' ? ['new_pin', 'new_pin_confirmation', 'issue_confirmation'] : []) secrets[key] = data.get(key);
+      secrets.remember_vault = data.get('remember_vault');
+      await applyRemember(secrets, name);
       await start(form, 'hana.onesign.issue.' + stage, {name, ...(REMOTE.has(stage) ? {send: data.get('send') === 'on'} : {})}, secrets, job => showProgress(name, job));
     } catch (error) { form.querySelectorAll('input[type="password"]').forEach(input => { input.value = ''; }); document.querySelector('#certificate-error').textContent = ui.message(error.code || error.message); }
   },
