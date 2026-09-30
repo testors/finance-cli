@@ -12,6 +12,7 @@ from finance_cli.services.hana.onesign_state import State
 from finance_cli.services.hana.onesign_crypto import ProtocolError
 
 from .base import Adapter, InputError, Step, StepResult, Stop, dict_input, pick
+from .certificate_diagnostics import identity_diagnostics
 from .hana import safe_code, verdict
 
 FILE_LIMIT = 2 * 1024 * 1024
@@ -196,7 +197,11 @@ class OneSignIssuance(Adapter):
         try:
             current = state.snapshot()
             if self.stage == 'inspect':
-                return StepResult(outcome='success', result=progress(current), local={'network_used': False})
+                shown = progress(current)
+                diagnostic = identity_diagnostics(state, current)
+                if diagnostic is not None:
+                    shown['identity_diagnostic'] = diagnostic
+                return StepResult(outcome='success', result=shown, local={'network_used': False})
             if next_stage(current) != self.stage:
                 raise Stop('issuance_stage_out_of_order')
             inputs = self.inputs(ctx, current)
@@ -222,6 +227,11 @@ class OneSignIssuance(Adapter):
             ctx.observe(service_verdict=evidence, outcome=outcome, result=shown)
             if completed:
                 shown.update(progress(state.snapshot()))
+            elif self.stage == 'identity':
+                try:
+                    shown['identity_diagnostic'] = identity_diagnostics(state, state.snapshot())
+                except Exception:
+                    shown['diagnostic_unavailable'] = True
             return StepResult(service_verdict=evidence, outcome=outcome, result=shown,
                               local={'completed': completed, 'stopped': safe_code(result.get('error'), 'issuance_stopped')}
                               if not completed else {'completed': True})

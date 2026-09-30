@@ -43,7 +43,7 @@ const KIND_LABEL = {resident: '주민등록증', driver: '운전면허증'};
 const identityFields = () => note('본인의 신분증 카드 영역 JPEG를 선택하세요(8 MiB 이하). 사진은 비율을 유지해 자동 축소하며 원본 파일은 바꾸지 않아요.')
   + '<div class="field"><label for="cert-id-kind">신분증 종류</label><select id="cert-id-kind" name="kind" data-change="certificate-id-kind"><option value="resident">주민등록증</option><option value="driver">운전면허증</option></select></div>'
   + field('image', '신분증 JPEG', 'type="file" accept="image/jpeg"') + '<div class="certificate-grid">'
-  + field('id_name', '신분증 이름', 'maxlength="60"') + field('issueDate', '발급일 (YYYY.MM.DD)', 'pattern="[0-9]{4}\\.[0-9]{2}\\.[0-9]{2}" maxlength="10"')
+  + field('id_name', '성명 (신분증에 적힌 본인 이름)', 'maxlength="60" placeholder="예: 홍길동"') + field('issueDate', '발급일 (YYYY.MM.DD)', 'pattern="[0-9]{4}\\.[0-9]{2}\\.[0-9]{2}" maxlength="10"')
   + field('birthDate', '주민번호 앞 6자리', 'type="password" inputmode="numeric" pattern="[0-9]{6}" maxlength="6"')
   + field('resident', '주민번호 뒤 7자리', 'type="password" inputmode="numeric" pattern="[0-9]{7}" maxlength="7"') + '</div>'
   + '<div id="certificate-driver" hidden><div class="certificate-grid">' + ['regionCode', 'driver1', 'driver2', 'driver3'].map((key, i) => field(key, ['면허번호 지역 2자리', '면허번호 두 번째 구간 2자리', '면허번호 세 번째 구간 6자리', '면허번호 네 번째 구간 2자리'][i], `type="password" inputmode="numeric" pattern="[0-9]{${i === 2 ? 6 : 2}}" disabled`)).join('') + '</div></div>'
@@ -82,6 +82,23 @@ function steps(stage) {
   return `<ol class="certificate-steps" aria-label="발급 단계">${SCREENS.map((title, i) => `<li ${i === current ? 'aria-current="step"' : ''} class="${i < current ? 'done' : ''}"><b>${i + 1}</b><span>${title}</span></li>`).join('')}</ol>`;
 }
 
+function identityDiagnostic(value) {
+  if (!value) return '';
+  const rows = (value.requests || []).map(row => {
+    const label = row.stage === 'image' ? '신분증 사진 업로드' : '신분증 정보 확인';
+    const rejected = row.service_status === 'rejected' || row.image_accepted === false
+      || row.identity_response_code && row.identity_response_code !== '000';
+    const status = rejected ? '은행 거절' : row.image_accepted === true ? '사진 접수 완료'
+      : row.service_status === 'accepted' ? '요청 수락' : '결과 미확인';
+    const codes = [...(row.error_codes || []), ...(row.identity_response_code ? [row.identity_response_code] : [])];
+    return `<p>${label}: <strong>${status}</strong>${codes.length ? ` (${codes.map(esc).join(', ')})` : ''}${row.information_mismatch_reported ? ' · 은행 응답: 정보 불일치' : ''}</p>`;
+  }).join('');
+  const checks = value.input_checks || {};
+  const guidance = checks.name_is_document_label ? '성명 칸에 신분증 종류가 입력되어 있어요. 신분증에 적힌 본인 이름을 입력해야 해요.'
+    : checks.name_matches_phone === false ? '신분증에 입력한 성명이 휴대폰 본인확인에 사용한 이름과 달라요. 신분증에 적힌 본인 이름을 확인하세요.' : '';
+  return `<div class="dialog-note">${rows}${guidance ? `<p role="alert">${guidance}</p>` : ''}<p>저장된 기록만 확인했어요. 은행에는 재전송하지 않았어요.</p></div>`;
+}
+
 function showStopped(name, job, {issued = false, error = '', mismatch = false} = {}) {
   const stopped = job?.local?.stopped;
   issued ||= job?.result?.certificate_issued === true;
@@ -91,7 +108,7 @@ function showStopped(name, job, {issued = false, error = '', mismatch = false} =
     : correctable ? '은행에 신분증을 보내기 전 입력 검사에서 중단됐어요. 사진이나 정보를 수정해 이어갈 수 있어요.'
     : mismatch ? '방금 단계는 완료됐지만 다음 진행 상태를 확인하지 못해 멈췄어요.'
     : '발급 진행을 멈췄어요. 작업 기록에서 마지막 처리 결과를 확인하세요. 자동 재전송하지 않아요.';
-  ui.showDialog('하나인증서 발급 상태', `${note(text)}${job ? ui.statusTags(job) : ''}
+  ui.showDialog('하나인증서 발급 상태', `${note(text)}${job?.name === 'hana.onesign.issue.inspect' ? '<p>저장된 발급 상태 확인 완료</p>' : job ? ui.statusTags(job) : ''}${identityDiagnostic(job?.result?.identity_diagnostic)}
     <p class="form-error" role="alert">${esc(ui.message(stopped || error))}</p>
     <div class="dialog-actions">${button('작업 기록', 'data-view="activity"')}${button(correctable ? '신분증 입력 수정' : '진행 상태 확인', `data-action="certificate-hana-inspect" data-name="${esc(name)}"`, 'primary')}</div>`);
 }
