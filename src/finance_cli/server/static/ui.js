@@ -91,6 +91,7 @@ const MESSAGES = {
   incorrect_password_or_damaged_credential: '인증서 비밀번호가 맞지 않아요. 기관에 요청하지 않았어요.',
   store_authentication_failed: '하나인증서 저장소 암호가 맞지 않아요. 은행에 요청하지 않았어요.',
   pin_six_digits_required: 'PIN 6자리를 입력하세요. 은행에 요청하지 않았어요.',
+  new_pin_confirmation_mismatch: '새 PIN과 PIN 확인이 달라요. 같은 번호를 입력하세요.',
   account_password_four_digits_required: '계좌 비밀번호 4자리를 입력하세요.',
   invalid_identity_capture: '신분증 입력 구성을 확인하지 못했어요. 기존 저장소의 발급 상태를 확인한 뒤 신분증 입력을 다시 여세요.',
   identity_jpeg_required: '신분증 사진은 JPEG(.jpg·.jpeg) 파일이어야 해요. 확장자만 바꾸지 말고 JPEG로 저장해 선택하세요.',
