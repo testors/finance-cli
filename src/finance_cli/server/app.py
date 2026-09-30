@@ -17,6 +17,7 @@ from fastapi.responses import JSONResponse, Response
 from starlette.concurrency import run_in_threadpool
 from starlette.exceptions import HTTPException as StarletteHTTPException
 
+from finance_cli.core import credential_refs
 from . import access, capabilities, jobs, model
 from .adapters.base import InputError
 from .config import loopback
@@ -229,7 +230,12 @@ def create_app(config, *, db=None, dispatcher=True, vaults=None):
 
     @app.get(API + '/credentials')
     def get_credentials():
-        return {'credentials': run(model.credentials)}
+        rows = run(model.credentials)
+        with db.read() as con:
+            for row in rows:
+                # Display information only; removal and renaming stay with the server's local CLI.
+                row['in_use'] = credential_refs.scan_database(con, row['type'], row['ref'])
+        return {'credentials': rows}
 
     @app.get(API + '/logins')
     def get_logins():

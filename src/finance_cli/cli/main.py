@@ -5,6 +5,7 @@ from pathlib import Path
 import sys
 
 from .output import ArgumentParser, emit, error, rendering, structured
+from finance_cli.core.credential_refs import CredentialInUse
 
 
 def output(value):
@@ -14,7 +15,7 @@ def output(value):
 def capabilities():
     return {'schema_version': 1, 'services': {
         'hana': {'offline': ['protocol', 'shared-certificate-login-signature', 'onesign-vault-bundle',
-                            'user-package-settings-extraction', 'onesign-identity-initialization'],
+                            'user-package-settings-extraction', 'onesign-identity-initialization', 'onesign-identity-removal'],
                  'live': ['app-authentication', 'joint-certificate-login', 'accounts', 'transfer-history-query',
                           'ledger-history', 'security-inquiry', 'login-extension', 'onesign-new-issuance',
                           'onesign-signed-login', 'onesign-krw-transfer'],
@@ -31,7 +32,7 @@ def capabilities():
                     'migration_live_tested': False},
         'giro': {'offline': ['auth-plan', 'request-plan', 'bills', 'certificate-validation', 'codeguard'],
                  'live': ['explicit PIN-free bootstrap probes'], 'live_login': False}},
-        'credentials': {'joint': ['import-npki', 'import-pfx', 'list', 'show', 'export', 'hometax-selection', 'hana-signing'],
+        'credentials': {'joint': ['import-npki', 'import-pfx', 'list', 'show', 'export', 'remove', 'rename', 'hometax-selection', 'hana-signing'],
                         'financial': {'scope': 'offline crypto library', 'remote_management': False}},
         'web': {'optional_dependency': 'finance-cli[web]', 'command': 'fin server',
                 'scope': ['browser-enrollment', 'business-profiles', 'institution-logins-and-targets', 'jobs',
@@ -70,9 +71,18 @@ def cert_main(argv):
     item.add_argument('--pfx-index', type=int)
     item.add_argument('--compatibility', choices=('hana', 'hometax'), default='hana', help='NPKI 암호 바이트·복호화 규칙')
     item.add_argument('--password-stdin', action='store_true')
+    item = joint.add_parser('remove', help='보관한 인증서 삭제; 프로필·웹 로그인이 참조 중이면 거절')
+    item.add_argument('name')
+    item = joint.add_parser('rename', help='별칭 변경; 참조 중이면 거절, 지문·개인키는 그대로')
+    item.add_argument('name')
+    item.add_argument('new_name')
     args = parser.parse_args(argv)
     registry = Registry()
-    if args.action == 'list':
+    if args.action == 'joint' and args.joint_action in ('remove', 'rename'):
+        from finance_cli.core.credential_refs import guard
+        guard('joint', args.name)
+        result = registry.remove(args.name) if args.joint_action == 'remove' else registry.rename(args.name, args.new_name)
+    elif args.action == 'list':
         result = {'certificates': registry.list(), 'network_used': False}
     elif args.action == 'capabilities':
         result = capabilities()['credentials']
@@ -237,6 +247,10 @@ def dispatch(argv):
                 return error('invalid_arguments', '알 수 없는 명령입니다. --help로 사용법을 확인하세요.')
             raise ValueError('unknown_command')
         return 0
+    except CredentialInUse as exc:
+        emit({'error': 'credential_in_use', 'references': exc.references, 'network_used': False,
+              'message': '프로필이나 웹 로그인이 이 인증서를 참조하고 있습니다. 먼저 해당 설정의 인증서를 바꾸세요.'}, 2)
+        return 2
     except (ValueError, OSError, ImportError) as exc:
         emit({'error': type(exc).__name__, 'message':
               '로컬 입력 또는 처리 오류입니다. 설정과 입력을 확인하세요.' if structured() else str(exc)}, 2)

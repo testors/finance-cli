@@ -284,6 +284,7 @@ dialog.wide{max-width:860px}
 .menu-list button{display:flex;align-items:center;justify-content:space-between;gap:12px;width:100%;text-align:left;padding:14px;border-radius:9px;font-size:14px;color:#334b40}
 .menu-list button:hover{background:#f3f7f5}.menu-list button.danger{color:#a4453e}.menu-list button small{color:#93a09c;font-size:12px;text-align:right}
 .dialog-body>.meta{font-size:12px;color:#8b9995}
+.credential-usage{display:flex;align-items:center;gap:8px;margin-top:8px;flex-wrap:wrap}.credential-usage .meta{font-size:12px;color:#8e9b97}
 @container finance (max-width:700px){
   .connection-head{padding:18px 18px 14px;gap:10px}.connection-title{min-width:0;flex-basis:calc(100% - 52px)}
   .login-status{flex:1 1 100%;flex-direction:row;align-items:center;gap:8px;flex-wrap:wrap;white-space:normal}

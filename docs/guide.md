@@ -126,7 +126,13 @@ fin profile list
 
 위 설명은 현재 CLI의 동작입니다. 여러 은행과 개인·사업장·법인을 다루는 기관 로그인·업무 대상·업무 프로필은 [확장 설계](profiles-and-connections.md)에 정리되어 있으며 아직 구현되지 않았습니다. 확장 후에도 이 인증서 프로필과 `profiles.json` 형식은 그대로 유지됩니다.
 
-별칭 삭제·이름 변경 명령은 아직 없습니다.
+별칭 변경과 삭제는 비밀번호 없이 인덱스만 다루며 인증서를 복호화하지 않습니다. 인증서 프로필이나 웹앱의 기관 로그인·서명 설정이 별칭을 참조하고 있으면 `credential_in_use`로 거절하고 참조 목록을 보여 줍니다. 먼저 그 설정의 인증서를 바꾸거나 연결을 지운 뒤 다시 실행하세요. 참조를 자동으로 고쳐 쓰지는 않습니다.
+
+```sh
+fin cert joint rename personal personal-2024   # 지문·개인키는 그대로, 별칭만 변경
+fin cert joint remove personal-2024            # 인덱스 항목과 봉인된 파일 삭제
+fin hana onesign remove --name main            # 하나인증서 저장소 디렉터리 삭제; 실행 중이면 거절
+```
 
 ## 하나은행
 
@@ -143,7 +149,7 @@ fin profile list
 | 한도·보안매체·OTP 상태 | `security` + `limits`, `limit-exception`, `security-media`, `otp`, `otp-accident`, `mobile-otp` | `--send` |
 | 로그인 연장 | `session extend` | `--send` |
 | 하나인증서 vault 번들 | `onesign import` / `export` / `show` / `list` | 없음 |
-| 하나인증서 설정·저장소 | `setup extract` / `configure`, `onesign init` / `activate` / `export-identity` | 없음 |
+| 하나인증서 설정·저장소 | `setup extract` / `configure`, `onesign init` / `activate` / `export-identity` / `remove` | 없음 |
 | 하나인증서 신규 발급 | `onesign enroll` 또는 `onesign issue` | 원격 단계에 `--send` |
 | 하나인증서 로그인·조회 | `onesign new-session` / `login` / `accounts` | `login`·`accounts`에 `--send` |
 | 하나인증서 원화 이체 | `transfer prepare` / `show` / `execute` / `reconcile` | `show` 외 `--send`; 실행 직전 내용 확인 |

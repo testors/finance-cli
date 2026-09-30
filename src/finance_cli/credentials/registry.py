@@ -129,6 +129,40 @@ class Registry:
             storage.atomic_json(self.root / 'index.json', state)
         return {'name': alias, 'certificate_id': identity, 'imported': True, 'network_used': False}
 
+    def rename(self, alias, new_alias):
+        """Change an alias only; the sealed blob and fingerprint are untouched. No password needed."""
+        name(alias)
+        name(new_alias)
+        with storage.lock(self.root / 'lock'):
+            state = self.index()
+            if alias not in state['entries']:
+                raise ValueError('credential_not_found')
+            if new_alias == alias:
+                raise ValueError('credential_name_unchanged')
+            if new_alias in state['entries']:
+                raise ValueError('credential_name_exists')
+            state['entries'][new_alias] = state['entries'].pop(alias)
+            storage.atomic_json(self.root / 'index.json', state)
+            identity = state['entries'][new_alias]['certificate_id']
+        return {'name': new_alias, 'previous_name': alias, 'certificate_id': identity, 'renamed': True, 'network_used': False}
+
+    def remove(self, alias):
+        """Drop the index entry first, then the sealed blob; the certificate is never decrypted."""
+        name(alias)
+        with storage.lock(self.root / 'lock'):
+            state = self.index()
+            row = state['entries'].pop(alias, None)
+            if row is None:
+                raise ValueError('credential_not_found')
+            storage.atomic_json(self.root / 'index.json', state)
+            blob = storage.no_symlinks(self.root / 'blobs' / row['blob'])
+            blob_removed = False
+            if blob.is_file():
+                blob.unlink()
+                blob_removed = True
+        return {'name': alias, 'certificate_id': row['certificate_id'], 'removed': True, 'blob_removed': blob_removed,
+                'network_used': False}
+
     def load(self, alias, password):
         row = self.entry(alias)
         envelope = storage.read_json(self.root / 'blobs' / row['blob'])

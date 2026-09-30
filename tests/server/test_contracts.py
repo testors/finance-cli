@@ -37,6 +37,23 @@ class CapabilityTests(ServerCase):
         self.assertEqual((refused.status_code, refused.json()['error']), (409, 'capability_unavailable'))
         self.assertEqual(self.get('/jobs').json()['jobs'], [])
 
+    def test_credential_usage_is_reported_and_blocks_removal(self):
+        from finance_cli.core import credential_refs
+        self.enroll()
+        synthetic_certificate()
+        self.assertEqual(self.get('/credentials').json()['credentials'][0]['in_use'], [])
+        self.assertEqual(credential_refs.references('joint', 'synthetic'), [])
+        login = self.post('/logins', {'institution': 'hometax', 'method': 'joint_certificate', 'name': '개인',
+                                      'credential': 'synthetic', 'signing': {'invoice_sign': {'method': 'joint_certificate', 'credential': 'synthetic'}}}).json()
+        usage = self.get('/credentials').json()['credentials'][0]['in_use']
+        self.assertEqual(usage, [{'source': 'login', 'login_id': login['id'], 'name': '개인'},
+                                 {'source': 'login_signing', 'login_id': login['id'], 'name': '개인', 'purpose': 'invoice_sign'}])
+        self.assertEqual(credential_refs.references('joint', 'synthetic'), usage)
+        with self.assertRaises(credential_refs.CredentialInUse) as caught:
+            credential_refs.guard('joint', 'synthetic')
+        self.assertEqual(caught.exception.references, usage)
+        self.assertEqual(credential_refs.references('joint', 'absent'), [])
+
     def test_two_logins_sharing_a_certificate_stay_separate(self):
         self.enroll()
         synthetic_certificate()

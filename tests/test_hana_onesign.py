@@ -484,6 +484,21 @@ class FlowTests(unittest.TestCase):
         self.assertFalse(result['prepared'])
         self.assertFalse(result['execution_attempted'])
 
+    def test_identity_removal_needs_the_store_lock_and_never_touches_other_stores(self):
+        from finance_cli.services.hana.onesign_state import remove_identity
+        from finance_cli.services.hana import store
+        with State('spare',PASSWORD,copy.deepcopy(self.template)):
+            pass
+        self.assertTrue((store.root('identities')/'spare').is_dir())
+        with self.assertRaises(OSError):  # 'synthetic' is open in setUp: its operation lock is held.
+            remove_identity('synthetic')
+        self.assertTrue((store.root('identities')/'synthetic').is_dir())
+        result=remove_identity('spare')
+        self.assertEqual((result['removed'],result['network_used']),(True,False))
+        self.assertFalse((store.root('identities')/'spare').exists())
+        with self.assertRaisesRegex(ValueError,'not_found'):
+            remove_identity('spare')
+
 
 class PlanTests(unittest.TestCase):
     def test_plan_never_opens_state_prompts_or_connects(self):

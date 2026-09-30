@@ -142,6 +142,44 @@ class SharedCredentials(unittest.TestCase):
         self.registry.import_npki('native', self.cert, encrypted, self.password, compatibility='hometax')
         self.assertEqual(self.registry.load('native', self.password)['compatibility'], 'hometax')
 
+    def test_rename_keeps_identity_and_remove_deletes_blob(self):
+        self.imported()
+        blob = self.home / 'credentials' / 'blobs' / self.registry.entry('personal')['blob']
+        renamed = self.registry.rename('personal', 'personal2')
+        self.assertEqual((renamed['renamed'], renamed['previous_name'], renamed['network_used']), (True, 'personal', False))
+        self.assertEqual([row['name'] for row in self.registry.list()], ['personal2'])
+        self.assertEqual(self.registry.load('personal2', self.password)['certificate'], self.registry.load('personal2', self.password)['certificate'])
+        self.assertTrue(blob.is_file())
+        with self.assertRaisesRegex(ValueError, 'not_found'):
+            self.registry.rename('personal', 'x')
+        with self.assertRaisesRegex(ValueError, 'name_unchanged'):
+            self.registry.rename('personal2', 'personal2')
+        removed = self.registry.remove('personal2')
+        self.assertEqual((removed['removed'], removed['blob_removed']), (True, True))
+        self.assertEqual(self.registry.list(), [])
+        self.assertFalse(blob.exists())
+        with self.assertRaisesRegex(ValueError, 'not_found'):
+            self.registry.remove('personal2')
+
+    def test_remove_and_rename_are_refused_while_a_profile_references_the_alias(self):
+        self.imported()
+        profiles.set_certificate('personal', 'hometax', 'personal')
+        for argv in (['cert', 'joint', 'remove', 'personal'], ['cert', 'joint', 'rename', 'personal', 'other']):
+            code, result = self.command(argv)
+            self.assertEqual(code, 2, result)
+            self.assertEqual(result['error'], 'credential_in_use')
+            self.assertEqual(result['references'], [{'source': 'profile', 'profile': 'personal', 'service': 'hometax'}])
+        self.assertEqual([row['name'] for row in self.registry.list()], ['personal'])
+        self.assertEqual(profiles.resolve('personal', 'hometax'), 'personal')
+
+    def test_remove_and_rename_commands_without_references(self):
+        self.imported()
+        code, result = self.command(['cert', 'joint', 'rename', 'personal', 'renamed'])
+        self.assertEqual((code, result['renamed'], result['name']), (0, True, 'renamed'))
+        code, result = self.command(['cert', 'joint', 'remove', 'renamed'])
+        self.assertEqual((code, result['removed']), (0, True))
+        self.assertEqual(self.registry.list(), [])
+
     def test_profile_scopes_selection_by_institution(self):
         self.imported()
         profiles.set_certificate('personal', 'hometax', 'personal')

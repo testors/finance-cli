@@ -2,6 +2,7 @@
 from contextlib import contextmanager
 import copy
 import secrets
+import shutil
 
 from finance_cli.core import storage
 from . import onesign_bundle as bundle, store
@@ -9,6 +10,18 @@ from .onesign_codec import encode, decode
 from .onesign_keys import seal, open_sealed
 
 FORMAT = 'finance-hana-state-v1'
+
+
+def remove_identity(name):
+    """Delete one identity store. Takes the store's operation lock first so a running
+    login, issuance or transfer is never pulled out from under it; nothing is decrypted."""
+    directory = store.root('identities') / store.name(name)
+    storage.no_symlinks(directory)
+    if not directory.is_dir():
+        raise ValueError('onesign_identity_not_found')
+    with storage.lock(directory / 'operation.lock'):
+        shutil.rmtree(directory)
+    return {'name': name, 'removed': True, 'network_used': False}
 
 
 class State:
