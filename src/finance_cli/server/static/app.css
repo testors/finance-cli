@@ -306,3 +306,14 @@ dialog.wide{max-width:860px}
   .heading-actions .button.primary{background:var(--green);color:#fff;border-radius:50%;width:40px;min-width:40px}
 }
 .button.danger-text{color:#a4453e}
+.limit-result{padding:24px 25px 28px;border-top:1px solid var(--line)}
+.limit-heading{display:flex;align-items:center;justify-content:space-between;gap:12px;flex-wrap:wrap}
+.limit-heading h2{font-size:17px}.limit-grid{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:16px;margin:20px 0 0}
+.limit-grid>div{border:1px solid var(--line);border-radius:12px;padding:20px;background:#f6faf8}
+.limit-grid dt{font-size:13px;color:#62756b}.limit-grid dd{margin:12px 0 0;overflow-wrap:anywhere}
+.limit-grid strong{display:block;font-size:25px;color:#164c3b;line-height:1.5}.limit-grid small{display:block;font-size:13px;color:#65796f;margin-top:5px}
+.limit-result>.scope-note{margin:18px 0 0}.limit-reference{margin-top:26px;padding-top:22px;border-top:1px solid var(--line)}
+.limit-reference h3{font-size:14px;color:#4b6156}.limit-reference p{font-size:13px;color:#62756b;line-height:1.7;margin-top:7px}
+.limit-reference .limit-grid{margin-top:14px;gap:16px}.limit-reference .limit-grid>div{background:transparent;border:0;padding:0}
+.limit-reference .limit-grid strong{font-size:18px;color:#4b6156}
+@container finance (max-width:700px){.limit-result{padding:22px 17px}.limit-grid{grid-template-columns:1fr}.limit-grid strong{font-size:23px}}

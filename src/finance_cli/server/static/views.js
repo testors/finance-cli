@@ -766,8 +766,10 @@ export const actions = {
     const loginId = input.login_id;
     delete input.login_id;
     await runHanaQuery(ctx, 'security.query', {login_id: loginId, input}, {panel: 'job-panel', onDone: job => {
-      const observation = job.result?.observation || {};
-      document.getElementById('results').innerHTML = outcomeNote(job) + (observation.fields ? `<div class="settings-body">${ui.fieldsList({...observation.fields, ...observation.display})}</div>` : '') + ui.rowsTable(observation.rows, {group: 'security'}) + ui.details('진단', observation.diagnostics);
+      const observation = job.result?.observation;
+      const result = !observation ? '' : input.kind === 'limits' ? ui.transferLimits(observation)
+        : (observation.fields ? `<div class="settings-body">${ui.fieldsList({...observation.fields, ...observation.display})}</div>` : '') + ui.rowsTable(observation.rows, {group: 'security'});
+      document.getElementById('results').innerHTML = outcomeNote(job) + result + ui.details('진단', observation?.diagnostics);
     }});
   },
   'security-login': (ctx, button) => actions.login(ctx,

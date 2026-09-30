@@ -28,6 +28,53 @@ export const icon = name => `<svg class="icon" viewBox="0 0 24 24" aria-hidden="
 export const esc = value => String(value ?? '').replace(/[&<>"']/g, c => ({'&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;'}[c]));
 export const money = value => typeof value === 'number' && Number.isFinite(value) ? new Intl.NumberFormat('ko-KR').format(value) : esc(value ?? '—');
 
+// Limit amounts are won, including numeric strings. Avoid rounding large strings
+// through Number, and keep missing/malformed values distinct from a zero limit.
+function limitAmount(value) {
+  if (typeof value === 'number') return Number.isSafeInteger(value) && value >= 0 ? BigInt(value) : null;
+  if (typeof value !== 'string' || !/^(?:\d+|\d{1,3}(?:,\d{3})+)$/.test(value)) return null;
+  return BigInt(value.replaceAll(',', ''));
+}
+
+function limitMoney(value) {
+  const amount = limitAmount(value);
+  if (amount === null) return '<strong>확인 안 됨</strong>';
+  const exact = amount.toLocaleString('ko-KR') + '원';
+  if (amount < 10000n || amount >= 100000000000000000000n) return `<strong>${exact}</strong>`;
+  const parts = [];
+  let rest = amount;
+  for (const unit of ['', '만', '억', '조', '경']) {
+    const part = rest % 10000n;
+    if (part) parts.unshift(part.toLocaleString('ko-KR') + unit);
+    rest /= 10000n;
+  }
+  return `<strong>${parts.join(' ')} 원</strong><small>${exact}</small>`;
+}
+
+export function transferLimits(observation) {
+  const fields = observation.fields || {}, display = observation.display || {};
+  // The protocol's fallback is OTP even when the medium is missing. Only label
+  // a medium here when supported by the bank fields, not by that fallback.
+  const medium = fields.scrtMdclDvCd === '1' ? 'card' : fields.mbphOtpYn === 'Y' ? 'mobile'
+    : fields.scrtMdclDvCd === '2' && fields.mbphOtpYn === 'N' ? 'otp' : null;
+  const mediumName = {card: '보안카드(자물쇠카드)', mobile: '모바일 OTP', otp: 'OTP'}[medium] || '확인 안 됨';
+  const limits = [['1회 이체한도', fields.bot1TrnsLimAmt, display.once_ceiling_text],
+    ['1일 이체한도', fields.dd1TrnsLimAmt, display.daily_ceiling_text]];
+  const hasReference = medium && display.medium === medium;
+  const exceedsReference = hasReference && limits.some(([, current, ceiling]) => {
+    const amount = limitAmount(current), maximum = limitAmount(ceiling);
+    return amount !== null && maximum !== null && amount > maximum;
+  });
+  const cards = index => `<dl class="limit-grid">${limits.map(row => `<div><dt>${row[0]}</dt><dd>${limitMoney(row[index])}</dd></div>`).join('')}</dl>`;
+  return `<div class="limit-result">
+    <div class="limit-heading"><h2>은행에서 조회한 이체한도</h2>${tag('보안매체 · ' + mediumName, medium ? '' : 'neutral')}</div>
+    ${cards(1)}
+    ${exceedsReference ? note('은행 조회값이 보안매체별 안내 한도보다 커요. 실제 이체 가능한 금액은 이 조회만으로 확정할 수 없어요.') : ''}
+    ${fields.trnsLimRslt === 'true' ? note('이체한도 예외신청 안내가 있어요. 보안카드는 1회·1일 최대 1,000만 원이며, 예외신청을 하면 신청일에 한해 원래 지정한 한도로 이용할 수 있다는 은행 안내예요. 예외신청이 완료되었다는 뜻은 아니에요.') : ''}
+    ${hasReference ? `<section class="limit-reference"><h3>보안매체별 안내 한도</h3><p>내 한도 조회값과 별도로 제공되는 ${esc(mediumName)}의 기본 안내예요.</p>${cards(2)}</section>` : ''}
+  </div>`;
+}
+
 export function time(value) {
   if (!value) return '—';
   const date = new Date(value * 1000);
