@@ -101,11 +101,60 @@ class CertificateTests(ServerCase):
 
     def test_remote_send_approval_required_before_store_or_worker(self):
         with patch.object(State, '__enter__', side_effect=AssertionError('must not open')), \
+                patch.object(self.app.state.vaults, 'get', side_effect=AssertionError('must not access secrets')), \
                 patch('finance_cli.server.app.start_with_secrets') as start:
             refused = self.post('/jobs', {'name': 'hana.onesign.issue.authenticate', 'input': {'name': 'missing'},
                                           'secrets': {'vault_passphrase': fixture.PASSWORD}})
         self.assertEqual(refused.json()['error'], 'send_approval_required')
         start.assert_not_called()
+        self.assertEqual(self.get('/jobs').json()['jobs'], [])
+
+    def test_issuance_uses_unlocked_store_without_login_or_browser_passphrase(self):
+        self.setup_identity()
+        self.assertEqual(self.post('/vaults/synthetic/unlock', {'passphrase': fixture.PASSWORD}).status_code, 200)
+        with patch('finance_cli.server.app.start_with_secrets', return_value='started') as start:
+            response = self.post('/jobs', {'name': 'hana.onesign.issue.inspect', 'input': {'name': 'synthetic'}})
+        self.assertEqual(response.status_code, 202, response.text)
+        private = start.call_args.args[2]
+        self.assertEqual(private, {'vault_passphrase': fixture.PASSWORD})
+        with self.db.read() as con:
+            row = jobs.get(con, response.json()['id'])
+        completed = self.run_row(row, private)
+        self.assertEqual(completed['outcome'], 'success')
+        self.assert_private(completed, fixture.PASSWORD)
+        self.assertEqual(self.get('/logins').json()['logins'], [])
+        self.assertEqual(self.services.calls, [])
+
+    def test_remembered_passphrase_does_not_replace_other_issuance_secrets(self):
+        self.setup_identity()
+        self.post('/vaults/synthetic/unlock', {'passphrase': fixture.PASSWORD})
+        for stage, private in (
+            ('verify-sms', {'sms': '012345'}),
+            ('account', {'account_number': fixture.SOURCE, 'account_password': '6049'}),
+            ('issue', {'new_pin': fixture.PIN, 'new_pin_confirmation': fixture.PIN, 'issue_confirmation': '발급'}),
+        ):
+            with self.subTest(stage=stage), patch('finance_cli.server.app.start_with_secrets', return_value='started') as start:
+                request = {'name': 'hana.onesign.issue.' + stage, 'input': {'name': 'synthetic', 'send': True}}
+                missing = self.post('/jobs', request)
+                self.assertEqual(missing.json()['error'], 'step_secrets_required')
+                start.assert_not_called()
+                accepted = self.post('/jobs', {**request, 'secrets': private})
+                self.assertEqual(accepted.status_code, 202, accepted.text)
+                self.assertEqual(start.call_args.args[2], {'vault_passphrase': fixture.PASSWORD, **private})
+                self.assert_private(accepted.json(), fixture.PASSWORD, *[v for k, v in private.items() if k != 'issue_confirmation'])
+        self.assertEqual(self.services.calls, [])
+
+    def test_cached_passphrase_is_scoped_to_existing_store_and_cleared_by_lock(self):
+        self.setup_identity()
+        self.post('/vaults/synthetic/unlock', {'passphrase': fixture.PASSWORD})
+        with patch('finance_cli.server.app.start_with_secrets', return_value='started') as start:
+            for stage, data in (('inspect', {'name': 'other'}), ('init', {'name': 'synthetic', 'settings': 'synthetic'})):
+                refused = self.post('/jobs', {'name': 'hana.onesign.issue.' + stage, 'input': data})
+                self.assertEqual(refused.json()['error'], 'step_secrets_required')
+            self.post('/vaults/synthetic/lock')
+            refused = self.post('/jobs', {'name': 'hana.onesign.issue.inspect', 'input': {'name': 'synthetic'}})
+            self.assertEqual(refused.json()['error'], 'step_secrets_required')
+            start.assert_not_called()
         self.assertEqual(self.get('/jobs').json()['jobs'], [])
 
     def test_npki_import_is_local_and_private(self):

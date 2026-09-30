@@ -510,6 +510,12 @@ def create_app(config, *, db=None, dispatcher=True, vaults=None):
         with db.read() as con:
             store = onesign_store(con, value.get('login_id'), target_id=value.get('target_id'),
                                   parent_job_id=value.get('parent_job_id'), transfer=adapter.purpose == 'transfer_sign')
+        from .adapters.certificates import OneSignIssuance
+        if isinstance(adapter, OneSignIssuance):
+            # Issuance precedes a login. Validate its explicit store and send approval
+            # before retrieving the passphrase already unlocked in server memory.
+            issuance = run(adapter.validate, value.get('input'))
+            store = issuance['name'] if adapter.stage != 'init' else None
         provided = secrets_of(value, needed, store, getattr(adapter, 'secret_limits', None))
         job, created = run(jobs.submit, db, name=value['name'], origin=origin(request), login_id=value.get('login_id'),
                            target_id=value.get('target_id'), profile_id=value.get('profile_id'),
