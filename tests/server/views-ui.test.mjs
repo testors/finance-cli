@@ -21,11 +21,12 @@ async function setup(t, method = 'onesign', readiness = 'query_only', secret = {
   const calls = [], asked = [];
   const ctx = {run: async (name, fields, options) => { calls.push({name, fields, options}); }};
   const values = {
-    state, login: () => row, target: () => target, profile: () => null,
+    state, login: id => state.logins.find(r => r.id === id), target: id => state.targets.find(r => r.id === id), profile: () => null,
     scopeLogins: () => state.logins, scopeTargets: () => state.targets,
     onesignStore: owner => owner.credential.ref,
     askSecrets: async (...args) => { asked.push(args); return secret; },
-    SECRET_LABELS: {vault_passphrase: ['vault_passphrase', '저장소 암호']},
+    SECRET_LABELS: {vault_passphrase: ['vault_passphrase', '저장소 암호'], pin: ['pin', 'PIN'],
+      certificate_password: ['certificate_password', '인증서 비밀번호']},
     applyRemember: () => {}, changeView: () => {}, jobState: () => '', refreshModel: async () => {},
     rememberField: () => '', render: () => {}, secretFields: () => [], showJob: () => {},
   };
@@ -88,12 +89,12 @@ for (const method of ['onesign', 'joint_certificate']) {
   });
 }
 
-test('after transfer, accounts and settings offer queries without a login prompt', async t => {
+test('after transfer, accounts and settings offer queries and optional manual login', async t => {
   const ui = await setup(t);
   for (const view of ['accounts', 'settings']) {
     ui.document.querySelector('main').innerHTML = await ui.views[view](ui.ctx);
-    assert.match(ui.document.body.textContent, /조회 가능/);
-    assert.equal(ui.document.querySelector('[data-action="login"]'), null);
+    assert.match(ui.document.body.textContent, /조회용 세션 있음/);
+    assert.equal(ui.document.querySelector('[data-action="login"]').textContent, '다시 로그인');
     assert.ok(ui.document.querySelector('[data-action="accounts-query"]'));
   }
   ui.document.querySelector('main').innerHTML = await ui.views.transfer(ui.ctx);
@@ -115,4 +116,64 @@ test('cancelling the store password sends no query', async t => {
   ui.document.querySelector('main').innerHTML = await ui.views.history(ui.ctx);
   await ui.actions['history-query'](ui.ctx, ui.document.querySelector('form'));
   assert.equal(ui.calls.length, 0);
+});
+
+
+test('ready sessions keep a visible login action without requesting credentials on render', async t => {
+  const ui = await setup(t, 'onesign', 'ready', {pin: '123456'});
+  for (const view of ['accounts', 'settings']) {
+    ui.document.querySelector('main').innerHTML = await ui.views[view](ui.ctx);
+    assert.equal(ui.document.querySelector('[data-action="login"]').textContent, '다시 로그인');
+    assert.ok(ui.document.querySelector('[data-action="accounts-query"]'));
+  }
+  assert.equal(ui.asked.length, 0);
+  assert.equal(ui.calls.length, 0);
+  await ui.actions.login(ui.ctx, ui.document.querySelector('[data-action="login"]'));
+  assert.deepEqual(ui.calls.map(c => c.name), ['hana.onesign.login']);
+  assert.equal(ui.calls[0].fields.login_id, 'login');
+  assert.deepEqual(ui.calls[0].options.secrets, {pin: '123456'});
+  assert.equal(ui.asked[0][3].store, 'synthetic');
+  await ui.calls[0].options.onDone({outcome: 'success'});
+  assert.equal(ui.calls.length, 1, 'successful re-login must not retry the earlier query');
+});
+
+test('a rejected account query leaves manual re-login available without assuming expiry', async t => {
+  const ui = await setup(t);
+  ui.state.cache.set('hana.onesign.accounts|login||', {id: 'failed', status: 'finished', outcome: 'rejected',
+    session_id: 'session', result: {accounts: []}, service_verdict: {accepted: false}, local: {}});
+  ui.document.querySelector('main').innerHTML = await ui.views.accounts(ui.ctx);
+  assert.match(ui.document.body.textContent, /기관이 실패로 판정/);
+  assert.equal(ui.document.querySelector('[data-action="login"]').textContent, '다시 로그인');
+  assert.ok(ui.document.querySelector('[data-action="accounts-query"]'));
+  assert.equal(ui.row.readiness, 'query_only');
+  assert.equal(ui.calls.length, 0);
+});
+
+test('banking screens re-login to the selected account, without running a query or transfer', async t => {
+  const ui = await setup(t, 'onesign', 'ready', {pin: '123456'});
+  ui.state.logins.push({...ui.row, id: 'other-login', credential: {ref: 'other-store'}});
+  ui.state.targets.push({...ui.state.targets[0], id: 'other-target', login_id: 'other-login'});
+  for (const view of ['history', 'inquiry', 'transfer']) {
+    ui.document.querySelector('main').innerHTML = await ui.views[view](ui.ctx);
+    ui.document.querySelector('[name="target_id"]').value = 'other-target';
+    const button = ui.document.querySelector('[data-action="account-login"]');
+    assert.equal(button.type, 'button', 're-login must not submit the banking form');
+    await ui.actions['account-login'](ui.ctx, button);
+    assert.equal(ui.calls.at(-1).name, 'hana.onesign.login');
+    assert.equal(ui.calls.at(-1).fields.login_id, 'other-login');
+    assert.equal(ui.asked.at(-1)[3].store, 'other-store');
+  }
+  assert.equal(ui.calls.length, 3);
+});
+
+test('new and disabled logins show appropriate actions', async t => {
+  const ui = await setup(t, 'onesign', 'login_required');
+  ui.row.current_session_id = null;
+  ui.document.querySelector('main').innerHTML = await ui.views.accounts(ui.ctx);
+  assert.equal(ui.document.querySelector('[data-action="login"]').textContent, '로그인');
+  ui.row.disabled = true;
+  for (const view of ['accounts', 'settings']) {
+    ui.document.querySelector('main').innerHTML = await ui.views[view](ui.ctx);
+    assert.equal(ui.document.querySelector('[data-action="login"]'), null);
+  }
 });
