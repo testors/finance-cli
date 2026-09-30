@@ -167,12 +167,13 @@ class OneSignIssuance(Adapter):
     area = 'banking'
     service = 'hana'
     requires_login = False
-    verification = 'live_untested'
     secret_limits = {'identity_capture': 12 * 1024 * 1024}
 
     def __init__(self, stage):
+        from finance_cli.core.live_verification import hana_job
         self.stage = stage
         self.name = 'hana.onesign.issue.' + stage
+        self.verification = hana_job(self.name)['verification']
         self.title = '하나인증서 ' + ({'init': '저장소 만들기', 'inspect': '발급 상태 확인'}.get(stage) or LABELS[stage])
         self.remote = stage not in ('init', 'inspect', 'profile', 'consent', 'prepare-id')
         self.steps = {'run': Step('run', secrets=('vault_passphrase', *FIELDS.get(stage, ())), sends=self.remote)}

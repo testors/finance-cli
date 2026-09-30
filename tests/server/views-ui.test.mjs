@@ -11,6 +11,7 @@ async function setup(t, method = 'onesign', readiness = 'query_only', secret = {
     {url: 'http://127.0.0.1:8740', runScripts: 'outside-only'});
   t.after(() => dom.window.close());
   dom.window.HTMLDialogElement.prototype.close = function () { this.open = false; };
+  dom.window.HTMLDialogElement.prototype.showModal = function () { this.open = true; };
   const context = dom.getInternalVMContext();
   context.Date.now = () => Date.parse('2026-09-30T16:00:00Z');
   const row = {id: 'login', institution: 'hana', method, readiness, display_name: '합성 연결',
@@ -280,4 +281,32 @@ test('new and disabled logins show appropriate actions', async t => {
     ui.document.querySelector('main').innerHTML = await ui.views[view](ui.ctx);
     assert.equal(ui.document.querySelector('[data-action="login"]'), null);
   }
+});
+
+test('coverage explains partial live evidence and distinguishes login paths without bank requests', async t => {
+  const ui = await setup(t);
+  ui.state.capabilities = {verification_reviewed_at: '2026-10-01', features: [{
+    id: 'hana-accounts', area: 'banking', title: '계좌·잔액 조회', placement: 'work', placement_label: '웹 업무',
+    status: 'available', reasons: [], verification: 'live_partial',
+    verification_note: '하나인증서 성공 확인. 공동인증서 미확인. <합성 범위>', verification_reviewed_at: '2026-10-01',
+    jobs: [{name: 'hana.onesign.accounts', title: '하나인증서 계좌', status: 'available', verification: 'live_verified',
+      verification_note: '계좌 응답 확인', requires_input: [], requires_confirmation: false},
+    {name: 'hana.accounts.list', title: '공동인증서 계좌', status: 'available', verification: 'live_untested',
+      verification_note: '최근 성공 근거 없음', requires_input: [], requires_confirmation: false}],
+  }]};
+  ui.document.querySelector('main').innerHTML = await ui.views.coverage(ui.ctx);
+  assert.match(ui.document.body.textContent, /일부 실사용 확인/);
+  assert.match(ui.document.body.textContent, /확인 기준: 2026-10-01/);
+  assert.match(ui.document.body.textContent, /공동인증서 미확인/);
+  assert.equal(ui.document.querySelector('합성'), null);
+  await ui.actions['feature-info'](ui.ctx, ui.document.querySelector('[data-feature="hana-accounts"]'));
+  const dialog = ui.document.querySelector('#dialog-content').textContent;
+  assert.match(dialog, /계좌 응답 확인/);
+  assert.match(dialog, /최근 성공 근거 없음/);
+  assert.match(dialog, /실서버 미검증/);
+  ui.document.querySelector('main').innerHTML = await ui.views.accounts(ui.ctx);
+  assert.match(ui.document.querySelector('main').textContent, /실사용 확인/);
+  assert.doesNotMatch(ui.document.querySelector('main').textContent, /실서버 미검증/);
+  assert.equal(ui.calls.length, 0);
+  assert.equal(ui.asked.length, 0);
 });
