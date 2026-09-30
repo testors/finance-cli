@@ -68,6 +68,8 @@ export function verification(level) {
 }
 
 const MESSAGES = {
+  issuance_account_not_in_response: '입력한 계좌가 은행의 발급용 본인계좌 목록에 없어요. 새 발급에서는 목록에서 계좌를 선택하세요.',
+  issuance_account_selection_invalid: '은행이 제공한 목록에서 인증할 본인 계좌를 선택하세요.',
   network_unreachable: '서버에 연결할 수 없어요. 네트워크와 서버 상태를 확인하세요.',
   access_required: '이 브라우저의 접속이 만료되었거나 철회되었어요. 다시 등록하세요.',
   csrf_token_invalid: '보안 확인이 만료되었어요. 화면을 새로 고치세요.',

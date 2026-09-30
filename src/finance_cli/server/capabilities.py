@@ -20,7 +20,7 @@ FEATURES = (
     ('banking', 'hana-issuance', '하나인증서 신규 발급', 'settings',
      tuple('hana.onesign.issue.' + stage for stage in ('init', 'inspect', 'profile', 'authenticate', 'request-sms',
                                                    'verify-sms', 'consent', 'begin-id', 'prepare-id', 'identity',
-                                                   'account', 'issue', 'complete'))),
+                                                   'list-accounts', 'account', 'issue', 'complete'))),
     ('banking', 'hana-issuance-tools', '하나인증서 번들 이전·설정 추출', 'local', ()),
     ('banking', 'hana-tools', '인증 순서·서명·전문 인코딩 도구', 'local', ()),
     ('banking', 'hana-otp-limit', 'OTP 발급·한도 변경', 'planned', ()),
@@ -150,4 +150,3 @@ def profile_capabilities(con, profile_id):
     logins = {r['login_id'] for r in rows}
     return {'profile_id': profile_id, 'targets': rows, 'login_ids': sorted(logins),
             'features': global_capabilities()['features']}
-

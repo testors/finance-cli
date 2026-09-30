@@ -18,7 +18,7 @@ from .onesign_workflow import Workflow
 from .transport import USER_AGENT
 
 PHONE = ('profile','authenticate','request-sms','verify-sms','consent')
-ISSUE = ('begin-id','identity','account','issue','complete')
+ISSUE = ('begin-id','identity','list-accounts','account','issue','complete')
 
 
 def initial(settings):

@@ -12,15 +12,15 @@ from finance_cli.services.hana.onesign_state import State
 from finance_cli.services.hana.onesign_crypto import ProtocolError
 
 from .base import Adapter, InputError, Step, StepResult, Stop, dict_input, pick
-from .certificate_diagnostics import identity_diagnostics
+from .certificate_diagnostics import account_diagnostics, identity_diagnostics
 from .hana import safe_code, verdict
 
 FILE_LIMIT = 2 * 1024 * 1024
 STAGES = (*onesign.PHONE, 'begin-id', 'prepare-id', *onesign.ISSUE[1:])
 LABELS = dict(zip(STAGES, ('휴대폰 정보·약관', '앱 인증', 'SMS 요청', 'SMS 확인', '가입 약관',
-                          '신분증 확인 시작', '신분증 입력', '신분증 확인', '본인 계좌 확인', '인증서 발급', '가입 완료')))
+                          '신분증 확인 시작', '신분증 입력', '신분증 확인', '본인 계좌 목록', '본인 계좌 확인', '인증서 발급', '가입 완료')))
 FIELDS = {'profile': ('phone_profile', 'agreement'), 'verify-sms': ('sms',), 'consent': ('agreement',),
-          'prepare-id': ('identity_capture',), 'account': ('account_number', 'account_password'),
+          'prepare-id': ('identity_capture',), 'account': ('account_choice', 'account_password'),
           'issue': ('new_pin', 'new_pin_confirmation', 'issue_confirmation')}
 
 
@@ -96,7 +96,19 @@ def next_stage(value):
     if phone['state'] != 'consented':
         return None
     return {'new': 'begin-id', 'id_ready': 'identity' if issuance.get('capture') else 'prepare-id',
-            'identity_verified': 'account', 'account_verified': 'issue', 'issued': 'complete'}.get(issuance['state'])
+            'identity_verified': 'list-accounts', 'accounts_listed': 'account',
+            'account_verified': 'issue', 'issued': 'complete'}.get(issuance['state'])
+
+
+def account_choices(value):
+    rows = value['issuance']['responses'].get('signup-accounts', {}).get('expLginAllAcctInq')
+    if not isinstance(rows, list):
+        return []
+    # Selection indexes resolve only against this store's sealed response. Raw
+    # account numbers and other bank fields never enter job results or the DOM.
+    return [{'choice': str(index), 'label': '하나은행 ' + number[:3] + '*' * (len(number) - 7) + number[-4:]}
+            for index, row in enumerate(rows) if isinstance(row, dict)
+            and isinstance(number := row.get('acctNo'), str) and re.fullmatch('[0-9]{8,20}', number)]
 
 
 def progress(value):
@@ -108,7 +120,8 @@ def progress(value):
             'certificate_issued': value['issuance'].get('certificate_issued', False),
             'ready': value['profile']['enrollment']['state'] == 'ready',
             'terms': terms, 'terms_digest': terms_digest(terms) if terms else None,
-            'automatic_retry': False}
+            'automatic_retry': False,
+            **({'accounts': account_choices(value)} if stage == 'account' else {})}
 
 
 class CertificateImport(Adapter):
@@ -201,6 +214,9 @@ class OneSignIssuance(Adapter):
                 diagnostic = identity_diagnostics(state, current)
                 if diagnostic is not None:
                     shown['identity_diagnostic'] = diagnostic
+                account = account_diagnostics(current)
+                if account is not None:
+                    shown['account_diagnostic'] = account
                 return StepResult(outcome='success', result=shown, local={'network_used': False})
             if next_stage(current) != self.stage:
                 raise Stop('issuance_stage_out_of_order')
@@ -227,9 +243,12 @@ class OneSignIssuance(Adapter):
             ctx.observe(service_verdict=evidence, outcome=outcome, result=shown)
             if completed:
                 shown.update(progress(state.snapshot()))
-            elif self.stage == 'identity':
+            elif self.stage in ('identity', 'account', 'list-accounts'):
                 try:
-                    shown['identity_diagnostic'] = identity_diagnostics(state, state.snapshot())
+                    if self.stage == 'identity':
+                        shown['identity_diagnostic'] = identity_diagnostics(state, state.snapshot())
+                    else:
+                        shown['account_diagnostic'] = account_diagnostics(state.snapshot())
                 except Exception:
                     shown['diagnostic_unavailable'] = True
             return StepResult(service_verdict=evidence, outcome=outcome, result=shown,
@@ -263,10 +282,10 @@ class OneSignIssuance(Adapter):
         elif self.stage == 'account':
             if not re.fullmatch('[0-9]{4}', secret['account_password']):
                 raise Stop('account_password_four_digits_required')
-            if not re.fullmatch('[0-9]{8,20}', secret['account_number']):
-                raise Stop('invalid_account_number')
-            # The business function still checks membership in the bank's observed own-account list.
-            inputs = {'account': lambda rows: secret['account_number'],
+            if secret['account_choice'] not in {row['choice'] for row in account_choices(current)}:
+                raise Stop('issuance_account_selection_invalid')
+            index = int(secret['account_choice'])
+            inputs = {'account': lambda rows: rows[index]['acctNo'],
                       'account_password': lambda *args: secret['account_password']}
         elif self.stage == 'issue':
             from finance_cli.services.hana.onesign_issue_protocol import check_new_pin

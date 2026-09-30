@@ -5,12 +5,14 @@ import {SourceTextModule, SyntheticModule} from 'node:vm';
 import {JSDOM} from 'jsdom';
 
 const root = new URL('../../src/finance_cli/server/static/', import.meta.url);
-const ORDER = ['init', 'profile', 'authenticate', 'request-sms', 'verify-sms', 'consent', 'begin-id', 'prepare-id', 'identity', 'account', 'issue', 'complete'];
-const REMOTE = new Set(['authenticate', 'request-sms', 'verify-sms', 'begin-id', 'identity', 'account', 'issue', 'complete']);
+const ORDER = ['init', 'profile', 'authenticate', 'request-sms', 'verify-sms', 'consent', 'begin-id', 'prepare-id', 'identity', 'list-accounts', 'account', 'issue', 'complete'];
+const REMOTE = new Set(['authenticate', 'request-sms', 'verify-sms', 'begin-id', 'identity', 'list-accounts', 'account', 'issue', 'complete']);
 const options = {hana: {settings: [{name: 'synthetic', version: '1.0.27'}], carriers: [
   {code: '4', name: 'SKT', terms_digest: 'skt-review', terms: [{title: 'SKT 필수 약관', urls: ['https://example.invalid/skt']}]},
   {code: '6', name: 'KT', terms_digest: 'kt-review', terms: [{title: 'KT 필수 약관', urls: ['https://example.invalid/kt']}]},
 ]}};
+
+const ACCOUNTS = [{choice: '0', label: '하나은행 123*****9012'}, {choice: '1', label: '하나은행 987*****3210'}];
 
 const CARD = {name: 'resident-card', kind: 'resident', issue_date: '2020.02.29', saved_at: 1700000000};
 
@@ -28,6 +30,53 @@ test('stored identity rejection explains a mismatched name without resending', a
   assert.equal(ui.form(), null);
 });
 
+test('account selection uses the stored bank list and waits for an explicit choice', async t => {
+  const ui = await setup(t, {stage: 'account'}); await ui.resume();
+  assert.deepEqual(ui.names(), ['inspect']);
+  assert.equal(ui.document.querySelector('[name="account_number"]'), null);
+  const select = ui.document.querySelector('[name="account_choice"]');
+  assert.equal(select.value, '');
+  assert.equal(select.options.length, 3);
+  assert.match(select.textContent, /987\*+3210/);
+  ui.fill('account_password', '6049'); await ui.submit();
+  assert.deepEqual(ui.names(), ['inspect']);
+  ui.fill('account_choice', '1'); await ui.submit();
+  assert.deepEqual(ui.names(), ['inspect', 'account']);
+  assert.deepEqual(ui.jobs()[1].input.secrets, {account_choice: '1', account_password: '6049'});
+  assert.equal(ui.form().dataset.stage, 'issue');
+});
+
+test('an empty account list disables verification without a free-text fallback', async t => {
+  const ui = await setup(t, {stage: 'account', overrides: {inspect: {result: {next_stage: 'account', accounts: []}}}});
+  await ui.resume();
+  assert.match(ui.document.body.textContent, /선택할 수 있는 발급용 본인계좌를 확인하지 못/);
+  assert.equal(ui.form().querySelector('button[type="submit"]').disabled, true);
+  assert.equal(ui.document.querySelector('[name="account_number"]'), null);
+  assert.equal(ui.document.querySelector('[name="account_password"]'), null);
+  assert.deepEqual(ui.names(), ['inspect']);
+});
+
+test('stored account mismatch explains the local stop without retrying', async t => {
+  const ui = await setup(t, {stage: 'account', overrides: {inspect: {result: {next_stage: null,
+    account_diagnostic: {selection_not_found: true, account_count: 6, password_verification_requested: false}}}}});
+  await ui.resume();
+  assert.match(ui.document.body.textContent, /본인계좌 목록 6개와 일치하지/);
+  assert.match(ui.document.body.textContent, /비밀번호 검증 요청은 보내지 않았/);
+  assert.deepEqual(ui.names(), ['inspect']);
+});
+
+test('closing after identity leaves account listing for an explicit resumed request', async t => {
+  const ui = await setup(t, {stage: 'identity', closeAt: 'identity'}); await ui.resume(); await ui.submit();
+  assert.deepEqual(ui.names(), ['inspect', 'identity']);
+});
+
+test('a lost account-list response never triggers password verification or a requery', async t => {
+  const ui = await setup(t, {stage: 'identity', lost: 'list-accounts'}); await ui.resume(); await ui.submit();
+  assert.deepEqual(ui.names(), ['inspect', 'identity', 'list-accounts']);
+  assert.equal(ui.form(), null);
+  assert.match(ui.document.body.textContent, /자동 재전송하지 않아요/);
+});
+
 async function setup(t, {stage = 'init', overrides = {}, lost = '', closeAt = '', unlockFailed = false, refreshFailed = false, cards = []} = {}) {
   const dom = new JSDOM('<dialog id="detail-dialog"><div id="dialog-content"></div></dialog><div id="toast"></div>',
     {url: 'http://127.0.0.1:8740', runScripts: 'outside-only'});
@@ -40,6 +89,7 @@ async function setup(t, {stage = 'init', overrides = {}, lost = '', closeAt = ''
   const model = {credentials: [], vaults: {}};
   let next = stage, created = stage !== 'init';
   const snapshot = () => ({next_stage: next, ready: next === null, certificate_issued: next === 'complete' || next === null,
+    ...(next === 'account' ? {accounts: ACCOUNTS} : {}),
     ...(next === 'consent' ? {terms_digest: 'observed-signup-terms', terms: [{title: '가입 필수 약관', urls: ['https://example.invalid/signup']}]} : {})});
   // jsdom has no file picker. Model a selected native File in FormData without browser storage.
   context.FormData = class extends window.FormData {
@@ -68,6 +118,7 @@ async function setup(t, {stage = 'init', overrides = {}, lost = '', closeAt = ''
       if (current !== 'inspect') assert.equal(current, next, 'only the next service stage may execute');
       const result = current === 'inspect' ? snapshot() : {next_stage: ORDER[ORDER.indexOf(current) + 1] || null,
         created: current === 'init', ready: current === 'complete', certificate_issued: ['issue', 'complete'].includes(current)};
+      if (current === 'list-accounts') result.accounts = ACCOUNTS;
       if (current === 'verify-sms') Object.assign(result, {terms_digest: 'observed-signup-terms', terms: [{title: '가입 필수 약관', urls: ['https://example.invalid/signup']}]});
       const final = {id, name: input.name, status: 'finished', outcome: 'success', result, local: {}, attempt: {}, ...overrides[current]};
       if (current !== 'inspect' && final.outcome === 'success') { next = final.result?.next_stage; created = true; }
@@ -163,7 +214,7 @@ test('issuance completes in four screens with one phone request and no intermedi
   assert.match(ui.document.body.textContent, /가입 필수 약관/);
   ui.identity(); await ui.submit();
   assert.equal(ui.form().dataset.stage, 'account');
-  ui.fill('account_number', '123456789012'); ui.fill('account_password', '6049'); await ui.submit();
+  ui.fill('account_choice', '0'); ui.fill('account_password', '6049'); await ui.submit();
   assert.equal(ui.form().dataset.stage, 'issue');
   ui.pin(); await ui.submit();
   assert.deepEqual(ui.names(), ORDER);
@@ -182,7 +233,7 @@ test('issuance completes in four screens with one phone request and no intermedi
   const byStage = Object.fromEntries(ui.jobs().map(r => [r.input.name.split('.').at(-1), r.input.secrets]));
   assert.deepEqual(Object.keys(byStage['verify-sms']), ['sms']);
   assert.deepEqual(Object.keys(byStage['prepare-id']), ['identity_capture']);
-  assert.deepEqual(Object.keys(byStage.account), ['account_number', 'account_password']);
+  assert.deepEqual(Object.keys(byStage.account), ['account_choice', 'account_password']);
   assert.equal(byStage.consent.agreement, 'observed-signup-terms');
   assert.equal(byStage.issue.issue_confirmation, '발급');
   assert.deepEqual(Object.keys(byStage.complete), []);
@@ -207,13 +258,13 @@ test('driver fields and reviewed photo are sent only with the local preparation 
   assert.ok(!driver.hidden); assert.ok([...driver.querySelectorAll('input')].every(i => i.required && !i.disabled));
   ui.identity(); for (const [key,value] of Object.entries({regionCode: '11',driver1:'20',driver2:'123456',driver3:'78'})) ui.fill(key,value);
   await ui.submit();
-  assert.deepEqual(ui.names(), ['inspect','prepare-id','identity']);
+  assert.deepEqual(ui.names(), ['inspect','prepare-id','identity','list-accounts']);
   const capture = JSON.parse(ui.jobs()[1].input.secrets.identity_capture);
   assert.equal(capture.kind, 'driver'); assert.equal(capture.fields.driver2, '123456'); assert.equal(capture.confirmation, '본인 신분증');
   assert.deepEqual(ui.jobs()[2].input.secrets, {});
 });
 
-for (const [stage, next, sent] of [['authenticate','verify-sms',['authenticate','request-sms']], ['identity','account',['identity']], ['complete',null,['complete']]]) {
+for (const [stage, next, sent] of [['authenticate','verify-sms',['authenticate','request-sms']], ['identity','account',['identity','list-accounts']], ['complete',null,['complete']]]) {
   test(`resume from ${stage} skips completed operations and requires a fresh action for remaining requests`, async t => {
     const ui = await setup(t, {stage}); await ui.resume();
     assert.deepEqual(ui.names(), ['inspect']);
@@ -357,7 +408,7 @@ test('a saved ID card replaces the photo form and only its name and passphrase a
   assert.ok(direct.hidden); assert.ok([...direct.querySelectorAll('input, select')].every(i => i.disabled));
   assert.match(ui.document.querySelector('[name="id_source"]').textContent, /resident-card · 주민등록증 · 발급일 2020\.02\.29/);
   ui.saved(); await ui.submit();
-  assert.deepEqual(ui.names(), ['inspect', 'consent', 'begin-id', 'prepare-id', 'identity']);
+  assert.deepEqual(ui.names(), ['inspect', 'consent', 'begin-id', 'prepare-id', 'identity', 'list-accounts']);
   const prepare = ui.jobs()[3].input;
   assert.equal(prepare.input.id_card, 'resident-card');
   assert.deepEqual(Object.keys(prepare.secrets), ['identity_capture']);
@@ -377,7 +428,7 @@ test('choosing direct entry restores the photo form for a card that is not saved
   assert.equal(ui.document.querySelector('[name="id_name"]').disabled, false);
   assert.ok([...ui.document.querySelectorAll('#certificate-driver input')].every(i => i.disabled));
   ui.identity(); await ui.submit();
-  assert.deepEqual(ui.names(), ['inspect', 'prepare-id', 'identity']);
+  assert.deepEqual(ui.names(), ['inspect', 'prepare-id', 'identity', 'list-accounts']);
   assert.equal(ui.jobs()[1].input.input.id_card, undefined);
   assert.equal(JSON.parse(ui.jobs()[1].input.secrets.identity_capture).fields.resident, '1000000');
 });

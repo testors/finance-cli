@@ -106,3 +106,16 @@ def identity_diagnostics(state, snapshot):
         except Exception:
             result['requests'].append({'stage': stage, 'receipt': 'unreadable'})
     return result
+
+
+def account_diagnostics(snapshot):
+    """Describe stored account evidence without returning account numbers."""
+    run = next((value for value in reversed(list(snapshot.get('runs', {}).values()))
+                if value.get('operation') in ('account', 'list-accounts')), None)
+    if run is None:
+        return None
+    rows = snapshot['issuance'].get('responses', {}).get('signup-accounts', {}).get('expLginAllAcctInq')
+    numbers = [row.get('acctNo') for row in rows if isinstance(row, dict)] if isinstance(rows, list) else []
+    return {'network_used': False, 'account_count': len(numbers),
+            'password_verification_requested': 'issue-signup-account' in run.get('operations', {}),
+            'selection_not_found': snapshot['issuance'].get('reason') == 'issuance_account_not_in_response'}
