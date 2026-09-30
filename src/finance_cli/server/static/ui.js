@@ -20,6 +20,8 @@ const paths = {
   check: '<path d="m5 12 4 4L19 6"/>',
   close: '<path d="m6 6 12 12M6 18 18 6"/>',
   download: '<path d="M12 3v12m-5-5 5 5 5-5M4 21h16"/>',
+  plus: '<path d="M12 5v14M5 12h14"/>',
+  more: '<circle cx="5" cy="12" r="1.6"/><circle cx="12" cy="12" r="1.6"/><circle cx="19" cy="12" r="1.6"/>',
 };
 
 export const icon = name => `<svg class="icon" viewBox="0 0 24 24" aria-hidden="true">${paths[name] || paths.accounts}</svg>`;

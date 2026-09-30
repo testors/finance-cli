@@ -51,6 +51,13 @@ def seal(plain, passphrase=PASSPHRASE, salt=SALT, nonce=NONCE):
 
 
 class Bundle(unittest.TestCase):
+    def test_four_character_passphrases_roundtrip(self):
+        for password in ('1234', 'aaaa', '가나다라', '!!!!', '    '):
+            with self.subTest(password=password):
+                self.assertEqual(bundle.opened(bundle.sealed(plaintext(), password), password), plaintext())
+        with self.assertRaisesRegex(ValueError, 'passphrase_minimum_4_characters'):
+            bundle.sealed(plaintext(), '123')
+
     def test_fixture_is_stable_and_opens(self):
         self.assertEqual(FIXTURE.read_bytes(), seal(plaintext()))
         self.assertEqual(bundle.opened(FIXTURE.read_bytes(), PASSPHRASE), plaintext())
@@ -105,6 +112,18 @@ class Bundle(unittest.TestCase):
 
 
 class Store(unittest.TestCase):
+    def test_four_character_state_password(self):
+        from finance_cli.services.hana.onesign_state import State
+        for index, password in enumerate(('1234', 'aaaa', '가나다라', '!!!!', '    ')):
+            name = 'short-' + str(index)
+            with State(name, password, initial={'synthetic': True}) as state:
+                self.assertEqual(state.snapshot(), {'synthetic': True})
+            with State(name, password) as state:
+                self.assertEqual(state.snapshot(), {'synthetic': True})
+        with self.assertRaisesRegex(ValueError, 'passphrase_minimum_4_characters'):
+            with State('too-short', '123', initial={'synthetic': True}):
+                self.fail('three-character password accepted')
+
     def setUp(self):
         self.temp = tempfile.TemporaryDirectory()
         self.root = Path(self.temp.name).resolve()

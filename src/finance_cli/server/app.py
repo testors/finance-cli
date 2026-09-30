@@ -56,9 +56,11 @@ def client_address(request):
     return peer
 
 
-def create_app(config, *, db=None, dispatcher=True):
+def create_app(config, *, db=None, dispatcher=True, vaults=None):
+    from .vaults import Vaults
     db = db or Database()
     worker = Dispatcher(db) if dispatcher else None
+    vaults = vaults if vaults is not None else Vaults()
 
     @asynccontextmanager
     async def lifespan(app):
@@ -71,7 +73,7 @@ def create_app(config, *, db=None, dispatcher=True):
                 worker.stop()
 
     app = FastAPI(title='Finance', docs_url=None, redoc_url=None, openapi_url=None, lifespan=lifespan)
-    app.state.config, app.state.db, app.state.dispatcher = config, db, worker
+    app.state.config, app.state.db, app.state.dispatcher, app.state.vaults = config, db, worker, vaults
 
     def error(status, code):
         return JSONResponse({'error': code}, status_code=status, headers={'Cache-Control': 'no-store'})
@@ -235,6 +237,10 @@ def create_app(config, *, db=None, dispatcher=True):
             rows = model.list_logins(con)
             for row in rows:
                 row['readiness'] = capabilities.login_readiness(con, model.get_login(con, row['id'], raw=True))
+                session = model.current_session(con, row['id'])
+                # Display metadata only: no cookies, file locations or verdict payloads.
+                row['session'] = None if session is None else {
+                    'state': session['state'], 'created_at': session['created_at'], 'checked_at': session['checked_at']}
             return {'logins': rows}
 
     @app.post(API + '/logins')
@@ -322,12 +328,38 @@ def create_app(config, *, db=None, dispatcher=True):
 
     # Jobs -------------------------------------------------------------------
 
-    def secrets_of(value, adapter_step_secrets):
+    def secrets_of(value, needed, vault=None):
         provided = value.get('secrets') or {}
-        if not isinstance(provided, dict) or set(provided) != set(adapter_step_secrets) \
+        if not isinstance(provided, dict) or set(provided) - set(needed) \
                 or not all(isinstance(v, str) and 0 < len(v) <= 1024 for v in provided.values()):
-            raise ApiError(400, 'step_secrets_required' if adapter_step_secrets else 'secrets_not_accepted')
+            raise ApiError(400, 'step_secrets_required' if needed else 'secrets_not_accepted')
+        provided = dict(provided)
+        remembered = vaults.get(vault) if vault and 'vault_passphrase' in needed else None
+        if remembered and 'vault_passphrase' not in provided:
+            # Unlocked on this server: the store passphrase comes from memory, not the browser.
+            provided['vault_passphrase'] = remembered
+        if set(provided) != set(needed):
+            raise ApiError(400, 'step_secrets_required')
         return provided
+
+    def onesign_store(con, login_id, *, target_id=None, parent_job_id=None, snapshot=None, transfer=False):
+        """The OneSign store a job opens, from stored settings only (never from the browser)."""
+        if not isinstance(login_id, str):
+            return None
+        login = con.execute('SELECT * FROM logins WHERE id=?', (login_id,)).fetchone()
+        if login is None or login['method'] != 'onesign':
+            return None
+        signing = (snapshot or {}).get('signing')
+        if signing is None and isinstance(parent_job_id, str):
+            parent = con.execute('SELECT snapshot FROM jobs WHERE id=?', (parent_job_id,)).fetchone()
+            signing = json.loads(parent['snapshot']).get('signing') if parent else None
+        if signing is None and transfer:
+            target = con.execute('SELECT * FROM targets WHERE id=?', (target_id,)).fetchone() \
+                if isinstance(target_id, str) else None
+            signing = model.signing_for(con, login, target, 'transfer_sign')
+        if isinstance(signing, dict) and signing.get('type') == 'onesign':
+            return signing.get('ref')
+        return (json.loads(login['credential'] or 'null') or {}).get('ref')
 
     def start_secret_step(job, provided, *, on_busy):
         status = start_with_secrets(job['id'], job['step'], provided)
@@ -355,12 +387,16 @@ def create_app(config, *, db=None, dispatcher=True):
         adapter = jobs.registry.get(value.get('name'))
         if adapter is None:
             raise ApiError(404, 'job_name_not_registered')
-        provided = secrets_of(value, adapter.steps[adapter.first_step].secrets)
+        needed = adapter.steps[adapter.first_step].secrets
+        with db.read() as con:
+            store = onesign_store(con, value.get('login_id'), target_id=value.get('target_id'),
+                                  parent_job_id=value.get('parent_job_id'), transfer=adapter.purpose == 'transfer_sign')
+        provided = secrets_of(value, needed, store)
         job, created = run(jobs.submit, db, name=value['name'], origin=origin(request), login_id=value.get('login_id'),
                            target_id=value.get('target_id'), profile_id=value.get('profile_id'),
                            input=value.get('input'), idempotency_key=value.get('idempotency_key'),
                            parent_job_id=value.get('parent_job_id'))
-        if created and provided:
+        if created and needed:
             # Waiting for the worker's "ready" must not block other requests.
             await run_in_threadpool(start_secret_step, job, provided, on_busy=lambda status: jobs.cancel(
                 db, job['id'], origin(request), 'resource_busy_secrets_not_sent' if status == 'busy'
@@ -379,9 +415,11 @@ def create_app(config, *, db=None, dispatcher=True):
         adapter = jobs.registry.get(current['name'])
         next_step = awaiting.get('next_step')
         needed = adapter.steps[next_step].secrets if next_step in getattr(adapter, 'steps', {}) else ()
-        provided = secrets_of(value, needed) if current['status'] == 'awaiting_input' else {}
+        with db.read() as con:
+            store = onesign_store(con, current['login_id'], snapshot=json.loads(current['snapshot']))
+        provided = secrets_of(value, needed, store) if current['status'] == 'awaiting_input' else {}
         job, changed = run(jobs.accept_confirmation, db, job_id, value.get('confirmation'), origin(request))
-        if changed and provided:
+        if changed and needed:
             await run_in_threadpool(start_secret_step, job, provided,
                                     on_busy=lambda status: jobs.revert_confirmation(db, job_id, status))
         with db.read() as con:
@@ -401,6 +439,27 @@ def create_app(config, *, db=None, dispatcher=True):
         run(jobs.cancel, db, job_id, origin(request))
         with db.read() as con:
             return jobs.public(con, jobs.get(con, job_id))
+
+    # OneSign stores unlocked in this server's memory ------------------------
+
+    @app.get(API + '/vaults')
+    def get_vaults():
+        names = [c['ref'] for c in run(model.credentials) if c['type'] == 'onesign']
+        return {'vaults': [{'name': n, 'unlocked': vaults.unlocked(n)} for n in names], 'kept_in': 'server_memory'}
+
+    @app.post(API + '/vaults/{name}/unlock')
+    async def unlock_vault(name: str, request: Request):
+        value = await body(request)
+        if set(value) - {'passphrase'}:
+            raise ApiError(400, 'input_fields_not_accepted')
+        await run_in_threadpool(run, vaults.unlock, name, value.get('passphrase'))
+        return {'name': name, 'unlocked': True, 'kept_in': 'server_memory'}
+
+    @app.post(API + '/vaults/{name}/lock')
+    async def lock_vault(name: str, request: Request):
+        await body(request)
+        vaults.lock(name)
+        return {'name': name, 'unlocked': False}
 
     # Files ------------------------------------------------------------------
 

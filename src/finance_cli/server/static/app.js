@@ -34,7 +34,7 @@ function store(key, value) {
 export const state = {
   server: null, profiles: [], logins: [], targets: [], credentials: [], capabilities: null,
   profileId: stored('profile', 'all'), mode: stored('mode', 'tax'), view: null, lastViews: stored('views', {}),
-  token: 0, cache: new Map(), params: {}, rows: {}, hidden: false,
+  token: 0, cache: new Map(), params: {}, rows: {}, hidden: false, vaults: {},
 };
 
 const main = () => document.querySelector('#main');
@@ -71,8 +71,9 @@ export function target(id) { return state.targets.find(t => t.id === id) || null
 function viewKey() { return `${state.profileId}:${state.mode}`; }
 
 export async function refreshModel() {
-  const [profiles, logins, targets, capabilities] = await Promise.all([
-    api.get('/profiles'), api.get('/logins'), api.get('/targets'), api.get('/capabilities')]);
+  const [profiles, logins, targets, capabilities, vaults] = await Promise.all([
+    api.get('/profiles'), api.get('/logins'), api.get('/targets'), api.get('/capabilities'), api.get('/vaults')]);
+  state.vaults = Object.fromEntries(vaults.vaults.map(v => [v.name, v.unlocked]));
   state.profiles = profiles.profiles;
   state.logins = logins.logins;
   state.targets = targets.targets;
@@ -161,19 +162,54 @@ function changeMode(mode) {
   changeView(state.lastViews[viewKey()] || AREAS[mode].home);
 }
 
-/* Secrets: collected in a dialog, returned once, never stored or logged. */
-export function askSecrets(title, fields, description = '') {
+/* The OneSign store a login uses (for transfers, its transfer signing store). */
+export function onesignStore(row, transfer = false) {
+  if (!row || row.method !== 'onesign') return null;
+  return (transfer && row.signing?.transfer_sign?.ref) || row.credential?.ref || null;
+}
+
+/* Fields still to ask: a store unlocked in the server's memory needs no passphrase. */
+export function secretFields(fields, store) {
+  return fields.filter(([name]) => !(name === 'vault_passphrase' && store && state.vaults[store]));
+}
+
+export function rememberField(fields, store) {
+  return store && fields.some(([name]) => name === 'vault_passphrase')
+    ? `<label class="check"><input type="checkbox" name="remember_vault" checked> 서버를 끌 때까지 이 저장소 암호 기억 (서버 메모리에만, 이체 포함)</label>` : '';
+}
+
+/* Unlock in server memory when asked; the passphrase is then not sent with the job. */
+export async function applyRemember(values, store) {
+  const remember = values.remember_vault === 'on';
+  delete values.remember_vault;
+  if (!remember || !store || !values.vault_passphrase) return values;
+  await api.post(`/vaults/${encodeURIComponent(store)}/unlock`, {passphrase: values.vault_passphrase});
+  state.vaults[store] = true;
+  delete values.vault_passphrase;
+  return values;
+}
+
+/* Secrets: collected in a dialog, returned once, never stored in the browser or logged. */
+export function askSecrets(title, allFields, description = '', {store = null} = {}) {
+  const fields = secretFields(allFields, store);
+  if (!fields.length) return Promise.resolve({});
   return new Promise(resolve => {
-    const body = `<form id="secret-form" autocomplete="off">${description ? `<p class="dialog-note">${description}</p>` : ''}${fields.map(([name, label, pattern]) => `<div class="field"><label for="secret-${name}">${ui.esc(label)}</label><input id="secret-${name}" name="${name}" type="password" required autocomplete="off" ${pattern ? `inputmode="numeric" pattern="${pattern}"` : ''}></div>`).join('')}<p class="dialog-note">입력한 값은 이 작업의 해당 단계에만 전달하고 저장하지 않아요.</p><div class="dialog-actions"><button type="button" class="button secondary" data-ui="close">취소</button><button class="button primary" type="submit">확인</button></div></form>`;
+    const body = `<form id="secret-form" autocomplete="off">${description ? `<p class="dialog-note">${description}</p>` : ''}${fields.map(([name, label, pattern]) => `<div class="field"><label for="secret-${name}">${ui.esc(label)}</label><input id="secret-${name}" name="${name}" type="password" required autocomplete="off" ${pattern ? `inputmode="numeric" pattern="${pattern}"` : ''}></div>`).join('')}${rememberField(fields, store)}<p class="dialog-note">입력한 값은 이 작업의 해당 단계에만 전달하고 저장하지 않아요.</p><p class="form-error" id="secret-error" role="alert"></p><div class="dialog-actions"><button type="button" class="button secondary" data-ui="close">취소</button><button class="button primary" type="submit">확인</button></div></form>`;
     ui.showDialog(title, body);
     const form = document.querySelector('#secret-form');
     const dialog = document.querySelector('#detail-dialog');
     const done = value => { dialog.removeEventListener('close', cancel); resolve(value); };
     const cancel = () => done(null);
     dialog.addEventListener('close', cancel);
-    form.addEventListener('submit', event => {
+    form.addEventListener('submit', async event => {
       event.preventDefault();
-      const value = Object.fromEntries(new FormData(form).entries());
+      let value = Object.fromEntries(new FormData(form).entries());
+      try {
+        value = await applyRemember(value, store);
+      } catch (error) {
+        document.querySelector('#secret-error').textContent = ui.message(error.code);
+        return;
+      }
       form.reset();
       dialog.removeEventListener('close', cancel);
       ui.closeDialog();

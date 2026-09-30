@@ -552,6 +552,11 @@ class Extend(JointSessionAdapter):
 
 def identity(ctx):
     reference = ctx.snapshot.get('signing') if ctx.adapter.purpose else None
+    if reference is None and ctx.parent is not None:
+        # A follow-up (result lookup) opens the store its transfer was signed with.
+        reference = json.loads(ctx.parent['snapshot'] or '{}').get('signing')
+    if isinstance(reference, dict) and reference.get('type') != 'onesign':
+        reference = None
     login_credential = json.loads(ctx.login['credential'] or 'null')
     value = (reference or login_credential or {}).get('ref')
     if not value:

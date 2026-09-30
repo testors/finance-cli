@@ -284,6 +284,60 @@ class OneSignPathTests(HanaCase):
                                     'secrets': self.vault})
         self.assertEqual(other.json()['error'], 'parent_target_mismatch')
 
+    def test_unlocked_store_needs_no_passphrase_from_the_browser(self):
+        wrong = self.post('/vaults/synthetic/unlock', {'passphrase': 'wrong passphrase!'})
+        self.assertEqual((wrong.status_code, wrong.json()['error']), (400, 'store_authentication_failed'))
+        locked = self.post('/jobs', {'name': 'hana.onesign.login', 'login_id': self.login['id'],
+                                     'secrets': {'pin': onesign_fixture.PIN}})
+        self.assertEqual(locked.json()['error'], 'step_secrets_required')
+        self.assertEqual(self.post('/vaults/synthetic/unlock', {'passphrase': onesign_fixture.PASSWORD}).status_code, 200)
+        self.assertEqual(self.get('/vaults').json()['vaults'], [{'name': 'synthetic', 'unlocked': True}])
+        captured = []
+
+        def start(job_id, step, secrets):
+            captured.append(dict(secrets))
+            return 'started'
+        with patch('finance_cli.server.app.start_with_secrets', start):
+            login = self.post('/jobs', {'name': 'hana.onesign.login', 'login_id': self.login['id'],
+                                        'secrets': {'pin': onesign_fixture.PIN}}).json()
+        self.assertEqual(captured[-1], {'vault_passphrase': onesign_fixture.PASSWORD, 'pin': onesign_fixture.PIN})
+        self.assertEqual(self.run_job(login['id'], captured[-1])['outcome'], 'success')
+        with patch('finance_cli.server.app.start_with_secrets', start):
+            accounts = self.post('/jobs', {'name': 'hana.onesign.accounts', 'login_id': self.login['id']}).json()
+        accounts = self.run_job(accounts['id'], captured[-1])
+        target = self.register_account(self.login['id'], accounts)
+        with patch('finance_cli.server.app.start_with_secrets', start):
+            prepared = self.post('/jobs', {'name': 'hana.transfer.prepare', 'login_id': self.login['id'],
+                                           'target_id': target['id'], 'secrets': {'account_password': '6049'},
+                                           'input': {'recipient_bank_code': '004', 'amount_krw': 100,
+                                                     'recipient_account_number': onesign_fixture.RECIPIENT}}).json()
+        self.assertEqual(captured[-1], {'vault_passphrase': onesign_fixture.PASSWORD, 'account_password': '6049'})
+        prepared = self.run_job(prepared['id'], captured[-1])
+        with patch('finance_cli.server.app.start_with_secrets', start):
+            self.post(f"/jobs/{prepared['id']}/confirm", {'confirmation': prepared['awaiting']['digest']})
+        self.assertEqual(captured[-1], {'vault_passphrase': onesign_fixture.PASSWORD})
+        self.assertEqual(self.run_job(prepared['id'], captured[-1])['outcome'], 'success')
+        with self.db.read() as con:
+            dump = json.dumps([dict(r) for table in ('jobs', 'job_events', 'logins', 'sessions')
+                               for r in con.execute(f'SELECT * FROM {table}')])
+        self.assertNotIn(onesign_fixture.PASSWORD, dump)
+        self.assertEqual(self.post('/vaults/synthetic/lock').status_code, 200)
+        again = self.post('/jobs', {'name': 'hana.onesign.accounts', 'login_id': self.login['id']})
+        self.assertEqual(again.json()['error'], 'step_secrets_required')
+
+    def test_server_start_can_unlock_a_store_in_memory(self):
+        from finance_cli.server import cli
+        seen = {}
+        with patch('getpass.getpass', return_value=onesign_fixture.PASSWORD), \
+                patch('uvicorn.run', side_effect=lambda app, **kw: seen.update(app=app)):
+            self.assertEqual(cli.main(['start', '--unlock', 'synthetic']), 0)
+        self.assertTrue(seen['app'].state.vaults.unlocked('synthetic'))
+        output = io.StringIO()
+        with patch('getpass.getpass', return_value='wrong passphrase!'), patch('sys.stdout', output), \
+                patch('uvicorn.run', side_effect=AssertionError('must not start')):
+            self.assertEqual(cli.main(['start', '--unlock', 'synthetic']), 2)
+        self.assertEqual(json.loads(output.getvalue())['error'], 'store_authentication_failed')
+
     def test_expired_confirmation_is_refused(self):
         self.signed_in()
         target = self.account_target()

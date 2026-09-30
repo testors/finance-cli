@@ -13,7 +13,9 @@ def parser():
     item.add_argument('--idle-minutes', type=int, help='유휴 만료(분)')
     item.add_argument('--absolute-days', type=int, help='기기 접속 최대 유효 기간(일)')
     sub.add_parser('status', help='설정·데이터베이스·런타임 상태')
-    sub.add_parser('start', help=f'127.0.0.1에서 API와 웹앱 제공')
+    item = sub.add_parser('start', help='127.0.0.1에서 API와 웹앱 제공')
+    item.add_argument('--unlock', action='append', default=[], metavar='ONESIGN_NAME',
+                      help='하나인증서 저장소 암호를 지금 입력해 서버 메모리에만 기억(서버가 꺼질 때까지)')
     item = sub.add_parser('enroll', help='새 브라우저 등록용 일회성 코드 생성')
     item.add_argument('--device-name', help='등록할 기기 표시 이름')
     sub.add_parser('devices', help='등록한 브라우저 목록')
@@ -62,10 +64,20 @@ def main(argv):
             from .app import create_app
         except ImportError:
             return emit_error('web_dependencies_missing', "웹 서버 의존성이 필요합니다: pip install 'finance-cli[web]'")
+        from .vaults import Vaults
         config = settings.load()
+        vaults = Vaults()
+        for name in args.unlock:
+            import getpass
+            try:
+                vaults.unlock(name, getpass.getpass(f"하나인증서 저장소 '{name}' 암호: "))
+            except ValueError as exc:
+                return emit_error(str(exc) if str(exc).replace('_', '').isalnum() else 'store_not_unlocked',
+                                  '저장소를 열지 못했습니다. 서버를 시작하지 않았습니다.')
+            print(f"저장소 '{name}' 암호를 서버 메모리에만 기억합니다(디스크에 저장하지 않음).", file=sys.stderr)
         print(f'Finance 서버: {config.public_origin} (루프백 127.0.0.1:{config.port}, {config.mode})', file=sys.stderr)
-        uvicorn.run(create_app(config), host='127.0.0.1', port=config.port, proxy_headers=False, server_header=False,
-                    access_log=False, log_level='warning')
+        uvicorn.run(create_app(config, vaults=vaults), host='127.0.0.1', port=config.port, proxy_headers=False,
+                    server_header=False, access_log=False, log_level='warning')
         return 0
     from .db import Database
     from . import access, model

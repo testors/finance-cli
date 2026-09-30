@@ -20,8 +20,8 @@ class State:
 
     def __enter__(self):
         if self.initial is not None:
-            if len(self.password) < 12:
-                raise ValueError('passphrase_minimum_12_characters')
+            if len(self.password) < 4:
+                raise ValueError('passphrase_minimum_4_characters')
             for parent in (self.directory.parents[2],self.directory.parents[1],self.directory.parent):
                 storage.directory(parent)
             self.directory.mkdir(mode=0o700)

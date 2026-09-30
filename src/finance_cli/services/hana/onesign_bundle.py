@@ -99,8 +99,8 @@ def validated(plain):
 
 def sealed(plain, passphrase):
     validated(plain)
-    if len(passphrase) < 12:
-        raise ValueError('passphrase_minimum_12_characters')
+    if len(passphrase) < 4:
+        raise ValueError('passphrase_minimum_4_characters')
     salt, nonce = secrets.token_bytes(16), secrets.token_bytes(12)
     header = {'format': FORMAT if plain['version']==1 else FORMAT_V2,
               'kdf': {**KDF, 'salt':b64url(salt)}, 'cipher':{'name':'aes-256-gcm','nonce':b64url(nonce)}}

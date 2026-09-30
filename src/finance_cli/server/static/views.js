@@ -3,8 +3,8 @@
    infers success, due dates, balances or payment state that the job did not return. */
 import {api, submit} from './api.js';
 import * as ui from './ui.js';
-import {askSecrets, changeView, jobState, login, profile, refreshModel, render, scopeLogins, scopeTargets,
-  SECRET_LABELS, showJob, state, target} from './app.js';
+import {applyRemember, askSecrets, changeView, jobState, login, onesignStore, profile, refreshModel, rememberField,
+  render, scopeLogins, scopeTargets, SECRET_LABELS, secretFields, showJob, state, target} from './app.js';
 
 const {esc, icon, tag, note, heading, money} = ui;
 
@@ -264,12 +264,13 @@ function confirmDialog(ctx, job) {
   const awaiting = job.awaiting || {};
   const transfer = job.name === 'hana.transfer.prepare';
   const fixed = job.fixed || {};
-  const fields = (awaiting.requires || []).map(name => SECRET_LABELS[name]).filter(Boolean);
+  const store = onesignStore(login(job.login_id), true);
+  const fields = secretFields((awaiting.requires || []).map(name => SECRET_LABELS[name]).filter(Boolean), store);
   const expires = awaiting.expires_at ? `<p class="dialog-note">확인 기한: <span class="countdown" data-deadline="${awaiting.expires_at}"></span> 남음. 기한이 지나면 새 로그인부터 다시 준비해요.</p>` : '';
   const body = `<p class="pill-row">${ui.verification(awaiting.verification)}${tag('되돌릴 수 없음', 'danger')}</p>` +
     `<div class="summary-lines"><div class="summary-line"><span>프로필</span><strong>${esc(fixed.profile?.name || '전체')}</strong></div><div class="summary-line"><span>로그인</span><strong>${esc(fixed.login?.display_name)}</strong></div><div class="summary-line"><span>대상</span><strong>${esc(fixed.target?.display_name)}</strong></div>${awaiting.signing_credential ? `<div class="summary-line"><span>발급용 인증서</span><strong>${esc(awaiting.signing_credential)}</strong></div>` : ''}</div>` +
     (transfer ? transferPreview(awaiting.preview || {}) : draftPreview(awaiting.preview)) + expires +
-    `<form id="confirm-form" autocomplete="off">${fields.map(([name, label, pattern]) => `<div class="field"><label for="confirm-${name}">${esc(label)}</label><input id="confirm-${name}" name="${name}" type="password" required autocomplete="off" ${pattern ? `inputmode="numeric" pattern="${pattern}"` : ''}></div>`).join('')}<p class="dialog-note">${transfer ? '확인하면 이체를 한 번만 전송해요. 응답을 받지 못해도 자동으로 다시 보내지 않고 결과 조회로 확인해요.' : '확인하면 이 초안으로 발급을 한 번만 시도해요. 결과가 불확실하면 다시 발급하지 말고 목록으로 확인하세요.'}</p><div class="dialog-actions"><button type="button" class="button secondary" data-ui="close">나중에</button><button type="button" class="button secondary" data-action="cancel-job" data-job="${esc(job.id)}">준비 취소</button><button class="button primary" type="submit">${transfer ? `이체 ${money(awaiting.preview?.amount_krw)}원` : '발급'}</button></div></form>`;
+    `<form id="confirm-form" autocomplete="off">${fields.map(([name, label, pattern]) => `<div class="field"><label for="confirm-${name}">${esc(label)}</label><input id="confirm-${name}" name="${name}" type="password" required autocomplete="off" ${pattern ? `inputmode="numeric" pattern="${pattern}"` : ''}></div>`).join('')}${rememberField(fields, store)}<p class="dialog-note">${transfer ? '확인하면 이체를 한 번만 전송해요. 응답을 받지 못해도 자동으로 다시 보내지 않고 결과 조회로 확인해요.' : '확인하면 이 초안으로 발급을 한 번만 시도해요. 결과가 불확실하면 다시 발급하지 말고 목록으로 확인하세요.'}</p><div class="dialog-actions"><button type="button" class="button secondary" data-ui="close">나중에</button><button type="button" class="button secondary" data-action="cancel-job" data-job="${esc(job.id)}">준비 취소</button><button class="button primary" type="submit">${transfer ? `이체 ${money(awaiting.preview?.amount_krw)}원` : '발급'}</button></div></form>`;
   ui.showDialog(transfer ? '이 내용으로 보낼까요?' : '발급 전 초안 확인', body, {wide: !transfer});
   const timer = setInterval(() => {
     const clock = document.querySelector('.countdown');
@@ -281,10 +282,10 @@ function confirmDialog(ctx, job) {
   document.querySelector('#confirm-form').addEventListener('submit', async event => {
     event.preventDefault();
     const form = event.target;
-    const secrets = Object.fromEntries(new FormData(form).entries());
-    form.reset();
     form.querySelector('button[type=submit]').disabled = true;
     try {
+      const secrets = await applyRemember(Object.fromEntries(new FormData(form).entries()), store);
+      form.reset();
       await api.post(`/jobs/${encodeURIComponent(job.id)}/confirm`, {confirmation: awaiting.digest, secrets});
     } catch (error) {
       ui.toast(ui.message(error.code));
@@ -434,29 +435,105 @@ async function activityView(ctx) {
     `<section class="panel">${listing.jobs.length ? `<ul class="operation-list">${listing.jobs.map(job => `<li class="operation-row"><span class="workspace-icon">${icon(areaIcon[job.area] || 'activity')}</span><div class="operation-body"><h3>${esc(job.title)}</h3><p>${esc([job.fixed?.target?.display_name, job.fixed?.login?.display_name, ui.ORIGIN[job.origin]].filter(Boolean).join(' · '))} · ${ui.time(job.created_at)}${job.command ? ' · ' + esc(job.command.join(' ')) : ''}</p></div>${ui.statusTags(job)}<button class="text-button" data-action="job-detail" data-job="${esc(job.id)}">상세 ${icon('arrow')}</button></li>`).join('')}</ul>` : '<div class="empty-state">작업 기록이 없어요.</div>'}</section>`;
 }
 
+/* Connections screen. One card per institution login; its verified targets sit
+   under it because that is where they belong. The primary action follows the
+   user's next step (login → verify → done); everything else is behind "더보기".
+   Identifiers such as revisions and fingerprints stay out of the main view. */
+const SESSION_LABEL = {usable: '사용 가능', consumed: '세션 사용함', expired: '세션 만료', stale: '세션 재확인 필요'};
+
+function loginStatus(row) {
+  if (row.disabled) return tag('사용 중지', 'neutral');
+  if (row.readiness === 'ready') return tag('로그인됨', '') + (row.session?.checked_at ? `<span class="meta">확인 ${ui.time(row.session.checked_at)}</span>` : '');
+  const session = row.session;
+  if (!session) return tag('로그인 필요', 'warning');
+  return tag(session.state === 'stale' ? '재확인 필요' : '로그인 필요', 'warning') + `<span class="meta">${esc(SESSION_LABEL[session.state] || session.state)} · 마지막 로그인 ${ui.time(session.created_at)}</span>`;
+}
+
+function verifyAction(row) {
+  return row.institution === 'hometax' ? ['discover', '사용자·사업장 확인'] : ['accounts-query', '계좌 조회·등록'];
+}
+
+/* The one button the user most likely needs next. */
+function primaryAction(row, targets) {
+  if (row.disabled) return '';
+  const attrs = `data-login="${esc(row.id)}"`;
+  if (row.readiness !== 'ready') return ui.button('로그인', `data-action="login" ${attrs}`, 'primary');
+  if (!targets.length) { const [action, label] = verifyAction(row); return ui.button(label, `data-action="${action}" ${attrs}`, 'primary'); }
+  return '';
+}
+
+function signingLines(row) {
+  const lines = [];
+  if (row.institution === 'hometax') lines.push(['계산서 발급 인증서', row.signing?.invoice_sign?.ref, 'signing']);
+  if (row.method === 'onesign') {
+    lines.push(['이체 서명', row.signing?.transfer_sign?.ref, 'signing']);
+    const store = row.credential?.ref;
+    if (store) lines.push(['저장소 암호', state.vaults[store] ? '서버 메모리에 기억 중' : '잠김 · 작업마다 입력', state.vaults[store] ? 'lock-vault' : 'unlock-vault', store]);
+  }
+  if (row.institution === 'hana' && row.method !== 'onesign') {
+    const reg = row.registration || {};
+    lines.push(['앱 등록 정보', reg.app_profile?.configured && reg.login_input?.configured ? '연결됨' : '서버에서 연결 필요', null]);
+  }
+  return lines.map(([label, value, action, store]) => `<div class="connection-setting"><span>${esc(label)}</span><strong>${value ? esc(value) : '<em>미지정</em>'}</strong>${action ? `<button type="button" class="text-button" data-action="${action}" data-login="${esc(row.id)}" ${store ? `data-store="${esc(store)}"` : ''}>${action === 'unlock-vault' ? '잠금 해제' : action === 'lock-vault' ? '잠그기' : '변경'}</button>` : ''}</div>`).join('');
+}
+
+function targetRow(t) {
+  const identity = Object.values(t.identity || {}).find(v => typeof v === 'string' && v.trim()) || '';
+  return `<div class="target-row ${t.disabled ? 'disabled' : ''}"><div class="target-symbol">${icon(t.kind === 'account' ? 'accounts' : t.kind === 'business' ? 'business' : 'shield')}</div><div class="target-text"><strong>${esc(t.display_name)}</strong><span class="meta">${esc(ui.KIND[t.kind] || t.kind)}${identity ? ' · ' + esc(identity) : ''} · 확인 ${ui.time(t.verified_at)}${t.signing?.invoice_sign ? ' · 발급용 ' + esc(t.signing.invoice_sign.ref) : ''}</span></div>${t.disabled ? tag('사용 중지', 'neutral') : ''}<button type="button" class="icon-button" data-action="target-menu" data-target="${esc(t.id)}" aria-label="${esc(t.display_name)} 관리">${icon('more')}</button></div>`;
+}
+
+function connectionCard(row) {
+  const targets = state.targets.filter(t => t.login_id === row.id);
+  const [verify, verifyLabel] = verifyAction(row);
+  const symbol = row.institution === 'hometax' ? '稅' : row.institution === 'hana' ? '하' : '지';
+  const addTarget = row.readiness === 'ready' && !row.disabled && targets.length
+    ? `<button type="button" class="text-button" data-action="${verify}" data-login="${esc(row.id)}">${verifyLabel} ${icon('arrow')}</button>` : '';
+  const emptyTargets = row.disabled ? '' : row.readiness !== 'ready'
+    ? `<p class="target-empty">로그인하면 ${row.institution === 'hometax' ? '사용자·사업장' : '계좌'}을 확인해 대상으로 등록할 수 있어요.</p>`
+    : `<p class="target-empty">아직 등록한 대상이 없어요. <strong>${esc(verifyLabel)}</strong>을 실행하고 결과에서 등록하세요.</p>`;
+  return `<section class="panel connection-card ${row.disabled ? 'disabled' : ''}" aria-labelledby="login-${esc(row.id)}">
+    <div class="connection-head"><div class="bank-symbol">${symbol}</div><div class="connection-title"><h2 id="login-${esc(row.id)}">${esc(row.display_name)}</h2><p class="meta">${esc(ui.INSTITUTION[row.institution])} · ${esc(ui.METHOD[row.method])}${row.credential?.ref ? ' · ' + esc(row.credential.ref) : ''}</p></div><div class="login-status">${loginStatus(row)}</div><div class="connection-actions">${primaryAction(row, targets)}<button type="button" class="icon-button" data-action="login-menu" data-login="${esc(row.id)}" aria-label="${esc(row.display_name)} 더보기">${icon('more')}</button></div></div>
+    <div class="connection-targets"><div class="connection-subhead"><h3>대상 ${targets.length ? `<span class="count">${targets.length}</span>` : ''}</h3>${addTarget}</div>${targets.length ? targets.map(targetRow).join('') : emptyTargets}</div>
+    ${signingLines(row) ? `<div class="connection-settings">${signingLines(row)}</div>` : ''}
+    <div id="job-${esc(row.id)}"></div></section>`;
+}
+
+function onboarding() {
+  const steps = [['서버에 인증서 준비', '<span class="code">fin cert joint import</span> 또는 <span class="code">fin hana onesign init</span>으로 인증서를 보관해요.'],
+    ['기관 연결 추가', '기관·로그인 방법·인증서를 골라요. 저장만 하고 기관에는 접속하지 않아요.'],
+    ['로그인하고 대상 등록', '로그인 후 사용자·사업장 확인이나 계좌 조회 결과에서 업무 대상을 등록해요.']];
+  return `<section class="panel onboarding"><div class="panel-heading"><div><h2>처음 연결하기</h2><p class="meta">세 단계면 업무를 시작할 수 있어요.</p></div></div><ol class="onboarding-steps">${steps.map(([t, d], i) => `<li><b>${i + 1}</b><div><strong>${t}</strong><p>${d}</p></div></li>`).join('')}</ol><div class="onboarding-actions">${ui.button('기관 연결 추가', 'data-action="add-login-dialog"', 'primary')}<p class="field-help">기존 CLI 인증서 프로필이 있으면 서버에서 <span class="code">fin server import-profiles</span>로 가져올 수 있어요.</p></div></section>`;
+}
+
+function profileCard(p) {
+  const targets = p.target_ids.map(id => target(id)).filter(Boolean);
+  return `<button type="button" class="profile-card ${p.disabled ? 'disabled' : ''}" data-action="edit-profile" data-profile-id="${esc(p.id)}"><span class="profile-card-head"><strong>${esc(p.name)}</strong>${tag(ui.KIND[p.kind] || '유형 미설정', p.kind ? '' : 'neutral')}${p.disabled ? tag('사용 중지', 'neutral') : ''}</span><span class="meta">${targets.length ? targets.map(t => esc(t.display_name)).join(', ') : '대상이 없어요'}</span></button>`;
+}
+
 async function settingsView(ctx) {
   await refreshModel();
   const [credentials, devices] = await Promise.all([api.get('/credentials'), api.get('/auth/devices')]);
   state.credentials = credentials.credentials;
-  const loginRows = state.logins.map(row => {
-    const hometax = row.institution === 'hometax';
-    const onesign = row.method === 'onesign';
-    const reg = row.registration || {};
-    const regText = row.institution === 'hana' && !onesign ? ` · 앱 등록 ${reg.app_profile?.configured && reg.login_input?.configured ? '연결됨' : '필요 (서버 관리)'}` : '';
-    const signing = hometax ? row.signing?.invoice_sign : onesign ? row.signing?.transfer_sign : null;
-    return `<div class="setting-row"><div><strong>${esc(row.display_name)}</strong><span class="meta">${esc(ui.INSTITUTION[row.institution])} · ${esc(ui.METHOD[row.method])} · ${esc(row.credential?.ref || '자격 증명 미지정')} · 설정 ${row.revision}${regText}${hometax || onesign ? ` · ${hometax ? '발급용' : '이체 서명'} ${esc(signing?.ref || '미지정')}` : ''}</span></div><div class="row-actions">${readiness(row)}${row.disabled ? '' : ui.button('로그인', `data-action="login" data-login="${esc(row.id)}"`, 'primary')}${hometax && !row.disabled ? ui.button('세션 확인', `data-action="session-check" data-login="${esc(row.id)}"`) + ui.button('사용자·사업장 확인', `data-action="discover" data-login="${esc(row.id)}"`) : ''}${row.institution === 'hana' && !row.disabled ? ui.button('계좌 조회·등록', `data-action="accounts-query" data-login="${esc(row.id)}"`) : ''}${row.institution === 'hana' && !onesign && !row.disabled ? ui.button('로그인 연장', `data-action="extend" data-login="${esc(row.id)}"`) : ''}${hometax || onesign ? ui.button(hometax ? '발급용 인증서' : '이체 서명 수단', `data-action="signing" data-login="${esc(row.id)}"`) : ''}${ui.button('세션 기록', `data-action="sessions" data-login="${esc(row.id)}"`)}${ui.button(row.disabled ? '다시 사용' : '사용 중지', `data-action="toggle-login" data-login="${esc(row.id)}"`)}</div></div><div id="job-${esc(row.id)}"></div>`;
-  }).join('');
-  const targetRows = state.targets.map(t => `<div class="setting-row"><div><strong>${esc(t.display_name)}</strong><span class="meta">${esc(ui.KIND[t.kind] || t.kind)} · ${esc(login(t.login_id)?.display_name)} · ${esc(Object.values(t.identity || {}).filter(v => typeof v === 'string').join(' · '))} · 확인 ${ui.time(t.verified_at)}${t.signing?.invoice_sign ? ' · 발급용 ' + esc(t.signing.invoice_sign.ref) : ''}</span></div><div class="row-actions">${t.disabled ? tag('사용 중지', 'neutral') : ''}${ui.button('이름 변경', `data-action="rename-target" data-target="${esc(t.id)}"`)}${t.kind === 'business' ? ui.button('사업장 발급용 인증서', `data-action="target-signing" data-target="${esc(t.id)}"`) : ''}${ui.button(t.disabled ? '다시 사용' : '사용 중지', `data-action="toggle-target" data-target="${esc(t.id)}"`)}</div></div>`).join('');
-  const profileRows = state.profiles.map(p => `<div class="setting-row"><div><strong>${esc(p.name)}</strong><span class="meta">${esc(ui.KIND[p.kind] || '유형 미설정')} · 대상 ${p.target_ids.length}개${p.disabled ? ' · 사용 중지' : ''}</span></div><div class="row-actions">${ui.button('편집', `data-action="edit-profile" data-profile-id="${esc(p.id)}"`)}</div></div>`).join('');
-  const credentialRows = state.credentials.map(c => `<div class="setting-row"><span>${esc(c.ref)}<span class="meta">${esc(c.type === 'joint' ? '공동인증서' : '하나인증서 저장소')} · ${esc(c.format)}${c.fingerprint ? ' · ' + esc(c.fingerprint.slice(0, 12)) + '…' : ''}</span></span></div>`).join('');
-  const deviceRows = devices.devices.map(d => `<div class="setting-row"><span>${esc(d.name)}<span class="meta">등록 ${ui.time(d.created_at)} · 마지막 사용 ${ui.time(d.last_seen_at)}${d.active ? '' : ' · 비활성'}</span></span><div class="row-actions">${d.current ? tag('현재 브라우저') : ''}${d.active ? ui.button(d.current ? '로그아웃' : '접속 해제', `data-action="revoke-device" data-device="${esc(d.id)}" data-current="${d.current}"`) : ''}</div></div>`).join('');
-  const options = kind => state.credentials.filter(c => c.type === kind).map(c => `<option value="${esc(c.ref)}">${esc(c.ref)}</option>`).join('');
-  return heading('연결·인증서', '기관 로그인, 대상, 업무 프로필, 인증서와 웹앱 접속을 관리해요.') +
-    `<div class="settings-grid"><section class="panel"><div class="panel-heading"><h2>기관 로그인</h2></div><div class="settings-body">${loginRows || '<p class="field-help">기관 로그인이 없어요. 아래에서 추가하거나 서버에서 fin server import-profiles로 인증서 프로필을 가져오세요.</p>'}<form class="filter-bar" data-submit="add-login"><label class="field-inline">기관<select name="institution" data-change="login-institution"><option value="hometax">홈택스</option><option value="hana">하나은행</option></select></label><label class="field-inline">로그인 방법<select name="method"><option value="joint_certificate">공동인증서</option><option value="onesign">하나인증서</option></select></label><label class="field-inline">표시 이름<input name="name" required maxlength="60"></label><label class="field-inline">자격 증명<select name="credential"><optgroup label="공동인증서">${options('joint')}</optgroup><optgroup label="하나인증서 저장소">${options('onesign')}</optgroup></select></label><button class="button primary" type="submit">로그인 추가</button></form><p class="field-help">로그인 설정 저장은 기관에 접속하지 않아요. 명의·사업장은 확인 작업 결과에서만 등록해요.</p></div></section>` +
-    `<section class="panel"><div class="panel-heading"><h2>대상</h2></div><div class="settings-body">${targetRows || '<p class="field-help">등록한 대상이 없어요. 로그인 후 사용자·사업장 확인이나 계좌 조회 결과에서 등록하세요.</p>'}</div></section>` +
-    `<section class="panel"><div class="panel-heading"><h2>업무 프로필</h2></div><div class="settings-body">${profileRows || '<p class="field-help">프로필이 없어요. 대상을 묶어 개인·사업장·법인별로 볼 수 있어요.</p>'}<form class="filter-bar" data-submit="add-profile"><label class="field-inline">이름<input name="name" required maxlength="60"></label><label class="field-inline">유형<select name="kind"><option value="">미설정</option><option value="personal">개인</option><option value="sole_proprietor">개인사업자</option><option value="corporation">법인</option></select></label><button class="button primary" type="submit">프로필 추가</button></form><p class="field-help">프로필 이름·유형은 표시용이며 권한이나 명의 확인 근거가 아니에요.</p></div></section>` +
-    `<section class="panel"><div class="panel-heading"><h2>인증서</h2></div><div class="settings-body">${credentialRows || '<p class="field-help">보관한 인증서가 없어요.</p>'}<p class="field-help">가져오기·내보내기·하나인증서 발급과 기기·앱 등록 파일 연결은 서버에서 관리해요: <span class="code">fin cert joint import</span>, <span class="code">fin hana onesign …</span>, <span class="code">fin server registration</span>.</p></div></section>` +
-    `<section class="panel"><div class="panel-heading"><h2>웹앱 접속 기기</h2></div><div class="settings-body">${deviceRows}<p class="field-help">새 기기는 서버에서 <span class="code">fin server enroll</span>로 만든 일회성 코드로 등록해요. 기관 세션과는 별개예요.</p></div></section></div>`;
+  const logins = [...state.logins].sort((a, b) => Number(a.disabled) - Number(b.disabled));
+  const credentialRows = state.credentials.map(c => `<div class="setting-row"><span><strong>${esc(c.ref)}</strong><span class="meta">${esc(c.type === 'joint' ? '공동인증서' : '하나인증서 저장소')}${c.type === 'joint' ? ' · ' + esc(String(c.format).toUpperCase()) : ''}${c.fingerprint ? ' · 지문 ' + esc(c.fingerprint.slice(0, 8)) : ''}</span></span>${c.type === 'onesign' ? `<div class="row-actions">${state.vaults[c.ref] ? tag('암호 기억 중') + ui.button('잠그기', `data-action="lock-vault" data-store="${esc(c.ref)}"`) : tag('잠김', 'neutral') + ui.button('잠금 해제', `data-action="unlock-vault" data-store="${esc(c.ref)}"`)}</div>` : ''}</div>`).join('');
+  const deviceRows = devices.devices.map(d => `<div class="setting-row"><span><strong>${esc(d.name)}</strong><span class="meta">등록 ${ui.time(d.created_at)} · 마지막 사용 ${ui.time(d.last_seen_at)}${d.active ? '' : ' · 비활성'}</span></span><div class="row-actions">${d.current ? tag('현재 브라우저') : ''}${d.active ? ui.button(d.current ? '로그아웃' : '접속 해제', `data-action="revoke-device" data-device="${esc(d.id)}" data-current="${d.current}"`) : ''}</div></div>`).join('');
+  return heading('연결·인증서', '기관 로그인과 업무 대상, 프로필을 관리해요.', logins.length ? ui.button('기관 연결 추가', 'data-action="add-login-dialog"', 'primary', 'plus') : '') +
+    `<div class="connection-list">${logins.length ? logins.map(connectionCard).join('') : onboarding()}</div>` +
+    `<section class="section-block"><div class="section-head"><div><h2>업무 프로필</h2><p class="meta">대상을 묶어 개인·사업장·법인별로 보는 이름표예요. 권한이나 명의 확인 근거는 아니에요.</p></div>${ui.button('프로필 추가', 'data-action="new-profile"', 'secondary', 'plus')}</div><div class="profile-grid">${state.profiles.map(profileCard).join('') || '<p class="field-help">프로필이 없어요. 대상을 등록하면 현재 프로필에 자동으로 넣어요.</p>'}</div></section>` +
+    `<details class="advanced-block"><summary><span>인증서 보관함과 접속 기기</span><span class="meta">인증서 ${state.credentials.length} · 기기 ${devices.devices.filter(d => d.active).length}</span>${icon('arrow')}</summary><div class="settings-grid"><section class="panel"><div class="panel-heading"><h2>인증서</h2></div><div class="settings-body">${credentialRows || '<p class="field-help">보관한 인증서가 없어요.</p>'}<p class="field-help">가져오기·내보내기·하나인증서 발급과 기기·앱 등록 파일 연결은 서버에서 관리해요: <span class="code">fin cert joint import</span>, <span class="code">fin hana onesign …</span>, <span class="code">fin server registration</span>.</p></div></section><section class="panel"><div class="panel-heading"><h2>웹앱 접속 기기</h2></div><div class="settings-body">${deviceRows}<p class="field-help">새 기기는 서버에서 <span class="code">fin server enroll</span>로 만든 일회성 코드로 등록해요. 기관 세션과는 별개예요.</p></div></section></div></details>`;
+}
+
+/* Add-login dialog: method and credential options follow the chosen institution. */
+function loginFormBody(institution, method) {
+  const methods = institution === 'hana' ? [['joint_certificate', '공동인증서 (앱 인증 필요)'], ['onesign', '하나인증서']] : [['joint_certificate', '공동인증서']];
+  const chosen = methods.some(([m]) => m === method) ? method : methods[0][0];
+  const kind = chosen === 'onesign' ? 'onesign' : 'joint';
+  const options = state.credentials.filter(c => c.type === kind);
+  const help = options.length ? '' : `<p class="field-help">보관한 ${kind === 'onesign' ? '하나인증서 저장소' : '공동인증서'}가 없어요. 서버에서 <span class="code">${kind === 'onesign' ? 'fin hana onesign init' : 'fin cert joint import'}</span>으로 먼저 보관하세요.</p>`;
+  return `<div class="field"><label for="login-institution">기관</label><select id="login-institution" name="institution" data-change="login-form-change"><option value="hometax" ${institution === 'hometax' ? 'selected' : ''}>홈택스</option><option value="hana" ${institution === 'hana' ? 'selected' : ''}>하나은행</option></select></div>
+    <div class="field"><label for="login-method">로그인 방법</label><select id="login-method" name="method" data-change="login-form-change">${methods.map(([v, l]) => `<option value="${v}" ${v === chosen ? 'selected' : ''}>${l}</option>`).join('')}</select></div>
+    <div class="field"><label for="login-credential">${kind === 'onesign' ? '하나인증서 저장소' : '공동인증서'}</label><select id="login-credential" name="credential" ${options.length ? '' : 'disabled'}>${options.map(c => `<option value="${esc(c.ref)}">${esc(c.ref)}${c.fingerprint ? ' · ' + esc(c.fingerprint.slice(0, 8)) : ''}</option>`).join('')}</select>${help}</div>
+    <div class="field"><label for="login-name">표시 이름</label><input id="login-name" name="name" required maxlength="60" value="${esc(ui.INSTITUTION[institution])} ${institution === 'hana' && chosen === 'onesign' ? '하나인증서' : '개인'}"></div><p class="dialog-note">저장만 하고 기관에는 접속하지 않아요. 명의·사업장은 로그인 후 확인 결과에서 등록해요.</p><div class="login-fields-end"></div>`;
 }
 
 async function coverageView(ctx) {
@@ -564,7 +641,7 @@ export const actions = {
   privacy: () => { state.hidden = !state.hidden; render(); },
   login: async (ctx, button) => {
     const row = login(button.dataset.login);
-    const secrets = await askSecrets(`${row.display_name} 로그인`, loginSecrets(row), row.institution === 'hometax' ? '공동인증서로 홈택스에 로그인해요.' : row.method === 'onesign' ? '하나인증서로 새 로그인 세션을 만들어요.' : '앱 인증과 공동인증서 로그인을 진행해요.');
+    const secrets = await askSecrets(`${row.display_name} 로그인`, loginSecrets(row), row.institution === 'hometax' ? '공동인증서로 홈택스에 로그인해요.' : row.method === 'onesign' ? '하나인증서로 새 로그인 세션을 만들어요.' : '앱 인증과 공동인증서 로그인을 진행해요.', {store: onesignStore(row)});
     if (!secrets) return;
     await runForLogin(ctx, loginJob(row), row, {}, {secrets, onDone: job => { ui.toast(ui.OUTCOME[job.outcome]?.[0] || ''); if (job.local?.stopped) ui.toast(ui.message(job.local.stopped)); return afterModel(ctx); }});
   },
@@ -580,7 +657,7 @@ export const actions = {
     const row = login(button.dataset.login);
     let secrets;
     if (row.method === 'onesign') {
-      secrets = await askSecrets('계좌 조회', [SECRET_LABELS.vault_passphrase]);
+      secrets = await askSecrets('계좌 조회', [SECRET_LABELS.vault_passphrase], '', {store: onesignStore(row)});
       if (!secrets) return;
     }
     await runForLogin(ctx, accountsJobName(row), row, {}, {secrets, onDone: async job => {
@@ -662,7 +739,7 @@ export const actions = {
     if (owner.readiness !== 'ready') { ui.toast('하나인증서로 새로 로그인한 뒤 준비하세요.'); return; }
     const amount = Number(String(data.get('amount')).replace(/\D/g, ''));
     if (!amount) { ui.toast('보낼 금액을 입력하세요.'); return; }
-    const secrets = await askSecrets('이체 준비', [SECRET_LABELS.vault_passphrase, SECRET_LABELS.account_password], '은행의 확인 화면까지 준비해요. 이 단계에서는 이체하지 않아요.');
+    const secrets = await askSecrets('이체 준비', [SECRET_LABELS.vault_passphrase, SECRET_LABELS.account_password], '은행의 확인 화면까지 준비해요. 이 단계에서는 이체하지 않아요.', {store: onesignStore(owner, true)});
     if (!secrets) return;
     await ctx.run('hana.transfer.prepare', {login_id: source.login_id, target_id: source.id, input: {
       recipient_bank_code: data.get('bank'), recipient_account_number: String(data.get('account')).replace(/\s/g, ''), amount_krw: amount}}, {
@@ -671,7 +748,7 @@ export const actions = {
   },
   reconcile: async (ctx, button) => {
     const parent = await api.get('/jobs/' + encodeURIComponent(button.dataset.job));
-    const secrets = await askSecrets('이체 결과 조회', [SECRET_LABELS.vault_passphrase], '같은 이체를 다시 보내지 않고 이체 내역에서 결과를 대조해요.');
+    const secrets = await askSecrets('이체 결과 조회', [SECRET_LABELS.vault_passphrase], '같은 이체를 다시 보내지 않고 이체 내역에서 결과를 대조해요.', {store: onesignStore(login(parent.login_id), true)});
     if (!secrets) return;
     await ctx.run('hana.transfer.reconcile', {login_id: parent.login_id, target_id: parent.target_id, parent_job_id: parent.id}, {
       panel: 'job-panel', secrets, onDone: job => {
@@ -702,15 +779,60 @@ export const actions = {
     const local = item.status === 'local_only';
     ui.showDialog(item.title, `<div class="summary-lines"><div class="summary-line"><span>제공 위치</span><strong>${esc(item.placement_label)}</strong></div><div class="summary-line"><span>상태</span><strong>${esc(item.status)}</strong></div>${item.jobs.map(j => `<div class="summary-line"><span>${esc(j.title)}</span><strong>${esc(j.status)}${j.requires_confirmation ? ' · 확인 필요' : ''}${j.requires_input.length ? ' · 입력: ' + esc(j.requires_input.join(', ')) : ''}</strong></div>`).join('')}</div><p class="dialog-note">${local ? 'CLI나 로컬 라이브러리에는 있지만 원격 실행 경로가 없는 서버 관리 기능이에요.' : '사용 가능 표시는 현재 로그인이나 대상 확인을 보장하지 않아요.'}</p>${ui.verification(item.verification)}<div class="dialog-actions"><button class="button primary" data-ui="close">닫기</button></div>`);
   },
+  'add-login-dialog': () => {
+    ui.showDialog('기관 연결 추가', `<form data-submit="add-login" autocomplete="off"><div class="login-fields">${loginFormBody('hometax', 'joint_certificate')}</div><div class="dialog-actions"><button type="button" class="button secondary" data-ui="close">취소</button><button class="button primary" type="submit">추가</button></div></form>`);
+  },
+  'login-form-change': (ctx, select) => {
+    const form = select.closest('form');
+    const data = new FormData(form);
+    form.querySelector('.login-fields').innerHTML = loginFormBody(data.get('institution'), data.get('method'));
+  },
   'add-login': async (ctx, form) => {
     const data = Object.fromEntries(new FormData(form).entries());
-    try { await api.post('/logins', {institution: data.institution, method: data.method, name: data.name, credential: data.credential}); form.reset(); ui.toast('로그인을 추가했어요. 기관에는 접속하지 않았어요.'); await afterModel(ctx); }
+    if (!data.credential) { ui.toast('먼저 서버에 인증서를 보관하세요.'); return; }
+    try { await api.post('/logins', {institution: data.institution, method: data.method, name: data.name, credential: data.credential}); ui.closeDialog(); ui.toast('연결을 추가했어요. 기관에는 접속하지 않았어요.'); await afterModel(ctx); }
     catch (error) { ui.toast(ui.message(error.code)); }
   },
-  'login-institution': () => {},
+  'login-menu': (ctx, button) => {
+    const row = login(button.dataset.login);
+    const hometax = row.institution === 'hometax';
+    const onesign = row.method === 'onesign';
+    const items = [];
+    const item = (run, label, hint = '', tone = '') => items.push(`<button type="button" class="${tone}" data-action="menu-run" data-run="${run}" data-login="${esc(row.id)}"><span>${esc(label)}</span>${hint ? `<small>${esc(hint)}</small>` : ''}</button>`);
+    if (!row.disabled) {
+      item('login', row.readiness === 'ready' ? '다시 로그인' : '로그인', onesign ? '새 세션을 만들어요' : '');
+      if (hometax) { item('session-check', '세션 확인', '저장된 세션이 아직 유효한지 확인해요'); item('discover', '사용자·사업장 확인', '대상을 추가로 등록해요'); }
+      if (row.institution === 'hana') item('accounts-query', '계좌 조회·등록', '대상을 추가로 등록해요');
+      if (row.institution === 'hana' && !onesign) item('extend', '로그인 연장');
+      if (hometax) item('signing', '계산서 발급 인증서');
+      if (onesign) item('signing', '이체 서명 수단');
+    }
+    item('sessions', '세션 기록');
+    item('rename-login', '이름 변경');
+    item('toggle-login', row.disabled ? '다시 사용' : '사용 중지', row.disabled ? '' : '새 작업을 막고 기록은 남겨요', row.disabled ? '' : 'danger');
+    ui.showDialog(row.display_name, `<p class="meta">${esc(ui.INSTITUTION[row.institution])} · ${esc(ui.METHOD[row.method])}</p><div class="menu-list">${items.join('')}</div>`);
+  },
+  'target-menu': (ctx, button) => {
+    const item = target(button.dataset.target);
+    const attrs = `data-action="menu-run" data-target="${esc(item.id)}"`;
+    ui.showDialog(item.display_name, `<p class="meta">${esc(ui.KIND[item.kind] || item.kind)} · ${esc(login(item.login_id)?.display_name)}</p><div class="menu-list"><button type="button" ${attrs} data-run="rename-target"><span>이름 변경</span></button>${item.kind === 'business' ? `<button type="button" ${attrs} data-run="target-signing"><span>사업장 발급용 인증서</span><small>${esc(item.signing?.invoice_sign?.ref || '로그인 기본값')}</small></button>` : ''}<button type="button" class="${item.disabled ? '' : 'danger'}" ${attrs} data-run="toggle-target"><span>${item.disabled ? '다시 사용' : '사용 중지'}</span></button></div>`);
+  },
+  'menu-run': (ctx, button) => { ui.closeDialog(); return actions[button.dataset.run](ctx, button); },
+  'rename-login': (ctx, button) => {
+    const row = login(button.dataset.login);
+    ui.showDialog('연결 이름', `<form data-submit="save-login-name" data-login="${esc(row.id)}"><div class="field"><label for="login-rename">표시 이름</label><input id="login-rename" name="name" value="${esc(row.display_name)}" required maxlength="60"></div><p class="dialog-note">이름은 표시용이에요. 실행 설정은 바뀌지 않아요.</p><div class="dialog-actions"><button type="button" class="button secondary" data-ui="close">취소</button><button class="button primary" type="submit">저장</button></div></form>`);
+  },
+  'save-login-name': async (ctx, form) => {
+    const row = login(form.dataset.login);
+    try { await api.patch('/logins/' + encodeURIComponent(row.id), {expected_revision: row.revision, name: new FormData(form).get('name')}); ui.closeDialog(); await afterModel(ctx); }
+    catch (error) { ui.toast(ui.message(error.code)); }
+  },
+  'new-profile': () => {
+    ui.showDialog('프로필 추가', `<form data-submit="add-profile"><div class="field"><label for="profile-new-name">이름</label><input id="profile-new-name" name="name" required maxlength="60" placeholder="예: A스튜디오"></div><div class="field"><label for="profile-new-kind">유형</label><select id="profile-new-kind" name="kind"><option value="">미설정</option><option value="personal">개인</option><option value="sole_proprietor">개인사업자</option><option value="corporation">법인</option></select></div>${state.targets.length ? `<div class="field"><label>대상</label><div class="check-list">${state.targets.map(t => `<label><input type="checkbox" name="targets" value="${esc(t.id)}"> ${esc(t.display_name)} <span class="meta">${esc(ui.KIND[t.kind] || t.kind)} · ${esc(login(t.login_id)?.display_name)}</span></label>`).join('')}</div></div>` : ''}<p class="dialog-note">이름·유형은 표시용이며 권한이나 명의 확인 근거가 아니에요.</p><div class="dialog-actions"><button type="button" class="button secondary" data-ui="close">취소</button><button class="button primary" type="submit">추가</button></div></form>`);
+  },
   'add-profile': async (ctx, form) => {
-    const data = Object.fromEntries(new FormData(form).entries());
-    try { await api.post('/profiles', {name: data.name, kind: data.kind || null, target_ids: []}); form.reset(); await afterModel(ctx); }
+    const data = new FormData(form);
+    try { await api.post('/profiles', {name: data.get('name'), kind: data.get('kind') || null, target_ids: data.getAll('targets')}); ui.closeDialog(); await afterModel(ctx); }
     catch (error) { ui.toast(ui.message(error.code)); }
   },
   'edit-profile': (ctx, button) => {
@@ -770,6 +892,21 @@ export const actions = {
     const value = await api.get(`/logins/${encodeURIComponent(button.dataset.login)}/sessions`);
     const labels = {usable: '사용 가능', consumed: '사용함·대체됨', expired: '만료', stale: '재확인 필요'};
     ui.showDialog('세션 기록', `<p class="dialog-note">저장된 성공 기록만으로 현재 유효성을 보장하지 않아요. 마지막 확인 시각을 함께 보세요.</p><div class="settings-body">${value.sessions.map(s => `<div class="setting-row"><span>${ui.time(s.created_at)}${s.id === value.current_session_id ? ' · 현재' : ''}<span class="meta">확인 ${ui.time(s.checked_at)}${s.note ? ' · ' + esc(s.note) : ''}</span></span>${tag(labels[s.state] || s.state, s.state === 'usable' ? '' : 'neutral')}</div>`).join('') || '<p class="field-help">세션이 없어요.</p>'}</div><div class="dialog-actions"><button class="button primary" data-ui="close">닫기</button></div>`);
+  },
+  'unlock-vault': async (ctx, button) => {
+    const store = button.dataset.store;
+    ui.showDialog('하나인증서 저장소 잠금 해제', `<form data-submit="save-unlock" data-store="${esc(store)}" autocomplete="off"><p class="dialog-note">입력한 저장소 암호는 서버를 끌 때까지 서버 메모리에만 기억하고 디스크에는 저장하지 않아요. 그동안 이 저장소를 쓰는 로그인·조회·이체에서 저장소 암호를 묻지 않아요.</p><div class="field"><label for="unlock-passphrase">저장소 암호</label><input id="unlock-passphrase" name="passphrase" type="password" required autocomplete="off"></div><p class="form-error" id="unlock-error" role="alert"></p><div class="dialog-actions"><button type="button" class="button secondary" data-ui="close">취소</button><button class="button primary" type="submit">잠금 해제</button></div></form>`);
+  },
+  'save-unlock': async (ctx, form) => {
+    const passphrase = new FormData(form).get('passphrase');
+    try {
+      await api.post(`/vaults/${encodeURIComponent(form.dataset.store)}/unlock`, {passphrase});
+      form.reset(); ui.closeDialog(); ui.toast('서버를 끌 때까지 저장소 암호를 기억해요.'); await afterModel(ctx);
+    } catch (error) { document.querySelector('#unlock-error').textContent = ui.message(error.code); }
+  },
+  'lock-vault': async (ctx, button) => {
+    try { await api.post(`/vaults/${encodeURIComponent(button.dataset.store)}/lock`); ui.toast('저장소 암호를 서버 메모리에서 지웠어요.'); await afterModel(ctx); }
+    catch (error) { ui.toast(ui.message(error.code)); }
   },
   'revoke-device': async (ctx, button) => {
     try {
