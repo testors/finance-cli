@@ -151,12 +151,13 @@ def dispatch(args):
         from .onesign_cli import dispatch as run
         return run(args)
     if args.operation == 'plan':
+        from finance_cli.core.live_verification import hana_report
         result = protocol.auth_plan()
         result['migration'] = {'network_execution': False, 'shared_credentials': True,
             'remaining': ['cloud certificate download', 'exceptional enrollment branches',
                           'financial certificate issuance', 'OTP and limit changes'],
             'onesign': 'setup → init/enroll or activate → new-session/login → transfer',
-            'live_tested': False}
+            'live_tested': False, 'live_verification': hana_report()}
         return result
     if args.operation == 'decode-header':
         return protocol.decode_header(sys.stdin.read())

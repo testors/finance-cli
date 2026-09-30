@@ -13,6 +13,7 @@ def output(value):
 
 
 def capabilities():
+    from finance_cli.core.live_verification import HANA_LEVEL, REVIEWED_ON, hana_report
     return {'schema_version': 1, 'services': {
         'hana': {'offline': ['protocol', 'shared-certificate-login-signature', 'onesign-vault-bundle',
                             'user-package-settings-extraction', 'onesign-identity-initialization', 'onesign-identity-removal', 'onesign-identity-rename'],
@@ -24,7 +25,7 @@ def capabilities():
                                   'server-approved authentication branch for transfers'],
                  'not_included': ['cloud certificate download', 'exceptional enrollment branches',
                                   'financial certificate issuance', 'OTP and limit changes'],
-                 'live_tested': False},
+                 'live_tested': False, 'verification': HANA_LEVEL, 'live_verification': hana_report()},
         'hometax': {'offline': ['auth-replay', 'certificate-prepare'],
                     'live': ['certificate-login', 'session', 'account', 'business', 'tax-query',
                              'returns', 'report', 'invoice'],
@@ -41,7 +42,9 @@ def capabilities():
                           'onesign-staged-issuance', 'onesign-shared-session-queries', 'onesign-security-inquiry'],
                 'server_managed': ['certificate-export', 'onesign-settings-and-bundle-transfer', 'runtime-install',
                                    'device-registration-files'],
-                'binding': 'loopback', 'remote_access': 'https reverse proxy', 'live_tested': False},
+                'binding': 'loopback', 'remote_access': 'https reverse proxy', 'live_tested': False,
+                'verification': HANA_LEVEL, 'verification_scope': 'hana-onesign',
+                'verification_reviewed_at': REVIEWED_ON},
         'network_used': False}
 
 

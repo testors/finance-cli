@@ -5,6 +5,7 @@ server-managed local tool, or as planned. ``available`` never promises a live
 login or a verified target; the server re-checks readiness when a job runs.
 """
 from . import adapters, model
+from finance_cli.core.live_verification import HANA_FEATURE_NOTES, REVIEWED_ON, combined_level, hana_job
 
 FEATURES = (
     # area, id, title, placement, jobs
@@ -61,7 +62,7 @@ def verification_levels():
     """Live verification flags from ``fin capabilities``, kept separate from availability."""
     from finance_cli.cli.main import capabilities
     services = capabilities()['services']
-    return {'hana': 'live_verified' if services['hana'].get('live_tested') else 'live_untested',
+    return {'hana': services['hana']['verification'],
             'hometax': 'live_verified' if services['hometax'].get('migration_live_tested') else 'live_untested',
             'giro': 'offline'}
 
@@ -109,12 +110,19 @@ def feature_state(feature, levels, cache):
             reasons = setup_reasons(adapter.service, adapter.name) if adapter.name.startswith('hometax.invoice') \
                 else cache[adapter.service]
             row['jobs'].append({**adapter.describe(), 'status': 'setup_required' if reasons else 'available',
-                                'reasons': reasons, 'verification': levels.get(adapter.service)})
+                                'reasons': reasons, **(hana_job(adapter.name) if adapter.service == 'hana'
+                                                      else {'verification': levels.get(adapter.service)})})
             if reasons:
                 row['status'] = 'setup_required'
                 row['reasons'] = sorted(set(row['reasons']) | set(reasons))
     service = next((r.service for r in registered if r), {'banking': 'hana', 'tax': 'hometax', 'giro': 'giro'}.get(area))
     row['verification'] = levels.get(service)
+    if service == 'hana':
+        row['verification'] = (None if placement == 'planned' else 'offline' if placement == 'local' else
+                               combined_level(j['verification'] for j in row['jobs']))
+        if feature_id in HANA_FEATURE_NOTES:
+            row['verification_note'] = HANA_FEATURE_NOTES[feature_id]
+            row['verification_reviewed_at'] = REVIEWED_ON
     row['service'] = service
     return row
 
@@ -123,6 +131,7 @@ def global_capabilities():
     levels = verification_levels()
     cache = {}
     return {'features': [feature_state(f, levels, cache) for f in FEATURES], 'verification': levels,
+            'verification_reviewed_at': REVIEWED_ON,
             'jobs': adapters.names(), 'states': ['available', 'setup_required', 'planned', 'local_only'],
             'readiness': ['ready', 'query_only', 'login_required', 'input_required', 'target_unverified']}
 

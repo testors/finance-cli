@@ -1,0 +1,63 @@
+"""Reviewed capability evidence, not runtime financial data or a success predictor.
+
+The 2026-09-30–2026-10-01 web job review kept institution verdicts separate
+from local completion. CLI command names/exit codes alone are not evidence.
+Only supported paths actually observed are marked; no receipts or identifiers
+are distributed. See docs/banking-verification.md for scope and limitations.
+"""
+
+REVIEWED_ON = '2026-10-01'
+HANA_LEVEL = 'live_partial'
+PREFLIGHT_NOTE = '하나인증서 조회 성공 확인. 재로그인 후 계좌 자동 확인은 합성 검증 완료, 실사용 재확인 전.'
+TRANSFER_NOTE = '은행의 이체 실행 성공 응답 확인. 연결된 결과 상세도 조회했으나 최종 이체 확정은 미확인.'
+
+HANA_JOBS = {
+    'hana.onesign.login': ('live_verified', '하나인증서 서명 로그인 성공 확인.'),
+    'hana.onesign.accounts': ('live_verified', '하나인증서 로그인으로 계좌 목록·잔액 응답 확인.'),
+    'hana.onesign.history.list': ('live_partial', PREFLIGHT_NOTE),
+    'hana.onesign.history.detail': ('live_verified', '하나인증서 거래 내역의 은행 상세 응답 확인. 상세 유형 전체를 검증한 것은 아님.'),
+    'hana.onesign.inquiry.history': ('live_partial', PREFLIGHT_NOTE),
+    'hana.onesign.security.query': ('live_partial', '하나인증서 이체한도 조회 성공 확인. 한도 예외·보안매체·OTP 세부 조회는 미확인.'),
+    'hana.transfer.prepare': ('live_partial', TRANSFER_NOTE),
+    'hana.transfer.reconcile': ('live_partial', '계좌·금액과 연결된 상세 후보 확인. 최종 이체 확정은 미확인.'),
+}
+for _stage in ('authenticate', 'request-sms', 'verify-sms', 'begin-id', 'identity', 'list-accounts', 'account',
+               'issue', 'complete'):
+    HANA_JOBS['hana.onesign.issue.' + _stage] = (
+        'live_verified', '신규 발급의 해당 단계 성공 확인. 관찰한 발급 경로 기준이며 모든 인증 분기를 뜻하지 않음.')
+for _stage in ('init', 'inspect', 'profile', 'consent', 'prepare-id'):
+    HANA_JOBS['hana.onesign.issue.' + _stage] = ('offline', '기관 요청 없는 로컬 발급 준비·상태 확인 단계.')
+
+HANA_FEATURE_NOTES = {
+    'hana-accounts': '하나인증서 계좌·잔액 조회 성공 확인. 공동인증서 경로는 최근 기록에서 미확인.',
+    'hana-history': '하나인증서 목록·은행 상세 조회 성공 확인. 다음 페이지·JSON/CSV 저장·공동인증서 경로와 재로그인 후 계좌 자동 확인은 실사용 미확인.',
+    'hana-inquiry': '하나인증서 이체 내역 목록 성공 확인. 상세·공동인증서 경로와 재로그인 후 계좌 자동 확인은 실사용 미확인.',
+    'hana-transfer': TRANSFER_NOTE,
+    'hana-security': '하나인증서 이체한도 조회 성공 확인. 공동인증서·한도 예외·보안매체·OTP 세부 조회는 실사용 미확인.',
+    'hana-login': '하나인증서 서명 로그인 성공 확인. 공동인증서 경로는 최근 기록에서 미확인.',
+    'hana-extend': '최근 기록에서 로그인 연장의 은행 수락을 확인하지 못함.',
+    'hana-issuance': 'SMS·신분증·본인계좌 확인부터 인증서 발급·완료까지 성공 확인. 신분증 종류별·예외 인증 분기는 별도 확인 필요.',
+}
+
+
+def hana_job(name):
+    level, note = HANA_JOBS.get(name, ('live_untested', '최근 이용 기록에 기관 성공 판정의 근거가 없음. 합성 검증 범위는 유지.'))
+    return {'verification': level, 'verification_note': note, 'verification_reviewed_at': REVIEWED_ON}
+
+
+def combined_level(levels):
+    remote = set(levels) - {None, 'offline'}
+    if not remote:
+        return 'offline'
+    return next(iter(remote)) if len(remote) == 1 else 'live_partial'
+
+
+def hana_report():
+    return {'reviewed_at': REVIEWED_ON, 'period': ['2026-09-30', '2026-10-01'],
+            'source': 'reviewed_web_job_verdicts', 'verification': HANA_LEVEL,
+            'live_tested_scope': 'all_supported_remote_paths',
+            'jobs': {name: hana_job(name) for name in HANA_JOBS},
+            'unverified': ['joint-certificate-paths', 'login-extension', 'history-next-page-and-export',
+                           'transfer-history-detail', 'security-queries-other-than-onesign-limits',
+                           'final-transfer-confirmation', 'fresh-session-account-preflight',
+                           'all-issuance-and-transfer-authentication-branches']}

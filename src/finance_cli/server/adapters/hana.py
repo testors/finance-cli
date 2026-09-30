@@ -75,8 +75,12 @@ class HanaAdapter(Adapter):
     service = 'hana'
     area = 'banking'
     capability = 'hana'
-    verification = 'live_untested'
     methods = ('joint_certificate',)
+
+    @property
+    def verification(self):
+        from finance_cli.core.live_verification import hana_job
+        return hana_job(self.name)['verification']
 
     def ready(self, login):
         if login['method'] not in self.methods:

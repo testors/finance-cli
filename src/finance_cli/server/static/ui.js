@@ -95,7 +95,8 @@ export const STATUS = {queued: ['대기 중', 'neutral'], running: ['실행 중'
   finished: ['완료', ''], cancelled: ['취소됨', 'neutral'], expired: ['만료됨', 'neutral']};
 export const OUTCOME = {not_started: ['시작 안 함', 'neutral'], success: ['성공', ''], partial_success: ['부분 성공', 'warning'],
   rejected: ['기관 거절', 'danger'], unknown: ['결과 미확인', 'warning']};
-export const VERIFICATION = {live_untested: ['실서버 미검증', 'untested'], live_verified: ['실서버 검증', ''], offline: ['오프라인 처리', 'neutral']};
+export const VERIFICATION = {live_untested: ['실서버 미검증', 'untested'], live_verified: ['실사용 확인', ''],
+  live_partial: ['일부 실사용 확인', 'warning'], offline: ['오프라인 처리', 'neutral']};
 export const ORIGIN = {web: '웹', cli: 'CLI', agent: '에이전트'};
 
 export function statusTags(job) {

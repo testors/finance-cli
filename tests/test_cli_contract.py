@@ -59,6 +59,22 @@ class CliContractTests(unittest.TestCase):
         self.assertEqual(value['result']['branch'], 'no_action')
         self.assertNotIn('success', value)
 
+    def test_capabilities_and_hana_plan_share_scoped_live_review(self):
+        code, value, _ = self.result(['capabilities'])
+        self.assertEqual(code, 0)
+        capabilities = value['result']
+        report = capabilities['services']['hana']['live_verification']
+        self.assertEqual(report['verification'], 'live_partial')
+        self.assertEqual(report['source'], 'reviewed_web_job_verdicts')
+        code, plan, _ = self.result(['hana', 'plan'])
+        self.assertEqual(code, 0)
+        self.assertEqual(plan['result']['migration']['live_verification'], report)
+        code, legacy, _ = self.result(['capabilities'], versioned=False)
+        self.assertEqual(legacy, capabilities)
+        self.assertFalse(capabilities['network_used'])
+        self.assertFalse(capabilities['services']['hometax']['migration_live_tested'])
+        self.assertFalse(self.home.exists())
+
     def test_service_success_survives_local_failure_and_reconciliation(self):
         original = {'accepted': True, 'processing_status': 'stopped',
                     'execution_result': {'original_result_success': True},
