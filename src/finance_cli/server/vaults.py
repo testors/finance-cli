@@ -43,6 +43,11 @@ class Vaults:
         with self._lock:
             self._items.pop(name, None)
 
+    def rename(self, name, new_name):
+        with self._lock:
+            if name in self._items:
+                self._items[new_name] = self._items.pop(name)
+
     def get(self, name):
         with self._lock:
             return self._items.get(name)

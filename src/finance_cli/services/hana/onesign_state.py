@@ -1,6 +1,7 @@
 """Passphrase-encrypted OneSign state and request receipts, with an outer lock."""
 from contextlib import contextmanager
 import copy
+import os
 import secrets
 import shutil
 
@@ -22,6 +23,24 @@ def remove_identity(name):
     with storage.lock(directory / 'operation.lock'):
         shutil.rmtree(directory)
     return {'name': name, 'removed': True, 'network_used': False}
+
+
+def rename_identity(name, new_name):
+    """Rename one identity store's directory under its operation lock. The sealed state
+    does not depend on the directory name and nothing is decrypted."""
+    base = store.root('identities')
+    source, target = base / store.name(name), base / store.name(new_name)
+    storage.no_symlinks(source)
+    storage.no_symlinks(target)
+    if name == new_name:
+        raise ValueError('credential_name_unchanged')
+    if not source.is_dir():
+        raise ValueError('onesign_identity_not_found')
+    if target.exists():
+        raise ValueError('credential_name_exists')
+    with storage.lock(source / 'operation.lock'):
+        os.rename(source, target)
+    return {'name': new_name, 'previous_name': name, 'renamed': True, 'network_used': False}
 
 
 class State:

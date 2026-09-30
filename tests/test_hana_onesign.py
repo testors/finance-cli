@@ -499,6 +499,23 @@ class FlowTests(unittest.TestCase):
         with self.assertRaisesRegex(ValueError,'not_found'):
             remove_identity('spare')
 
+    def test_identity_rename_keeps_the_sealed_store_and_needs_its_lock(self):
+        from finance_cli.services.hana.onesign_state import rename_identity
+        from finance_cli.services.hana import store
+        with State('spare',PASSWORD,copy.deepcopy(self.template)):
+            pass
+        with self.assertRaises(OSError):  # 'synthetic' is open in setUp: its operation lock is held.
+            rename_identity('synthetic','moved')
+        with self.assertRaisesRegex(ValueError,'credential_name_exists'):
+            rename_identity('spare','synthetic')
+        out=io.StringIO()
+        with redirect_stdout(out):
+            code=main(['hana','onesign','rename','--name','spare','--new-name','spare2'])
+        self.assertEqual((code,json.loads(out.getvalue())['renamed']),(0,True))
+        self.assertFalse((store.root('identities')/'spare').exists())
+        with State('spare2',PASSWORD) as reopened:  # Same passphrase and contents under the new name.
+            self.assertEqual(reopened.snapshot()['profile']['device_id'],self.template['profile']['device_id'])
+
 
 class PlanTests(unittest.TestCase):
     def test_plan_never_opens_state_prompts_or_connects(self):

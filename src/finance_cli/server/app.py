@@ -26,11 +26,13 @@ from .dispatch import Dispatcher, start_with_secrets
 
 API = '/api/v1'
 JSON_LIMIT = 256 * 1024
+CERTIFICATE_JOB_LIMIT = 12 * 1024 * 1024 + JSON_LIMIT
 UPLOAD_LIMIT = 2 * 1024 * 1024 + 1024
 CODE = re.compile(r'[a-z][a-z0-9_]{1,63}(:[a-z0-9_,]{1,120})?')
 STATIC = {'index.html': 'text/html; charset=utf-8', 'app.css': 'text/css; charset=utf-8',
           'app.js': 'text/javascript; charset=utf-8', 'views.js': 'text/javascript; charset=utf-8',
-          'api.js': 'text/javascript; charset=utf-8', 'ui.js': 'text/javascript; charset=utf-8'}
+          'api.js': 'text/javascript; charset=utf-8', 'ui.js': 'text/javascript; charset=utf-8',
+          'certificates.js': 'text/javascript; charset=utf-8'}
 PUBLIC_API = {(f'{API}/auth/state', 'GET'), (f'{API}/auth/enroll', 'POST')}
 APP_CSP = ("default-src 'none'; script-src 'self'; style-src 'self'; img-src 'self' data:; connect-src 'self'; "
            "frame-src 'self'; base-uri 'none'; form-action 'self'; frame-ancestors 'none'")
@@ -98,7 +100,8 @@ def create_app(config, *, db=None, dispatcher=True, vaults=None):
             return error(421, 'host_not_allowed')
         path, method = request.url.path, request.method
         length = request.headers.get('content-length')
-        limit = UPLOAD_LIMIT if path == f'{API}/uploads' else JSON_LIMIT
+        limit = UPLOAD_LIMIT if path == f'{API}/uploads' else \
+            CERTIFICATE_JOB_LIMIT if path == f'{API}/jobs' and method == 'POST' else JSON_LIMIT
         if length is not None and (not length.isdigit() or int(length) > limit):
             return error(413, 'request_too_large')
         if request.headers.get('transfer-encoding'):
@@ -228,6 +231,29 @@ def create_app(config, *, db=None, dispatcher=True, vaults=None):
         with db.read() as con:
             return run(capabilities.profile_capabilities, con, profile_id)
 
+    @app.get(API + '/certificates/options')
+    def certificate_options():
+        from finance_cli.services.hana import onesign_setup, onesign_signup_protocol as signup, store
+        from .adapters.certificates import terms_digest
+        from finance_cli.core import storage
+        configured = []
+        directory = store.root('settings')
+        storage.no_symlinks(directory)
+        if directory.is_dir():
+            for path in sorted(directory.glob('*.json')):
+                try:
+                    value = onesign_setup.load(path.stem)
+                    if 'service_profile' in value:
+                        configured.append({'name': path.stem, 'version': value['version']})
+                except (ValueError, OSError, KeyError, TypeError, AttributeError):
+                    continue
+        return {'joint': {'issuance': False, 'import': ['npki', 'pfx']},
+                'financial': {'issuance': False, 'remote_management': False},
+                'hana': {'issuance': True, 'settings': configured, 'verification': 'live_untested',
+                         'carriers': [{'code': code, 'name': label, 'terms': signup.sms_terms(code),
+                                       'terms_digest': terms_digest(signup.sms_terms(code))}
+                                      for code, label in signup.CARRIERS.items()]}, 'network_used': False}
+
     @app.get(API + '/credentials')
     def get_credentials():
         rows = run(model.credentials)
@@ -236,6 +262,72 @@ def create_app(config, *, db=None, dispatcher=True, vaults=None):
                 # Display information only; removal and renaming stay with the server's local CLI.
                 row['in_use'] = credential_refs.scan_database(con, row['type'], row['ref'])
         return {'credentials': rows}
+
+    @app.post(API + '/credentials/{kind}/{ref}/remove')
+    async def remove_credential(kind: str, ref: str, request: Request):
+        """Delete one stored credential that nothing references; the name must be typed to confirm."""
+        value = await body(request)
+        if set(value) - {'confirm'}:
+            raise ApiError(400, 'input_fields_not_accepted')
+        if kind not in ('joint', 'onesign'):
+            raise ApiError(404, 'not_found')
+        if value.get('confirm') != ref:
+            raise ApiError(400, 'removal_confirmation_mismatch')
+
+        def remove():
+            credential_refs.guard(kind, ref)
+            if kind == 'joint':
+                from finance_cli.credentials.registry import Registry
+                return Registry().remove(ref)
+            from finance_cli.services.hana.onesign_state import remove_identity
+            result = remove_identity(ref)
+            vaults.lock(ref)  # Nothing to unlock any more.
+            return result
+        try:
+            result = await run_in_threadpool(remove)
+        except credential_refs.CredentialInUse as exc:
+            return JSONResponse({'error': 'credential_in_use', 'references': exc.references}, status_code=409,
+                                headers={'Cache-Control': 'no-store'})
+        except BlockingIOError:
+            raise ApiError(409, 'resource_busy') from None
+        except ValueError as exc:
+            raise ApiError(404 if str(exc).endswith('not_found') else 400, code_of(exc)) from None
+        return {'removed': True, 'type': kind, 'ref': ref, 'network_used': False,
+                'blob_removed': result.get('blob_removed') if kind == 'joint' else None}
+
+    @app.post(API + '/credentials/{kind}/{ref}/rename')
+    async def rename_credential(kind: str, ref: str, request: Request):
+        """Rename one stored credential that nothing references; the key material is untouched."""
+        value = await body(request)
+        if set(value) - {'new_name'}:
+            raise ApiError(400, 'input_fields_not_accepted')
+        if kind not in ('joint', 'onesign'):
+            raise ApiError(404, 'not_found')
+        new_name = value.get('new_name')
+        if not isinstance(new_name, str):
+            raise ApiError(400, 'invalid_name')
+
+        def rename():
+            credential_refs.guard(kind, ref)
+            if kind == 'joint':
+                from finance_cli.credentials.registry import Registry
+                return Registry().rename(ref, new_name)
+            from finance_cli.services.hana.onesign_state import rename_identity
+            result = rename_identity(ref, new_name)
+            vaults.rename(ref, new_name)
+            return result
+        try:
+            result = await run_in_threadpool(rename)
+        except credential_refs.CredentialInUse as exc:
+            return JSONResponse({'error': 'credential_in_use', 'references': exc.references}, status_code=409,
+                                headers={'Cache-Control': 'no-store'})
+        except BlockingIOError:
+            raise ApiError(409, 'resource_busy') from None
+        except ValueError as exc:
+            code = code_of(exc)
+            raise ApiError(404 if code.endswith('not_found') else 409 if code == 'credential_name_exists' else 400,
+                           code) from None
+        return {'renamed': True, 'type': kind, 'ref': result['name'], 'previous_ref': ref, 'network_used': False}
 
     @app.get(API + '/logins')
     def get_logins():
@@ -269,6 +361,25 @@ def create_app(config, *, db=None, dispatcher=True, vaults=None):
             raise ApiError(400, 'registration_is_server_managed')
         with db.write() as con:
             return run(model.update_login, con, login_id, **value)
+
+    @app.post(API + '/logins/{login_id}/remove')
+    async def remove_login(login_id: str, request: Request):
+        value = await body(request)
+        if set(value) - {'expected_revision'}:
+            raise ApiError(400, 'input_fields_not_accepted')
+        with db.write() as con:
+            result = run(model.remove_login, con, login_id, expected_revision=value.get('expected_revision'))
+        files = result.pop('_files')
+        removed, failed = 0, 0
+        for relative in files:
+            try:
+                remove_private(relative)
+                removed += 1
+            except OSError:
+                failed += 1  # The connection is gone; a leftover private file is reported, not fatal.
+        from .registration import remove as remove_registration
+        remove_registration(login_id)
+        return {**result, 'session_files_removed': removed, 'session_files_not_removed': failed}
 
     @app.get(API + '/logins/{login_id}/auth-options')
     def get_auth_options(login_id: str):
@@ -334,10 +445,10 @@ def create_app(config, *, db=None, dispatcher=True, vaults=None):
 
     # Jobs -------------------------------------------------------------------
 
-    def secrets_of(value, needed, vault=None):
+    def secrets_of(value, needed, vault=None, limits=None):
         provided = value.get('secrets') or {}
         if not isinstance(provided, dict) or set(provided) - set(needed) \
-                or not all(isinstance(v, str) and 0 < len(v) <= 1024 for v in provided.values()):
+                or not all(isinstance(v, str) and 0 < len(v) <= (limits or {}).get(k, 1024) for k, v in provided.items()):
             raise ApiError(400, 'step_secrets_required' if needed else 'secrets_not_accepted')
         provided = dict(provided)
         remembered = vaults.get(vault) if vault and 'vault_passphrase' in needed else None
@@ -386,18 +497,20 @@ def create_app(config, *, db=None, dispatcher=True, vaults=None):
 
     @app.post(API + '/jobs')
     async def post_job(request: Request):
-        value = await body(request)
+        value = await body(request, CERTIFICATE_JOB_LIMIT)
         if set(value) - {'name', 'login_id', 'target_id', 'profile_id', 'input', 'secrets', 'idempotency_key',
                          'parent_job_id'}:
             raise ApiError(400, 'input_fields_not_accepted')
         adapter = jobs.registry.get(value.get('name'))
         if adapter is None:
             raise ApiError(404, 'job_name_not_registered')
+        if len(await request.body()) > JSON_LIMIT and not getattr(adapter, 'secret_limits', None):
+            raise ApiError(413, 'request_too_large')
         needed = adapter.steps[adapter.first_step].secrets
         with db.read() as con:
             store = onesign_store(con, value.get('login_id'), target_id=value.get('target_id'),
                                   parent_job_id=value.get('parent_job_id'), transfer=adapter.purpose == 'transfer_sign')
-        provided = secrets_of(value, needed, store)
+        provided = secrets_of(value, needed, store, getattr(adapter, 'secret_limits', None))
         job, created = run(jobs.submit, db, name=value['name'], origin=origin(request), login_id=value.get('login_id'),
                            target_id=value.get('target_id'), profile_id=value.get('profile_id'),
                            input=value.get('input'), idempotency_key=value.get('idempotency_key'),
@@ -499,6 +612,24 @@ def create_app(config, *, db=None, dispatcher=True, vaults=None):
         return Response(data, media_type=row['media_type'], headers=headers)
 
     return app
+
+
+def remove_private(relative):
+    """Delete one session file or web-created session directory inside the private stores."""
+    import shutil
+    from finance_cli.core import storage
+    from finance_cli.core.paths import data_home
+    base = data_home().absolute()
+    path = storage.no_symlinks(base / relative)
+    allowed = (base / 'server' / 'sessions', base / 'hana' / 'sessions', base / 'server' / 'jobs')
+    if not any(path.is_relative_to(root) and path != root for root in allowed):
+        raise OSError('outside_session_store')
+    if path.is_relative_to(base / 'server' / 'jobs') and (path.is_dir() or path.name != 'result.json'):
+        raise OSError('only_session_copies_in_job_records')
+    if path.is_dir():
+        shutil.rmtree(path)
+    elif path.exists():
+        path.unlink()
 
 
 def quote_name(name):

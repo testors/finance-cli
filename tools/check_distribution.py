@@ -81,11 +81,11 @@ async def request(path, method='GET'):
     await app(scope, receive, send)
     return messages[0]['status'], b''.join(m.get('body', b'') for m in messages[1:])
 web = {}
-for path in ('/', '/static/app.js', '/static/views.js', '/static/app.css', '/api/v1/auth/state', '/api/v1/capabilities'):
+for path in ('/', '/static/app.js', '/static/views.js', '/static/certificates.js', '/static/app.css', '/api/v1/auth/state', '/api/v1/capabilities'):
     status, body = asyncio.run(request(path))
     web[path] = status
     assert body, path
-assert web == {'/': 200, '/static/app.js': 200, '/static/views.js': 200, '/static/app.css': 200,
+assert web == {'/': 200, '/static/app.js': 200, '/static/views.js': 200, '/static/certificates.js': 200, '/static/app.css': 200,
                '/api/v1/auth/state': 200, '/api/v1/capabilities': 401}, web
 print(json.dumps({'commands':len(rows),'python_report_archive':True,'web_app':web,'source_access':False,'network_used':False}))
 '''
