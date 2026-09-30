@@ -266,6 +266,26 @@ fin hana session extend --session main --run extend-1 --send
 - `security`는 `limits`(이체한도), `limit-exception`, `security-media`, `otp`, `otp-accident`, `mobile-otp` 중 하나를 조회하며 상태를 바꾸지 않습니다. `--run` 이름은 준비와 전송에 같은 값을 쓰고, 결과는 `hana/runs/<이름>/observation.json`에 저장됩니다.
 - `session extend`는 저장된 로그인의 연장을 한 번 요청합니다. 새 `--run`에 `--send`를 붙이면 준비와 전송을 한 번에 합니다. 서버의 만료 시각은 추정하지 않으며 저장된 로그인 기록을 바꾸지 않습니다.
 
+#### 이체한도 결과 읽기
+
+CLI stdout은 조회 판정과 결과 파일 위치를 알려주는 JSON입니다. `--format json-v1`도 같은 결과를 감쌀 뿐, 금액을 한국어 문장으로 바꾸지는 않습니다. 결과 파일의 `observation.fields`는 은행 조회값, `observation.display`는 원본 앱의 표시 규칙으로 계산한 안내입니다. 두 객체를 합쳐서 개인 한도로 해석하지 마세요.
+
+| 결과 파일의 필드 | 의미 |
+| --- | --- |
+| `observation.fields.bot1TrnsLimAmt` | 은행에서 조회한 **1회 이체한도**, 원 단위 |
+| `observation.fields.dd1TrnsLimAmt` | 은행에서 조회한 **1일 이체한도**, 원 단위 |
+| `observation.fields.scrtMdclDvCd` | 보안매체 구분. 문자열 `"1"`은 보안카드(자물쇠카드), `"2"`는 OTP 구분 |
+| `observation.fields.mbphOtpYn` | 모바일 OTP 여부. `"Y"`는 해당, `"N"`은 해당하지 않음 |
+| `observation.fields.trnsLimRslt` | 문자열 `"true"`일 때 이체한도 예외신청 안내 표시. 조회 실패나 예외신청 완료 여부가 아님 |
+| `observation.display.medium` | 안내 기준: `card`는 보안카드, `mobile`은 모바일 OTP, `otp`는 OTP |
+| `observation.display.once_ceiling_text` | 해당 보안매체의 **1회 기본 안내 한도**, 원 단위 |
+| `observation.display.daily_ceiling_text` | 해당 보안매체의 **1일 기본 안내 한도**, 원 단위 |
+| `observation.display.exception_prompt` | 예외신청 안내를 표시할 조건. `false`는 조회 실패가 아님 |
+
+금액의 숫자·문자열 형태와 누락·`null`은 그대로 보존합니다. 누락·`null`을 0원으로 해석하지 않습니다. 안내 한도는 원본 앱에 정해진 보안매체별 값이므로 은행 조회값을 잘라내거나 단위를 나누는 근거로 사용하지 않습니다. 조회값이 안내 한도보다 커도 실제 이체 가능 금액이 그만큼이라고 확정할 수 없습니다. `accepted: true` 역시 조회 응답의 수용을 뜻하며 그 금액의 이체 승인을 뜻하지 않습니다.
+
+`display.medium`은 원본 앱의 기본 분기를 보존하므로 보안매체 필드가 누락되어도 `otp`가 될 수 있습니다. 실제 등록 매체는 `fields`로 확인해야 합니다. 웹앱은 이런 경우 **확인 안 됨**으로 표시하며 안내 한도를 개인 한도와 구분합니다. `trnsLimRslt`의 문자열 `"true"`와 JSON 불리언 `true`도 원본 앱과 같이 구별합니다.
+
 ### 오프라인 도구
 
 ```sh

@@ -115,6 +115,69 @@ for (const method of ['onesign', 'joint_certificate']) {
   });
 }
 
+async function showLimits(ui, observation, outcome = 'success') {
+  ui.document.querySelector('main').innerHTML = await ui.views.security(ui.ctx);
+  await ui.actions['security-query'](ui.ctx, ui.document.querySelector('form'));
+  const job = {status: 'finished', outcome, result: {observation}};
+  ui.calls.at(-1).options.onDone(job);
+  assert.equal(job.outcome, outcome, 'display warnings must not alter the bank verdict');
+  return ui.document.querySelector('#results');
+}
+
+test('limit results separate bank amounts from medium guidance and remove internal fields', async t => {
+  const ui = await setup(t);
+  const result = await showLimits(ui, {
+    fields: {bot1TrnsLimAmt: '145678901', dd1TrnsLimAmt: 650000001,
+      scrtMdclDvCd: '2', mbphOtpYn: 'N', trnsLimRslt: false},
+    display: {medium: 'otp', once_ceiling_text: '100,000,000', daily_ceiling_text: '500,000,000', exception_prompt: false},
+    rows: [], diagnostics: [],
+  });
+  const amounts = Array.from(result.querySelector('.limit-grid').querySelectorAll('dd'), el => el.textContent);
+  assert.deepEqual(amounts, ['1억 4,567만 8,901 원145,678,901원', '6억 5,000만 1 원650,000,001원']);
+  assert.match(result.textContent, /보안매체 · OTP/);
+  assert.match(result.querySelector('.limit-reference').textContent, /보안매체별 안내 한도.*1회 이체한도1억 원100,000,000원.*1일 이체한도5억 원500,000,000원/s);
+  assert.match(result.textContent, /실제 이체 가능한 금액은 이 조회만으로 확정할 수 없어요/);
+  assert.doesNotMatch(result.textContent, /bot1TrnsLimAmt|dd1TrnsLimAmt|scrtMdclDvCd|mbphOtpYn|trnsLimRslt|_ceiling_text|exception_prompt|false|조회 결과가 0건/);
+  assert.equal(ui.calls.length, 1, 'a discrepancy must not trigger another request');
+});
+
+test('limit display preserves zero and large integers without claiming a missing medium is OTP', async t => {
+  const ui = await setup(t);
+  const result = await showLimits(ui, {fields: {bot1TrnsLimAmt: 0, dd1TrnsLimAmt: '9007199254740993'},
+    display: {medium: 'otp', once_ceiling_text: '100,000,000', daily_ceiling_text: '500,000,000'}}, 'unknown');
+  assert.match(result.textContent, /기관의 최종 판정을 확인하지 못했어요/);
+  assert.match(result.textContent, /1회 이체한도0원/);
+  assert.match(result.textContent, /9,007,199,254,740,993원/);
+  assert.match(result.textContent, /보안매체 · 확인 안 됨/);
+  assert.equal(result.querySelector('.limit-reference'), null);
+  for (const value of [undefined, null, '', false, '12,34', '-1', '1.5', '1e3', 1.5, Number.MAX_SAFE_INTEGER + 1, '<img src=x onerror=alert(1)>']) {
+    const node = await showLimits(ui, {fields: {bot1TrnsLimAmt: value, dd1TrnsLimAmt: '0'}});
+    assert.equal(node.querySelector('dd').textContent, '확인 안 됨');
+    assert.match(node.textContent, /1일 이체한도0원/);
+    assert.equal(node.querySelector('img'), null);
+    assert.doesNotMatch(node.textContent, /undefined|null|false/);
+  }
+});
+
+test('limit medium and exception messaging retain the original typed predicates', async t => {
+  const ui = await setup(t);
+  for (const [fields, label, medium] of [
+    [{scrtMdclDvCd: '1', mbphOtpYn: 'Y'}, '보안카드(자물쇠카드)', 'card'],
+    [{scrtMdclDvCd: '2', mbphOtpYn: 'Y'}, '모바일 OTP', 'mobile'],
+    [{scrtMdclDvCd: '2', mbphOtpYn: 'N'}, 'OTP', 'otp'],
+    [{scrtMdclDvCd: 'unexpected', mbphOtpYn: 'N'}, '확인 안 됨', 'otp'],
+  ]) {
+    const result = await showLimits(ui, {fields: {...fields, bot1TrnsLimAmt: '20,000', dd1TrnsLimAmt: 30000},
+      display: {medium, once_ceiling_text: '100,000', daily_ceiling_text: '200,000'}});
+    assert.ok(result.textContent.includes('보안매체 · ' + label));
+    assert.doesNotMatch(result.textContent, /은행 조회값이 보안매체별 안내 한도보다 커요/);
+  }
+  for (const flag of ['true', true, false, 'false', undefined]) {
+    const result = await showLimits(ui, {fields: {scrtMdclDvCd: '1', trnsLimRslt: flag}});
+    assert.equal(result.textContent.includes('예외신청이 완료되었다는 뜻은 아니에요'), flag === 'true');
+  }
+});
+
 test('after transfer, accounts and settings offer queries and optional manual login', async t => {
   const ui = await setup(t);
   for (const view of ['accounts', 'settings']) {

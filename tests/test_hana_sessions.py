@@ -119,10 +119,10 @@ class HanaSessions(unittest.TestCase):
         (root / 'query.json').write_text(json.dumps({'account_index': 1, 'start_date': today, 'end_date': today}))
         self.addCleanup(self.temp.cleanup)
 
-    def run_cli(self, *argv):
+    def run_cli(self, *argv, versioned=False):
         output, errors = io.StringIO(), io.StringIO()
         with contextlib.redirect_stdout(output), contextlib.redirect_stderr(errors):
-            code = main(['hana', *argv])
+            code = main((['--format', 'json-v1'] if versioned else []) + ['hana', *argv])
         return code, json.loads(output.getvalue())
 
     def logged_in(self, session='s1'):
@@ -269,6 +269,38 @@ class HanaSessions(unittest.TestCase):
         self.assertEqual(observation['observation']['display']['medium'], 'card')
         code, _ = self.run_cli('security', 'limits', '--session', 's1', '--run', 'limits-1', '--send')
         self.assertEqual(code, 2)
+
+    def test_security_limits_keep_bank_values_separate_from_guidance_in_both_formats(self):
+        self.logged_in()
+        for versioned in (False, True):
+            for index, fields in enumerate((
+                {'bot1TrnsLimAmt': '145678901', 'dd1TrnsLimAmt': 650000001,
+                 'scrtMdclDvCd': '2', 'mbphOtpYn': 'N', 'trnsLimRslt': False},
+                {'bot1TrnsLimAmt': 0, 'dd1TrnsLimAmt': None},
+                {},
+            )):
+                with self.subTest(versioned=versioned, case=index):
+                    run = f'limits-{versioned}-{index}'
+                    args = ('security', 'limits', '--session', 's1', '--run', run)
+                    self.bank.overrides['/retrieveTrnsLim'] = business(fields)
+                    sent = len(self.bank.requests)
+                    self.run_cli(*args, versioned=versioned)
+                    self.assertEqual(len(self.bank.requests), sent)
+                    code, output = self.run_cli(*args, '--send', versioned=versioned)
+                    result = output['result'] if versioned else output
+                    self.assertEqual((code, result['accepted']), (0, True))
+                    self.assertEqual(len(self.bank.requests), sent + 1)
+                    if versioned:
+                        self.assertEqual((output['schema_version'], output['exit_code']), (1, code))
+                    report = store.read_json(store.run_path(run) / 'observation.json')
+                    observed = report['observation']
+                    self.assertEqual(observed['fields'], fields)
+                    self.assertEqual(observed['display'], {
+                        'medium': 'otp', 'once_ceiling_text': '100,000,000',
+                        'daily_ceiling_text': '500,000,000', 'exception_prompt': False})
+                    self.assertEqual(observed['diagnostics'], [] if fields else ['display_fields_absent'])
+                    self.assertTrue(report['assessment']['accepted'])
+                    self.assertNotIn('observation', result)  # stdout stays a summary, not a merged field list.
 
     def test_login_extension_sends_once_and_keeps_the_login_proof(self):
         session = store.session_path(self.logged_in())

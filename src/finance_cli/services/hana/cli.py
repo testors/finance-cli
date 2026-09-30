@@ -110,8 +110,15 @@ def build():
     item.add_argument('--output', type=Path, help='export: 새 .json 경로(같은 이름의 .csv도 만듦)')
     item.add_argument('--send', action='store_true')
 
-    item = sub.add_parser('security', help='한도·보안매체·OTP 상태 읽기 전용 조회')
-    item.add_argument('kind', choices=tuple(security_protocol.QUERIES))
+    item = sub.add_parser('security', help='한도·보안매체·OTP 상태 읽기 전용 조회', description=(
+        '조회 결과는 hana/runs/<run>/observation.json에 저장합니다. '
+        'limits의 observation.fields.bot1TrnsLimAmt는 1회, dd1TrnsLimAmt는 1일 한도(원)입니다. '
+        'observation.display의 once_ceiling_text·daily_ceiling_text는 보안매체별 기본 안내이며 '
+        '고객의 실제 이체 가능 금액이 아닙니다. trnsLimRslt는 예외신청 안내 조건이며 조회 성공 여부가 아닙니다. '
+        '전체 필드 설명은 docs/guide.md의 보안매체·한도 절을 참고하세요.'))
+    item.add_argument('kind', choices=tuple(security_protocol.QUERIES), help=(
+        'limits: 이체한도, limit-exception: 한도 예외, security-media: 보안매체, '
+        'otp: OTP, otp-accident: OTP 사고, mobile-otp: 모바일 OTP'))
     item.add_argument('--session', required=True)
     item.add_argument('--run', required=True, help='이번 조회의 새 기록 이름(준비와 전송에 같은 값)')
     item.add_argument('--send', action='store_true')
