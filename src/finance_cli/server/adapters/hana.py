@@ -173,13 +173,13 @@ def account_candidates(ctx, rows):
             continue
         label = next((row[k] for k in ('acctNm', 'prdtNm', 'acctPrdtNm', 'goodNm') if isinstance(row.get(k), str)
                       and row[k]), None)
-        masked = mask_account(row['acctNo'])
+        number = str(row['acctNo'])
         candidates.append({'ref': f'account-{index}', 'kind': 'account', 'identity_key': 'account:' + str(row['acctNo']),
-                           'label': label or f'계좌 {masked}',
-                           'identity': {'account_number': str(row['acctNo']), 'currency': row.get('curCd'),
+                           'label': label or f'계좌 {number}',
+                           'identity': {'account_number': number, 'currency': row.get('curCd'),
                                         'name': label}})
-        display.append({'ref': f'account-{index}', 'index': index, 'label': label or f'계좌 {masked}',
-                        'account_number': masked, 'currency': row.get('curCd'), 'balance': row.get('acctBal')})
+        display.append({'ref': f'account-{index}', 'index': index, 'label': label or f'계좌 {number}',
+                        'account_number': number, 'currency': row.get('curCd'), 'balance': row.get('acctBal')})
     ctx.remember(target_candidates=candidates)
     return display
 
@@ -658,7 +658,9 @@ class OneSignAccounts(OneSignReadAdapter):
 
 
 def transfer_preview(preview):
-    """What the user confirms: payee as the bank returned it, amounts and route."""
+    """Stable confirmation payload. jobs.public projects the full source number
+    from the fixed target without changing existing confirmation digests.
+    """
     route = preview.get('authentication') if isinstance(preview.get('authentication'), dict) else {}
     return {'recipient_bank_code': preview.get('recipient_bank_code'),
             'recipient_account': preview.get('recipient_account'), 'recipient_name': preview.get('recipient_name'),
@@ -688,9 +690,6 @@ class Transfer(OneSignAdapter):
                 'recipient_account_number': text(value['recipient_account_number'], 'recipient_account_number', 30,
                                                  r'[0-9][0-9-]{5,28}[0-9]'),
                 'amount_krw': bounded_int(value['amount_krw'], 'amount_krw', 1, 2 ** 53 - 1)}
-
-    def masked_input(self, value):
-        return {**value, 'recipient_account_number': mask_account(value.get('recipient_account_number'))}
 
     def transaction(self, ctx):
         return 'web-' + ctx.job['id']

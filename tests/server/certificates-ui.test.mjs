@@ -12,7 +12,7 @@ const options = {hana: {settings: [{name: 'synthetic', version: '1.0.27'}], carr
   {code: '6', name: 'KT', terms_digest: 'kt-review', terms: [{title: 'KT 필수 약관', urls: ['https://example.invalid/kt']}]},
 ]}};
 
-const ACCOUNTS = [{choice: '0', label: '하나은행 123*****9012'}, {choice: '1', label: '하나은행 987*****3210'}];
+const ACCOUNTS = [{choice: '0', label: '하나은행 123456789012'}, {choice: '1', label: '하나은행 987654323210'}];
 
 const CARD = {name: 'resident-card', kind: 'resident', issue_date: '2020.02.29', saved_at: 1700000000};
 
@@ -37,7 +37,7 @@ test('account selection uses the stored bank list and waits for an explicit choi
   const select = ui.document.querySelector('[name="account_choice"]');
   assert.equal(select.value, '');
   assert.equal(select.options.length, 3);
-  assert.match(select.textContent, /987\*+3210/);
+  assert.match(select.textContent, /987654323210/);
   ui.fill('account_password', '6049'); await ui.submit();
   assert.deepEqual(ui.names(), ['inspect']);
   ui.fill('account_choice', '1'); await ui.submit();

@@ -26,7 +26,7 @@ from .base import (Adapter, InputError, Step, StepResult, Stop, bounded_int, cho
 NODE_TIMEOUT = 900
 ROW_LIMIT = 1000
 FIELD = re.compile(r'[A-Za-z][A-Za-z0-9_]{0,48}')
-IDENTIFIER = re.compile(r'(?i)(dscmno|resno|rrn|bsno|mpbno|telno|emladr|acctno|crdno|tin|txprno|jmno)$')
+IDENTIFIER = re.compile(r'(?i)(dscmno|resno|rrn|bsno|mpbno|telno|emladr|crdno|tin|txprno|jmno)$')
 EARLY_ISSUE_STOPS = ('original_preview_required', 'previous_issuance_attempt', 'prepared_business_context_changed',
                      'local_certificate_preflight_incomplete', 'original_certificate_not_selectable')
 AMEND_REASONS = {'correction': '01', 'amount-change': '02', 'return': '03', 'cancellation': '04',

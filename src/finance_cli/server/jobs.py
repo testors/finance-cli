@@ -252,6 +252,36 @@ def record_cli(db, *, origin, command, exit_code, service):
 
 # API views ----------------------------------------------------------------
 
+def account_numbers_view(value, candidates, snapshot):
+    """Restore display numbers from the same job's saved identities, offline.
+
+    Old result rows may already be masked. Do not match on their last digits or
+    rewrite stored results/confirmation digests; use the fixed candidate ref and
+    target. Never project other private attempt or bank-response fields.
+    """
+    result = value.get('result')
+    if value['name'] in ('hana.accounts.list', 'hana.onesign.accounts') and isinstance(result, dict):
+        numbers = {c['ref']: c['identity']['account_number'] for c in candidates or []
+                   if isinstance(c, dict) and c.get('kind') == 'account' and isinstance(c.get('ref'), str)
+                   and isinstance(c.get('identity'), dict) and isinstance(c['identity'].get('account_number'), str)}
+        for row in result.get('accounts') or []:
+            if isinstance(row, dict) and row.get('ref') in numbers:
+                old, number = row.get('account_number'), numbers[row['ref']]
+                row['account_number'] = number
+                if row.get('label') == f'계좌 {old}':
+                    row['label'] = f'계좌 {number}'
+        for index, row in enumerate(result.get('rows') or [], 1):
+            number = numbers.get(f'account-{index}')
+            if isinstance(row, dict) and number is not None and 'acctNo' in row:
+                row['acctNo'] = number
+    if value['name'] == 'hana.transfer.prepare':
+        number = ((snapshot.get('target') or {}).get('identity') or {}).get('account_number')
+        if isinstance(number, str):
+            for preview in (result, (value.get('awaiting') or {}).get('preview')):
+                if isinstance(preview, dict) and 'source_account' in preview:
+                    preview['source_account'] = number
+
+
 def artifacts_for(con, job_id):
     return [dict(r) for r in con.execute(
         'SELECT id, kind, filename, media_type, size, complete, created_at FROM artifacts WHERE job_id=? ORDER BY created_at',
@@ -272,7 +302,9 @@ def public(con, job, *, listing=False):
         'session_id': job['session_id'], 'login_revision': job['login_revision'],
         'fixed': {'login': snapshot.get('login'), 'profile': snapshot.get('profile'),
                   'target': None if not snapshot.get('target') else {
-                      **snapshot['target'], 'identity': model.masked_identity(snapshot['target'].get('identity'))}},
+                      **snapshot['target'], 'identity': model.masked_identity(snapshot['target'].get('identity')),
+                      'display_name': model.account_display_name(snapshot['target'].get('display_name'),
+                                                                  snapshot['target'].get('identity'))}},
         'confirmed_target': loads(job['confirmed_target']), 'parent_job_id': job['parent_job_id'],
         'created_at': job['created_at'], 'started_at': job['started_at'], 'finished_at': job['finished_at'],
         'observed_at': job['observed_at'], 'expires_at': job['expires_at'],
@@ -289,11 +321,12 @@ def public(con, job, *, listing=False):
     value['result'] = loads(job['result'])
     candidates = attempt.get('target_candidates')
     if isinstance(value['result'], dict) and isinstance(candidates, list) and job['login_id']:
-        # Which observed candidates are registered now; identities stay server-side.
+        # Which observed candidates are registered now; private attempt fields stay server-side.
         registered = dict(con.execute('SELECT identity_key, id FROM targets WHERE login_id=?', (job['login_id'],)).fetchall())
         value['result']['candidate_targets'] = {c['ref']: registered[c['identity_key']] for c in candidates
                                                 if isinstance(c, dict) and c.get('identity_key') in registered}
     value['awaiting'] = loads(job['awaiting'])
+    account_numbers_view(value, candidates, snapshot)
     value['artifacts'] = artifacts_for(con, job['id'])
     value['events'] = [{'at': r['at'], 'kind': r['kind'], 'detail': loads(r['detail'], {})} for r in con.execute(
         'SELECT at, kind, detail FROM job_events WHERE job_id=? ORDER BY id', (job['id'],))]

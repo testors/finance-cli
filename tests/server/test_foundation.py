@@ -235,6 +235,46 @@ class ModelTests(ServerCase):
         unset = self.post('/profiles', {'name': '미설정'}).json()
         self.assertIsNone(unset['kind'])
 
+    def test_saved_account_results_show_full_numbers_by_ref_without_requery_or_record_rewrite(self):
+        self.enroll()
+        synthetic_certificate()
+        login = self.post('/logins', {'institution': 'hana', 'method': 'joint_certificate', 'name': 'h',
+                                      'credential': 'synthetic'}).json()
+        numbers = ['12345678901234', '98765432101234']  # Same last four digits: never match on the mask.
+        masked = '••••••••••1234'
+        candidates = [{'ref': f'account-{index}', 'kind': 'account', 'identity_key': 'account:' + number,
+                       'label': '계좌 ' + masked, 'identity': {'account_number': number}, 'token': 'PRIVATE'}
+                      for index, number in enumerate(numbers, 1)]
+        result = {'accounts': [{'ref': 'account-2', 'account_number': masked, 'label': '별칭'},
+                               {'ref': 'account-1', 'account_number': masked, 'label': '계좌 ' + masked}],
+                  'rows': [{'acctNo': masked}, {'acctNo': masked}]}
+        for name in ('hana.accounts.list', 'hana.onesign.accounts'):
+            self.assertIsNotNone(jobs.registry.get(name))
+            job_id = insert_job(self.db, name=name, login_id=login['id'], result=result,
+                                attempt={'target_candidates': candidates})
+            shown = self.get('/jobs/' + job_id).json()
+            self.assertEqual([r['account_number'] for r in shown['result']['accounts']], numbers[::-1])
+            self.assertEqual([r['acctNo'] for r in shown['result']['rows']], numbers)
+            self.assertEqual([r['label'] for r in shown['result']['accounts']], ['별칭', '계좌 ' + numbers[0]])
+            self.assertNotIn('PRIVATE', json.dumps(shown))
+            target = self.post(f"/logins/{login['id']}/targets", {'job_id': job_id, 'candidate': 'account-1'}).json()
+            self.assertEqual(target['identity']['account_number'], numbers[0])
+            self.assertEqual(target['display_name'], '계좌 ' + numbers[0])
+            with self.db.read() as con:
+                self.assertEqual(loads(jobs.get(con, job_id)['result']), result)
+
+    def test_account_fields_are_visible_without_exposing_other_sensitive_fields(self):
+        from finance_cli.server.adapters.hometax import scalar_row
+        from finance_cli.server.adapters.hana_queries import bank_row
+        number = '123-456789-01234'
+        self.assertEqual(bank_row({'wdrwAcctNo': number, 'rcvAcctNo': number, 'thrAcctNo': number,
+                                   'acctNo': number, 'token': 'PRIVATE', 'cookie': 'PRIVATE'}),
+                         dict.fromkeys(('wdrwAcctNo', 'rcvAcctNo', 'thrAcctNo', 'acctNo'), number))
+        self.assertEqual(scalar_row({'acctNo': number, 'rrn': '1234567890123', 'crdNo': '1234567890123456',
+                                    'telNo': '01012345678', 'nested': {'token': 'PRIVATE'}}),
+                         {'acctNo': number, 'rrn': '•••••••••0123', 'crdNo': '••••••••••••3456',
+                          'telNo': '•••••••5678'})
+
 
 def insert_job(db, *, login_id=None, result=None, name='giro.bills.parse', status='finished', attempt=None):
     from finance_cli.server.db import new_id, now
