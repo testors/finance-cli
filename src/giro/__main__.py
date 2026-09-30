@@ -1,11 +1,11 @@
 """JSON CLI, offline by default; fixed PIN-free probes only with --live."""
-import argparse
 from datetime import date, datetime
 import getpass
-import json
 from pathlib import Path
 import sys
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
+
+from finance_cli.cli.output import ArgumentParser, emit
 
 from .bills import TAX_TYPES, due_bills, normalize_detail, normalize_pages
 from .compat import loads
@@ -22,7 +22,7 @@ def _load(path):
 
 
 def parser():
-    root = argparse.ArgumentParser(description="모바일지로 분석 CLI (기본 오프라인; 명시적 --live 초기 프로브만 통신)")
+    root = ArgumentParser(prog='fin giro', description="모바일지로 분석 CLI (기본 오프라인; 명시적 --live 초기 프로브만 통신)")
     sub = root.add_subparsers(dest="command", required=True)
     runtime = sub.add_parser("runtime", help="서버 배포용 로컬 점검; 기기 보안 검사/통신 아님")
     runtime.add_subparsers(dest="action", required=True).add_parser("check", help="패키지 리소스·합성 암호·문자셋·시간대 점검")
@@ -249,7 +249,7 @@ def main(argv=None):
                           "error_info": exc.error_info, "origin": exc.origin, "message": str(exc)}, 2
     except GiroError as exc:
         result, status = {"error": "validation_error", "message": str(exc)}, 2
-    print(json.dumps(result, ensure_ascii=False, indent=2))
+    emit(result, status)
     return status
 
 

@@ -1,14 +1,14 @@
 """One entry point; institution response rules and exit statuses stay intact."""
-import argparse
 import getpass
-import json
 import os
 from pathlib import Path
 import sys
 
+from .output import ArgumentParser, emit, error, rendering, structured
+
 
 def output(value):
-    print(json.dumps(value, ensure_ascii=False, indent=2))
+    emit(value)
 
 
 def capabilities():
@@ -44,7 +44,7 @@ def password(args):
 
 def cert_main(argv):
     from finance_cli.credentials.registry import Registry
-    parser = argparse.ArgumentParser(prog='fin cert', description='공통 암호화 인증서 저장소; 금융 서버 통신 없음')
+    parser = ArgumentParser(prog='fin cert', description='공통 암호화 인증서 저장소; 금융 서버 통신 없음')
     sub = parser.add_subparsers(dest='action', required=True)
     sub.add_parser('list')
     sub.add_parser('capabilities')
@@ -88,7 +88,7 @@ def cert_main(argv):
 
 def profile_main(argv):
     from finance_cli.core import profiles
-    parser = argparse.ArgumentParser(prog='fin profile')
+    parser = ArgumentParser(prog='fin profile')
     sub = parser.add_subparsers(dest='action', required=True)
     sub.add_parser('list')
     item = sub.add_parser('set')
@@ -104,33 +104,55 @@ def hometax_main(argv):
     from hometax_cli.__main__ import main as run
     if argv[:1] == ['login']:
         argv = ['auth', 'login-cert', *argv[1:]]
-    if '--profile' in argv:
-        from finance_cli.core.profiles import resolve
-        i = argv.index('--profile')
-        if i + 1 >= len(argv) or argv[:2] not in (['auth', 'login-cert'], ['auth', 'prepare-cert'], ['invoice', 'issue']):
-            raise ValueError('profile_requires_certificate_login_or_prepare')
-        alias = resolve(argv[i+1], 'hometax')
-        argv = argv[:i] + argv[i+2:] + ['--credential', alias]
     live = bool(argv and (argv[0] in ('session', 'account', 'business', 'tax', 'returns', 'report', 'invoice')
                          or argv[:2] == ['auth', 'login-cert']))
     help_requested = not argv or any(v in argv for v in ('--help', '-h'))
     if live and not help_requested and '--send' not in argv:
-        output({'error': 'send_required', 'network_used': False,
-                'message': '기관 연결 명령에는 --send가 필요합니다. 도움말로 입력을 확인하세요.'})
+        emit({'error': 'send_required', 'network_used': False,
+              'message': '기관 연결 명령에는 --send가 필요합니다. 도움말로 입력을 확인하세요.'}, 2)
         return 2
     return run([v for v in argv if v != '--send'] or ['--help'])
 
 
 def main(argv=None):
     argv = list(sys.argv[1:] if argv is None else argv)
-    if argv[:1] == ['--home']:
-        if len(argv) < 2:
-            print('--home requires a path', file=sys.stderr)
-            return 2
-        os.environ['FINANCE_HOME'] = str(Path(argv[1]).expanduser().absolute())
-        argv = argv[2:]
+    format_name, home, option_error = 'legacy', None, None
+    # Global options precede the command. Never scan or rewrite command values.
+    while argv and argv[0].split('=', 1)[0] in ('--home', '--format'):
+        option, separator, value = argv.pop(0).partition('=')
+        if not separator:
+            if not argv or argv[0].startswith('--'):
+                option_error = 'global_option_value_required'
+                break
+            value = argv.pop(0)
+        if option == '--home':
+            home = value
+        elif value in ('legacy', 'json-v1'):
+            format_name = value
+        else:
+            option_error = 'unsupported_output_format'
+            break
+    service = argv[0] if argv and argv[0] in ('hana', 'hometax', 'giro') else 'fin'
+    with rendering(format_name, service):
+        if option_error:
+            return error(option_error, '전역 옵션은 --home 경로와 --format legacy|json-v1을 지원합니다.')
+        if home is not None:
+            os.environ['FINANCE_HOME'] = str(Path(home).expanduser().absolute())
+        try:
+            return dispatch(argv)
+        except EOFError:
+            if not structured():
+                raise
+            return error('input_required', '필요한 입력을 받지 못했습니다. 명령의 입력 방식을 확인하세요.')
+        except KeyboardInterrupt:
+            if not structured():
+                raise
+            return error('interrupted', '사용자가 중단했습니다. 업무 전송 여부와 결과는 별도로 확인하세요.', 130)
+
+
+def dispatch(argv):
     if not argv or argv in (['--help'], ['-h']):
-        print('''사용법: fin [--home DATA_DIRECTORY] <명령> ...
+        print('''사용법: fin [--home DATA_DIRECTORY] [--format legacy|json-v1] <명령> ...
 
   cert        공동인증서 NPKI/PFX 암호화 보관·조회·내보내기
   profile     프로필·기관별 인증서 선택
@@ -143,6 +165,7 @@ def main(argv=None):
   --version   패키지 버전
 
 기관별 명령의 인자·JSON 결과·업무 판정은 기존 계약을 유지합니다.
+--format json-v1은 기존 결과를 버전·기관·종료코드와 함께 출력합니다.
 비밀번호·PIN·OTP는 명령행이나 환경변수로 전달하지 않습니다.''')
         return 0
     try:
@@ -169,14 +192,17 @@ def main(argv=None):
             return run(['--live' if value == '--send' else value for value in rest] or ['--help'])
         elif command == 'runtime':
             from finance_cli.core import runtime
-            parser = argparse.ArgumentParser(prog='fin runtime')
+            parser = ArgumentParser(prog='fin runtime')
             parser.add_argument('action', choices=('status', 'install'))
             parser.add_argument('service', choices=('hometax',))
             args = parser.parse_args(rest)
             output(runtime.install() if args.action == 'install' else runtime.status())
         else:
+            if structured():
+                return error('invalid_arguments', '알 수 없는 명령입니다. --help로 사용법을 확인하세요.')
             raise ValueError('unknown_command')
         return 0
     except (ValueError, OSError, ImportError) as exc:
-        output({'error': type(exc).__name__, 'message': str(exc)})
+        emit({'error': type(exc).__name__, 'message':
+              '로컬 입력 또는 처리 오류입니다. 설정과 입력을 확인하세요.' if structured() else str(exc)}, 2)
         return 2

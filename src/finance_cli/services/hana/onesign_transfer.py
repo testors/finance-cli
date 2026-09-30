@@ -168,6 +168,7 @@ def execute(state,client,transaction,control,confirm,pin_input):
     pin.require(ctx['state']=='prepared','transfer_not_prepared_or_already_attempted')
     pin.require(ctx['binding']==binding(state,client.session),'transfer_binding_changed')
     pin.require(confirm(preview(ctx)) is True,'transfer_confirmation_required')
+    entered = pin_input() if ctx['cfg']['kind']=='other' and ctx['route']['bridge_type']=='pinHalf' else None
     # Reserve the entire signing/execution operation before the first nonce.
     with state.transaction() as value:
         value['transfers'][transaction]['state']='executing'
@@ -179,7 +180,6 @@ def execute(state,client,transaction,control,confirm,pin_input):
         tbs = signing_text(form)
         alias,entry = record(state)
         flow = Workflow(state,ctx['binding']['device_id'],None,client.bank,client.ra,ms,ledger_vault=control)
-        entered = pin_input() if ctx['route']['bridge_type']=='pinHalf' else None
         reply = flow.exchange('transfer-bank-nonce',-3,client.bank,pin.BANK_NONCE_PATH,pin.bank_nonce_body(ctx['binding']['customer_number']))
         content = pin.bind_bank_nonce(tbs,pin.text(reply.get('scrtRnum'),empty=True)).encode()
         if ctx['route']['bridge_type']=='noAuth':

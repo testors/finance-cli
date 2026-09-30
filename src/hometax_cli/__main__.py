@@ -10,6 +10,8 @@ import subprocess
 import sys
 
 from finance_cli.core.runtime import node_environment
+from finance_cli.cli.credentials import add_selection, resolve
+from finance_cli.cli.output import ArgumentParser, emit, error, structured
 
 from . import auth
 from . import web_auth
@@ -45,8 +47,26 @@ def read_json(path: str):
     return json.loads(Path(path).read_text(encoding="utf-8"))
 
 
+def run_node(adapter, config):
+    # Capture only this child process's summary in the opt-in format. The
+    # private output file is never opened to manufacture a missing result.
+    options = {'stdout': subprocess.PIPE} if structured() else {}
+    process = subprocess.run(["node", "--require", str(Path(__file__).with_name("jsdom_compat.cjs")),
+                              str(Path(__file__).with_name(adapter))],
+                             input=json.dumps(config), text=True, check=False,
+                             env=node_environment(), **options)
+    if structured():
+        try:
+            result = json.loads(process.stdout)
+        except (ValueError, TypeError):
+            emit(None, process.returncode, output_error='invalid_result_json' if process.stdout else 'missing_result_json')
+        else:
+            emit(result, process.returncode)
+    return process.returncode
+
+
 def main(argv=None) -> int:
-    parser = argparse.ArgumentParser(
+    parser = ArgumentParser(
         prog="fin hometax", description="손택스 CLI. 기관 연결에는 fin 명령의 --send가 필요합니다. 공동 인증서 선택은 --credential 별칭.")
     commands = parser.add_subparsers(dest="command", required=True)
     session_parser = commands.add_parser("session", help="저장한 Node 세션 재사용·SSO 재확인; 실제 접속")
@@ -127,8 +147,7 @@ def main(argv=None) -> int:
     issue.add_argument("--session", help="갱신 세션; 생략하면 --prepared의 세션 재사용")
     issue.add_argument("--output", required=True)
     issue.add_argument("--timeout", type=float, default=60)
-    issue.add_argument("--credential", required=True, help="공통 저장소의 발급용 인증서 별칭")
-    issue.add_argument("--password-stdin", action="store_true")
+    add_selection(issue)
     for operation in ("list", "detail", "prepare", "amend"):
         item = invoice_operations.add_parser(operation)
         item.add_argument("--session", required=True)
@@ -177,17 +196,18 @@ def main(argv=None) -> int:
     for name, description in (("prepare-cert", "인증서 복호화·서명 및 요청 파일 생성; 접속 없음"),
                               ("login-cert", "서비스 웹 페이지와 연결한 실제 공동인증서 로그인")):
         cert_command = subcommands.add_parser(name, help=description)
-        cert_command.add_argument("--credential", required=True, help="fin cert로 가져온 공통 저장소의 인증서 별칭")
-        cert_command.add_argument("--password-stdin", action="store_true", help="비밀번호 한 줄을 stdin에서 읽기")
+        add_selection(cert_command)
         cert_command.add_argument("--app-version", default="14.3")
         cert_command.add_argument("--output", required=True, help="새 private/ 파일 경로; 기존 파일 덮어쓰기 없음")
         if name == "login-cert":
             cert_command.add_argument("--timeout", type=float, default=180, help="페이지 초기화·대기열 관찰 시간(초)")
     args = parser.parse_args(argv)
     try:
+        if getattr(args, 'profile', None):
+            args.credential = resolve(args, 'hometax')
         if args.command in ("session", "account", "business", "tax", "returns", "report", "invoice"):
             Path(args.output).parent.mkdir(mode=0o700, parents=True, exist_ok=True)
-            config = {key: value for key, value in vars(args).items() if value is not None}
+            config = {key: value for key, value in vars(args).items() if value is not None and key != 'profile'}
             if args.command == "invoice" and args.operation == "issue":
                 config["session"] = args.session or args.prepared
                 password = (sys.stdin.buffer.readline().removesuffix(b"\n").removesuffix(b"\r")
@@ -196,10 +216,7 @@ def main(argv=None) -> int:
             adapter = "session.mjs" if args.command == "session" else "report.mjs" if args.command == "report" else "business.mjs"
             if args.command == "returns" and args.operation in ("receipt", "document"):
                 adapter = "returns_report.mjs"
-            process = subprocess.run(["node", "--require", str(Path(__file__).with_name("jsdom_compat.cjs")),
-                                      str(Path(__file__).with_name(adapter))],
-                                     input=json.dumps(config), text=True, check=False, env=node_environment())
-            return process.returncode
+            return run_node(adapter, config)
         if args.operation in ("prepare-cert", "login-cert"):
             if Path(args.output).exists():
                 raise ValueError("Output already exists")
@@ -210,17 +227,13 @@ def main(argv=None) -> int:
                     base64.b64encode(result.signed_data).decode("ascii"),
                     base64.b64encode(result.random).decode("ascii"), args.app_version)
                 secret_file(args.output, {"callback": callback, "logical_request": request})
-                print(json.dumps({"scope": "offline_certificate_prepare", "prepared": True,
-                                  "output": args.output, "network_requests": 0}, ensure_ascii=False))
+                emit({"scope": "offline_certificate_prepare", "prepared": True,
+                      "output": args.output, "network_requests": 0}, indent=None)
                 return 0
             Path(args.output).parent.mkdir(mode=0o700, parents=True, exist_ok=True)
             config = {"callback": callback, "appVersion": args.app_version,
                       "output": args.output, "timeout": args.timeout}
-            # The preload is inherited by jsdom's synchronous XHR worker.
-            process = subprocess.run(["node", "--require", str(Path(__file__).with_name("jsdom_compat.cjs")),
-                                      str(Path(__file__).with_name("browserless.mjs"))],
-                                     input=json.dumps(config), text=True, check=False, env=node_environment())
-            return process.returncode
+            return run_node('browserless.mjs', config)
         data = read_json(args.input)
         if args.operation == "encode-cert-callback":
             output = auth.certificate_callback(data["signDataBase64"], data["vidRandomBase64"])
@@ -248,22 +261,21 @@ def main(argv=None) -> int:
                     data.get("description"), data.get("token"))
             for warning in decision.warnings:
                 print("경고: " + warning, file=sys.stderr)
-            print(json.dumps(decision.as_dict(), ensure_ascii=False))
-            return 1 if decision.branch == "failure" else 0
-        print(json.dumps(output, ensure_ascii=False))
+            code = 1 if decision.branch == "failure" else 0
+            emit(decision.as_dict(), code, indent=None)
+            return code
+        emit(output, indent=None)
         return 0
     except ImportError:
-        print("오류: 인증서 의존성이 필요합니다. python -m pip install -e '.[certificate]'", file=sys.stderr)
-        return 2
-    except (OSError, ValueError, TypeError, KeyError, AttributeError) as error:
+        return error('dependency_unavailable', '필요한 실행 의존성을 확인하세요. 설치 안내와 fin runtime status hometax를 참고하세요.')
+    except (OSError, ValueError, TypeError, KeyError, AttributeError) as exc:
         # Never include input values, tokens or credentials in error logs.
-        if type(error).__module__ == "hometax_cli.certificate":
+        if type(exc).__module__ == "hometax_cli.certificate":
             # CertificateError messages are static, written by this module;
             # third-party parser exceptions must never be echoed.
-            print("로컬 처리 오류: " + str(error), file=sys.stderr)
+            return error('certificate_error', str(exc))
         else:
-            print("오류: 로컬 입력을 읽거나 변환할 수 없습니다. 명령의 입력 형식을 확인하세요.", file=sys.stderr)
-        return 2
+            return error('local_input_or_processing_error', '로컬 입력을 읽거나 변환할 수 없습니다. 명령의 입력 형식을 확인하세요.')
 
 
 if __name__ == "__main__":

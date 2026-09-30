@@ -4,11 +4,13 @@ Every command that contacts the bank prepares first and sends only with --send.
 A request is never repeated automatically, and an attempt that was started is
 recorded and never replayed. OTP changes and limit changes are absent.
 """
-import argparse
 import getpass
 import json
 from pathlib import Path
 import sys
+
+from finance_cli.cli.output import ArgumentParser, emit
+from finance_cli.cli.credentials import add_selection, resolve
 
 from . import hana_protocol as protocol
 from . import security_protocol
@@ -26,21 +28,15 @@ def passphrase(args):
 
 
 def credential(args):
-    if args.profile:
-        from finance_cli.core.profiles import resolve
-        return resolve(args.profile, 'hana')
-    return args.credential
+    return resolve(args, 'hana')
 
 
 def selection_arguments(parser):
-    selection = parser.add_mutually_exclusive_group(required=True)
-    selection.add_argument('--credential', help='금고의 인증서 별칭')
-    selection.add_argument('--profile', help='fin profile set으로 연결한 하나은행 프로필')
-    parser.add_argument('--password-stdin', action='store_true')
+    add_selection(parser)
 
 
 def build():
-    parser = argparse.ArgumentParser(prog='fin hana', description=(
+    parser = ArgumentParser(prog='fin hana', description=(
         '하나은행 로그인·조회·하나인증서 발급·원화 이체. '
         '은행에 연결하는 명령은 --send가 있어야 전송합니다. 실서버 검증 전입니다.'))
     sub = parser.add_subparsers(dest='operation', required=True)
@@ -223,8 +219,10 @@ def main(argv=None):
     except (KeyError, TypeError, AttributeError, IndexError) as error:
         # Never echo values from saved records or bank responses.
         raise ValueError('inspect_saved_records_and_inputs: ' + type(error).__name__) from None
-    print(json.dumps(result, ensure_ascii=False, indent=2))
     # A sent request the service did not accept is a refusal, not a local error.
     if isinstance(result,dict) and result.get('processing_status')=='stopped':
-        return 2
-    return 1 if isinstance(result, dict) and result.get('network_used') and result.get('accepted') is False else 0
+        code = 2
+    else:
+        code = 1 if isinstance(result, dict) and result.get('network_used') and result.get('accepted') is False else 0
+    emit(result, code)
+    return code

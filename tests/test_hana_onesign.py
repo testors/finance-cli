@@ -332,6 +332,24 @@ class FlowTests(unittest.TestCase):
         self.assertEqual(self.tr('prepare')['state'],'prepared')
         self.assertTrue(self.tr('execute')['original_result_success'])
 
+    def test_pin_cancellation_preserves_prepared_transfer_before_any_request(self):
+        self.login()
+        self.services.auth['pinCertYn']='Y'
+        self.assertEqual(self.tr('prepare')['authentication']['bridge_type'],'pinHalf')
+        before=len(self.services.calls)
+        def cancel():
+            raise KeyboardInterrupt
+        self.inputs['pin']=cancel
+        with self.assertRaises(KeyboardInterrupt):
+            self.tr('execute')
+        self.assertEqual(len(self.services.calls),before)
+        self.assertEqual(self.state.snapshot()['transfers']['payment']['state'],'prepared')
+        self.inputs['pin']=lambda:PIN
+        self.assertTrue(self.tr('execute')['original_result_success'])
+        after=len(self.services.calls)
+        self.assertEqual(self.tr('execute')['processing_status'],'stopped')
+        self.assertEqual(len(self.services.calls),after)
+
     def test_ca_timeout_cannot_reissue(self):
         self.before_issue()
         self.services.override[urlsplit(issue.CA_URL).path]=OSError('SYNTHETIC-timeout')

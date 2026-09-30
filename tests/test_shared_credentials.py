@@ -177,6 +177,15 @@ class SharedCredentials(unittest.TestCase):
         self.assertEqual(result['error'], 'send_required')
         self.assertFalse(self.home.exists())
 
+    def test_hometax_profile_equals_selects_shared_certificate(self):
+        self.imported()
+        profiles.set_certificate('personal', 'hometax', 'personal')
+        destination = self.home.parent / 'profile-equals.json'
+        code, result = self.command(['hometax', 'auth', 'prepare-cert', '--profile=personal', '--output', str(destination)])
+        self.assertEqual(code, 0)
+        self.assertTrue(result['prepared'])
+        self.assertTrue(destination.exists())
+
     def test_hometax_pfx_shared_prepare(self):
         pfx = synthetic_pfx([self.cert], [self.private], self.password)
         self.registry.import_pfx('personal', pfx, self.password)

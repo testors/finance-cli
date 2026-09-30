@@ -73,6 +73,8 @@ fin cert export personal --output /path/to/new-export
 
 명령은 JSON 결과와 종료코드를 반환합니다. 도움말은 `fin <기관> ... --help`로 확인합니다. 홈택스의 실제 접속 명령에는 `--send`를 붙여야 합니다.
 
+자동화에서는 `fin --format json-v1 <기관> ...`으로 버전·기관·종료코드와 기존 결과를 함께 받을 수 있습니다. 기본 출력은 유지하며 종료코드만으로 업무 성공을 판단하지 않습니다. [출력 계약과 기관별 입력 차이](docs/guide.md#기계-판독용-출력)를 참고하세요.
+
 ```sh
 # 접속 없이 공통 인증서의 홈택스 서명 준비
 fin hometax auth prepare-cert --profile personal --output /path/to/new-preparation.json

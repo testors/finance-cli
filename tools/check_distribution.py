@@ -38,6 +38,9 @@ for args, source in (
     (['giro','request','national.list'], ''),
     (['giro','runtime','check'], ''),
     (['hometax','auth','replay','cert-register'], '{"RESULT":{"result":"S","msg":"synthetic"}}'),
+    (['--format','json-v1','hana','session','list'], ''),
+    (['--format','json-v1','giro','auth','bootstrap'], ''),
+    (['--format','json-v1','hometax','auth','replay','cert-login'], '{}'),
 ):
     sys.stdin = io.StringIO(source)
     capture = io.StringIO()
@@ -45,7 +48,11 @@ for args, source in (
         code = main(args)
     if code != 0:
         raise RuntimeError('installed command failed: ' + repr(args))
-    rows.append({'command':args,'result':json.loads(capture.getvalue())})
+    result = json.loads(capture.getvalue())
+    if args[:2] == ['--format', 'json-v1']:
+        assert result['schema_version'] == 1 and result['exit_code'] == code
+        assert result['service'] == args[2] and 'result' in result
+    rows.append({'command':args,'result':result})
 from PIL import Image
 from hometax_cli.report_archive import archive_report
 buffer = io.BytesIO()
