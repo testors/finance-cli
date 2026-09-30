@@ -91,7 +91,7 @@ class CertificateTests(ServerCase):
     def saved_choice(self, passphrase=CARD_PASSPHRASE, confirmation='본인 신분증'):
         return json.dumps({'passphrase': passphrase, 'confirmation': confirmation})
 
-    def before_issue(self, kind='resident', jpeg=None):
+    def before_issue(self, kind='resident', jpeg=None, *, stop_at_account=False):
         self.setup_identity()
         profile = {'name': '합성 이름', 'birth7': '9001011', 'phone': '01000000000', 'carrier': '4'}
         self.assertEqual(self.stage('profile', phone_profile=json.dumps(profile),
@@ -113,8 +113,75 @@ class CertificateTests(ServerCase):
         self.assertEqual(prepared['outcome'], 'success', prepared)
         self.assertEqual(len(self.services.calls), count)
         self.assertEqual(self.stage('identity')['outcome'], 'success')
-        self.assertEqual(self.stage('account', account_number=fixture.SOURCE, account_password='6049')['outcome'], 'success')
+        if stop_at_account:
+            return prepared
+        self.assertEqual(self.stage('list-accounts')['outcome'], 'success')
+        self.assertEqual(self.stage('account', account_choice='0', account_password='6049')['outcome'], 'success')
         return prepared
+
+    def test_select_bank_account_from_sealed_list_without_requery_or_raw_number_in_job(self):
+        self.before_issue(stop_at_account=True)
+        from finance_cli.services.hana import onesign_issue_protocol as protocol
+        other = '98765432101234'
+        self.services.override[protocol.PATHS['signup-accounts']] = {
+            'expLginAllAcctInq': [{'acctNo': fixture.SOURCE, 'custNm': 'SYNTHETIC-PRIVATE'},
+                                {'acctNo': other, 'token': 'SYNTHETIC-PRIVATE'}]}
+        before = len(self.services.calls)
+        listed = self.stage('list-accounts')
+        self.assertEqual(listed['outcome'], 'success', listed)
+        self.assertEqual(listed['result']['next_stage'], 'account')
+        self.assertEqual(len(listed['result']['accounts']), 2)
+        self.assert_private(listed, fixture.SOURCE, other, 'SYNTHETIC-PRIVATE')
+        count = len(self.services.calls)
+        self.assertEqual(count, before + 1)
+        inspected = self.stage('inspect')
+        self.assertEqual(inspected['result']['accounts'], listed['result']['accounts'])
+        self.assertEqual(len(self.services.calls), count)
+        for choice in ('-1', '2', fixture.SOURCE):
+            bad = self.stage('account', account_choice=choice, account_password='6049')
+            self.assertEqual(bad['local']['stopped'], 'issuance_account_selection_invalid')
+            self.assertFalse(bad['attempt'].get('sent'))
+        self.assertEqual(len(self.services.calls), count)
+        good = self.stage('account', account_choice='1', account_password='6049')
+        self.assertEqual(good['outcome'], 'success', good)
+        sent = self.services.calls[count:]
+        self.assertEqual([call[1] for call in sent], [protocol.PATHS['keypad'], protocol.PATHS['signup-account']])
+        self.assertEqual(json.loads(sent[-1][3])['acctNo'], other)
+        self.assert_private(good, other, '6049')
+        repeat = self.stage('account', account_choice='1', account_password='6049')
+        self.assertEqual(repeat['outcome'], 'not_started')
+        self.assertEqual(len(self.services.calls), count + 2)
+
+    def test_empty_bank_list_stays_accepted_and_cannot_send_account_password(self):
+        self.before_issue(stop_at_account=True)
+        from finance_cli.services.hana import onesign_issue_protocol as protocol
+        self.services.override[protocol.PATHS['signup-accounts']] = {'expLginAllAcctInq': []}
+        listed = self.stage('list-accounts')
+        self.assertEqual((listed['outcome'], listed['result']['accepted'], listed['result']['accounts']), ('success', True, []))
+        count = len(self.services.calls)
+        refused = self.stage('account', account_choice='0', account_password='6049')
+        self.assertEqual(refused['outcome'], 'not_started')
+        self.assertEqual(self.stage('list-accounts')['outcome'], 'not_started')
+        self.assertEqual(len(self.services.calls), count)
+
+    def test_legacy_account_mismatch_diagnostic_does_not_clear_halt_or_send(self):
+        self.before_issue(stop_at_account=True)
+        with State('synthetic', fixture.PASSWORD) as state:
+            result = onesign.operate(state, 'account', 'old-direct-account', send=True,
+                inputs={'account': lambda rows: '99999999999999',
+                        'account_password': lambda *a: self.fail('password must not be requested')})
+            self.assertEqual(result['error'], 'issuance_account_not_in_response')
+            self.assertEqual((result['accepted'], result['service_status'], result['processing_status']),
+                             (True, 'accepted', 'stopped'))
+        before = (self.home / 'hana/identities/synthetic/state.json').read_bytes()
+        count = len(self.services.calls)
+        job = self.stage('inspect')
+        self.assertEqual(job['result']['account_diagnostic'], {'network_used': False, 'account_count': 1,
+            'password_verification_requested': False, 'selection_not_found': True})
+        self.assertIsNone(job['result']['next_stage'])
+        self.assertEqual(len(self.services.calls), count)
+        self.assertEqual((self.home / 'hana/identities/synthetic/state.json').read_bytes(), before)
+        self.assert_private(job, fixture.SOURCE, '99999999999999')
 
     def assert_private(self, job, *needles):
         text = json.dumps(job, ensure_ascii=False)
@@ -256,7 +323,7 @@ class CertificateTests(ServerCase):
         self.post('/vaults/synthetic/unlock', {'passphrase': fixture.PASSWORD})
         for stage, private in (
             ('verify-sms', {'sms': '012345'}),
-            ('account', {'account_number': fixture.SOURCE, 'account_password': '6049'}),
+            ('account', {'account_choice': '0', 'account_password': '6049'}),
             ('issue', {'new_pin': fixture.PIN, 'new_pin_confirmation': fixture.PIN, 'issue_confirmation': '발급'}),
         ):
             with self.subTest(stage=stage), patch('finance_cli.server.app.start_with_secrets', return_value='started') as start:
@@ -267,7 +334,7 @@ class CertificateTests(ServerCase):
                 accepted = self.post('/jobs', {**request, 'secrets': private})
                 self.assertEqual(accepted.status_code, 202, accepted.text)
                 self.assertEqual(start.call_args.args[2], {'vault_passphrase': fixture.PASSWORD, **private})
-                self.assert_private(accepted.json(), fixture.PASSWORD, *[v for k, v in private.items() if k != 'issue_confirmation'])
+                self.assert_private(accepted.json(), fixture.PASSWORD, *[v for k, v in private.items() if k not in ('issue_confirmation', 'account_choice')])
         self.assertEqual(self.services.calls, [])
 
     def test_cached_passphrase_is_scoped_to_existing_store_and_cleared_by_lock(self):
@@ -480,7 +547,8 @@ class CertificateTests(ServerCase):
         self.assertEqual(prepared['input'].get('id_card'), 'driver-card')
         self.assert_private(prepared, CARD_PASSPHRASE, '합성 이름', '1000000', '123456')
         self.assertEqual(self.stage('identity')['outcome'], 'success')
-        self.assertEqual(self.stage('account', account_number=fixture.SOURCE, account_password='6049')['outcome'], 'success')
+        self.assertEqual(self.stage('list-accounts')['outcome'], 'success')
+        self.assertEqual(self.stage('account', account_choice='0', account_password='6049')['outcome'], 'success')
         self.assertEqual(IdCards().load('driver-card', CARD_PASSPHRASE)['kind'], 'driver')  # Still available.
 
     def test_saved_card_problems_stop_before_the_bank_and_can_be_corrected(self):

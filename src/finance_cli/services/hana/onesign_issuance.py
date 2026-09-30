@@ -26,9 +26,9 @@ from .onesign_crypto import ProtocolError, require, text, derive_pin, b64url, ce
 
 
 class Issuance:
-    EXPECTED = {'begin-id': 'new', 'identity': 'id_ready', 'account': 'identity_verified',
+    EXPECTED = {'begin-id': 'new', 'identity': 'id_ready', 'list-accounts': 'identity_verified', 'account': 'identity_verified',
                 'issue': 'account_verified', 'complete': 'issued'}
-    NEXT = dict(zip(EXPECTED, ('id_ready', 'identity_verified', 'account_verified', 'issued', 'ready')))
+    NEXT = dict(zip(EXPECTED, ('id_ready', 'identity_verified', 'accounts_listed', 'account_verified', 'issued', 'ready')))
 
     def __init__(self, vault, bank, image, ca, ra, clock, *, ledger_vault=None, encrypt_password=None):
         self.vault, self.bank, self.image, self.ca, self.ra, self.clock = vault, bank, image, ca, ra, clock
@@ -79,7 +79,9 @@ class Issuance:
 
     def check(self, command):
         s = self.state()
-        require(command in self.EXPECTED and s['state'] == self.EXPECTED[command] and not s.get('pending'), 'issuance_stage_out_of_order')
+        expected = command in self.EXPECTED and (s['state'] == self.EXPECTED[command]
+                   or command == 'account' and s['state'] == 'accounts_listed')
+        require(expected and not s.get('pending'), 'issuance_stage_out_of_order')
         entry = self.vault.snapshot()['signup']
         require(entry.get('purpose') == 'issue' and entry['state'] == 'consented'
                 and entry['consent_digest'] == consent_digest(entry), 'issuance_entry_or_consent_missing')
@@ -117,8 +119,10 @@ class Issuance:
                 metadata = protocol.id_body(s['application'], kind, ocr)
                 protocol.accept_identity(self.call('identity', metadata), metadata)
                 self.change(identity_kind=kind)
+            elif command == 'list-accounts':
+                self.call('signup-accounts', {'oneSignUseYn': ''})
             elif command == 'account':
-                result = self.call('signup-accounts', {'oneSignUseYn': ''})
+                result = s['responses']['signup-accounts'] if s['state'] == 'accounts_listed' else self.call('signup-accounts', {'oneSignUseYn': ''})
                 rows = result.get('expLginAllAcctInq')
                 require(isinstance(rows, list) and bool(rows), 'issuance_account_list_missing')
                 account = account_input(rows)

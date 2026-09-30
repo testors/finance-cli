@@ -51,6 +51,8 @@ profile → authenticate → request-sms → verify-sms → consent → begin-id
 → prepare-id → identity → account → issue → complete
 ```
 
+`identity`와 `account` 사이에 `list-accounts`를 따로 실행하면 발급용 본인계좌 목록을 암호화 저장합니다. 이후 `account`는 이 목록에서 선택하고 다시 조회하지 않습니다. `account`를 바로 실행하는 기존 방식도 유지하며, 이때는 목록을 한 번 조회한 뒤 선택합니다. 웹앱은 신분증 확인 후 목록을 불러와 같은 계좌 확인 화면에서 선택하게 합니다.
+
 `prepare-id`에는 `--kind`와 `--image`, 또는 보관한 신분증의 `--id-card`를 지정합니다. 이미 시도한 원격 단계·실행 이름은 다시 사용할 수 없습니다. 정상적으로 완료된 단계 다음부터 진행할 수 있지만, 시간 초과·중단·실패한 단계를 자동으로 이어 보내지 않습니다. 새 이름으로 실행해도 같은 인증서의 중단된 발급을 재시도할 수 없습니다.
 
 ```sh

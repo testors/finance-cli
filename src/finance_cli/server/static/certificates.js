@@ -4,22 +4,22 @@ import * as ui from './ui.js';
 import {applyRemember, refreshModel, rememberField, secretFields, state} from './app.js';
 
 const {esc, button, note} = ui;
-const REMOTE = new Set(['authenticate', 'request-sms', 'verify-sms', 'begin-id', 'identity', 'account', 'issue', 'complete']);
+const REMOTE = new Set(['authenticate', 'request-sms', 'verify-sms', 'begin-id', 'identity', 'list-accounts', 'account', 'issue', 'complete']);
 const SCREENS = ['휴대폰 인증', '신분증 확인', '계좌 확인', 'PIN 설정·발급'];
 const GROUPS = {
   init: ['init', 'profile', 'authenticate', 'request-sms'], profile: ['profile', 'authenticate', 'request-sms'],
   authenticate: ['authenticate', 'request-sms'], 'request-sms': ['request-sms'], 'verify-sms': ['verify-sms'],
-  consent: ['consent', 'begin-id', 'prepare-id', 'identity'], 'begin-id': ['begin-id', 'prepare-id', 'identity'],
-  'prepare-id': ['prepare-id', 'identity'], identity: ['identity'], account: ['account'],
+  consent: ['consent', 'begin-id', 'prepare-id', 'identity', 'list-accounts'], 'begin-id': ['begin-id', 'prepare-id', 'identity', 'list-accounts'],
+  'prepare-id': ['prepare-id', 'identity', 'list-accounts'], identity: ['identity', 'list-accounts'], 'list-accounts': ['list-accounts'], account: ['account'],
   issue: ['issue', 'complete'], complete: ['complete'], inspect: ['inspect'],
 };
 const SCREEN = {init: 0, profile: 0, authenticate: 0, 'request-sms': 0, 'verify-sms': 0,
-  consent: 1, 'begin-id': 1, 'prepare-id': 1, identity: 1, account: 2, issue: 3, complete: 3};
+  consent: 1, 'begin-id': 1, 'prepare-id': 1, identity: 1, 'list-accounts': 2, account: 2, issue: 3, complete: 3};
 const RUNNING = {init: '저장소를 준비하고 있어요.', profile: '휴대폰 정보를 저장하고 있어요.',
   authenticate: '휴대폰 인증을 준비하고 있어요.', 'request-sms': '인증문자를 요청하고 있어요.',
   'verify-sms': '인증번호를 확인하고 있어요.', consent: '약관 동의를 저장하고 있어요.',
   'begin-id': '신분증 확인을 준비하고 있어요.', 'prepare-id': '신분증 사진을 준비하고 있어요.',
-  identity: '신분증을 확인하고 있어요.', account: '본인 계좌를 확인하고 있어요.',
+  identity: '신분증을 확인하고 있어요.', 'list-accounts': '인증에 사용할 본인 계좌 목록을 불러오고 있어요.', account: '본인 계좌를 확인하고 있어요.',
   issue: '하나인증서를 발급하고 있어요.', complete: '가입을 마무리하고 있어요.', inspect: '발급 진행 상태를 확인하고 있어요.'};
 const IDENTITY_INPUT_ERRORS = new Set(['invalid_identity_capture', 'identity_jpeg_required', 'identity_jpeg_invalid',
   'identity_image_required', 'identity_image_too_large', 'identity_image_dimensions_too_large',
@@ -108,7 +108,9 @@ function showStopped(name, job, {issued = false, error = '', mismatch = false} =
     : correctable ? '은행에 신분증을 보내기 전 입력 검사에서 중단됐어요. 사진이나 정보를 수정해 이어갈 수 있어요.'
     : mismatch ? '방금 단계는 완료됐지만 다음 진행 상태를 확인하지 못해 멈췄어요.'
     : '발급 진행을 멈췄어요. 작업 기록에서 마지막 처리 결과를 확인하세요. 자동 재전송하지 않아요.';
-  ui.showDialog('하나인증서 발급 상태', `${note(text)}${job?.name === 'hana.onesign.issue.inspect' ? '<p>저장된 발급 상태 확인 완료</p>' : job ? ui.statusTags(job) : ''}${identityDiagnostic(job?.result?.identity_diagnostic)}
+  const account = job?.result?.account_diagnostic;
+  const accountNote = account?.selection_not_found ? note(`입력한 계좌번호가 은행의 발급용 본인계좌 목록 ${account.account_count}개와 일치하지 않아 중단됐어요.${account.password_verification_requested === false ? ' 계좌 비밀번호 검증 요청은 보내지 않았어요.' : ''} 새 발급에서는 은행이 제공한 목록에서 계좌를 선택하세요.`) : '';
+  ui.showDialog('하나인증서 발급 상태', `${note(text)}${job?.name === 'hana.onesign.issue.inspect' ? '<p>저장된 발급 상태 확인 완료</p>' : job ? ui.statusTags(job) : ''}${identityDiagnostic(job?.result?.identity_diagnostic)}${accountNote}
     <p class="form-error" role="alert">${esc(ui.message(stopped || error))}</p>
     <div class="dialog-actions">${button('작업 기록', 'data-view="activity"')}${button(correctable ? '신분증 입력 수정' : '진행 상태 확인', `data-action="certificate-hana-inspect" data-name="${esc(name)}"`, 'primary')}</div>`);
 }
@@ -169,21 +171,27 @@ async function stageDialog(name, stage, progress = {}, warning = '') {
   if (stage === 'verify-sms') fields += note('인증문자를 요청했어요. 문자가 도착하면 요청 후 180초 안에 인증번호를 입력하세요.') + field('sms', 'SMS 인증번호', 'type="password" inputmode="numeric" pattern="[0-9]{6}" maxlength="6" autocomplete="one-time-code"');
   if (stage === 'consent') fields += `<details><summary>하나인증서 가입 필수 약관</summary>${terms(progress.terms || [])}</details>${agree()}`;
   if (capture) fields += cards.length ? identityChoice(cards) : identityFields();
-  if (stage === 'account') fields += field('account_number', '본인 하나은행 계좌번호', 'inputmode="numeric" pattern="[0-9]{8,20}" maxlength="20"')
-    + field('account_password', '계좌 비밀번호', 'type="password" inputmode="numeric" pattern="[0-9]{4}" maxlength="4"');
+  if (stage === 'list-accounts') fields += note('은행에서 인증에 사용할 수 있는 본인 계좌 목록을 불러와요.');
+  if (stage === 'account') fields += (progress.accounts?.length
+    ? '<div class="field"><label for="cert-account-choice">인증할 본인 계좌</label><select id="cert-account-choice" name="account_choice" required><option value="">계좌를 선택하세요</option>'
+      + progress.accounts.map(row => `<option value="${esc(row.choice)}">${esc(row.label)}</option>`).join('') + '</select></div>'
+      + field('account_password', '계좌 비밀번호', 'type="password" inputmode="numeric" pattern="[0-9]{4}" maxlength="4"')
+    : note('은행 응답에서 선택할 수 있는 발급용 본인계좌를 확인하지 못했어요. 목록에 없는 계좌나 평생계좌번호를 직접 입력할 수는 없어요.'));
   if (stage === 'issue') fields += note('하나인증서에 사용할 PIN을 정하세요. 저장소 암호와 별개예요.')
     + field('new_pin', '새 PIN 6자리', 'type="password" inputmode="numeric" pattern="[0-9]{6}" maxlength="6"')
     + field('new_pin_confirmation', 'PIN 확인', 'type="password" inputmode="numeric" pattern="[0-9]{6}" maxlength="6"');
   const label = stage === 'inspect' ? '발급 이어하기' : stage === 'verify-sms' ? '인증번호 확인'
-    : stage === 'complete' ? '가입 완료' : SCREEN[stage] === 0 ? '인증문자 요청'
+    : stage === 'complete' ? '가입 완료' : stage === 'list-accounts' ? '본인 계좌 불러오기' : SCREEN[stage] === 0 ? '인증문자 요청'
     : SCREEN[stage] === 1 ? '신분증 확인' : SCREEN[stage] === 2 ? '계좌 확인' : '하나인증서 발급';
   const approval = stage === 'inspect' ? '저장된 진행 상태를 확인하고 이어갈 화면을 열어요. 기관에는 접속하지 않아요.'
     : SCREEN[stage] === 0 ? (stage === 'verify-sms' ? '인증번호 확인을 누르면 기관에 인증번호를 보내 본인 여부를 확인해요.' : '인증문자 요청을 누르면 휴대폰 정보를 저장하고 앱 인증과 SMS 요청을 순서대로 진행해요.')
-    : SCREEN[stage] === 1 ? '신분증 확인을 누르면 가입 동의와 사진 준비를 마친 뒤 은행에 신분증을 보내 확인해요.'
-    : SCREEN[stage] === 2 ? '계좌 확인을 누르면 은행에서 본인 명의 계좌와 비밀번호를 확인해요.'
+    : SCREEN[stage] === 1 ? '신분증 확인을 누르면 가입 동의와 사진 준비를 마친 뒤 은행에 신분증을 보내 확인하고, 인증할 본인 계좌 목록을 불러와요.'
+    : stage === 'list-accounts' ? '본인 계좌 불러오기를 누르면 은행에 발급용 계좌 목록을 요청해요.'
+    : SCREEN[stage] === 2 ? '은행에서 제공한 본인계좌를 선택하세요. 계좌 확인을 누르면 선택한 계좌의 비밀번호를 은행에 보내 확인해요.'
     : stage === 'complete' ? '가입 완료를 누르면 이미 발급한 인증서의 가입 절차를 마무리해요.' : '하나인증서 발급을 누르면 인증서를 새로 발급하고 가입 완료까지 진행해요.';
   ui.showDialog('하나인증서 발급', `${stage === 'inspect' ? '' : steps(stage)}${before}${warning ? note(esc(warning)) : ''}<form data-submit="certificate-hana-submit" data-name="${esc(name)}" data-stage="${esc(stage)}" data-digest="${esc(digest)}" autocomplete="off"><h3>${stage === 'inspect' ? '발급 이어하기' : SCREENS[SCREEN[stage]]}</h3><p class="meta">실서버 미검증</p>${fields}<p class="field-help">${approval}</p>${controls(label)}</form>`, {wide: stage !== 'inspect'});
   const form = document.querySelector('[data-submit="certificate-hana-submit"]');
+  if (stage === 'account' && !progress.accounts?.length) form.querySelector('button[type="submit"]').disabled = true;
   if (stage === 'init') {
     let candidate = 'hana', suffix = 2;
     while (state.credentials.some(c => c.ref === candidate)) candidate = 'hana-' + suffix++;
@@ -216,7 +224,7 @@ async function submitWizard(form) {
         : await captureOf(data)};
     }
     if (stage === 'verify-sms') privateInputs[stage] = {sms: data.get('sms')};
-    if (stage === 'account') privateInputs[stage] = {account_number: data.get('account_number'), account_password: data.get('account_password')};
+    if (stage === 'account') privateInputs[stage] = {account_choice: data.get('account_choice'), account_password: data.get('account_password')};
     if (stage === 'issue') {
       if (data.get('new_pin') !== data.get('new_pin_confirmation')) throw new Error('new_pin_confirmation_mismatch');
       privateInputs.issue = {new_pin: data.get('new_pin'), new_pin_confirmation: data.get('new_pin_confirmation'), issue_confirmation: '발급'};
