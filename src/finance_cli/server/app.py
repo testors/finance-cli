@@ -373,6 +373,7 @@ def create_app(config, *, db=None, dispatcher=True, vaults=None):
 
     @app.get(API + '/logins')
     def get_logins():
+        from . import session_activity
         with db.read() as con:
             rows = model.list_logins(con)
             for row in rows:
@@ -381,7 +382,9 @@ def create_app(config, *, db=None, dispatcher=True, vaults=None):
                 # Display metadata only: no cookies, file locations or verdict payloads.
                 row['session'] = None if session is None else {
                     'state': session['state'], 'created_at': session['created_at'], 'checked_at': session['checked_at']}
-            return {'logins': rows}
+                if session is not None and row['institution'] == 'hana':
+                    row['session'].update(session_activity.metadata(con, session))
+            return {'logins': rows, 'server_time': session_activity.now()}
 
     @app.post(API + '/logins')
     async def post_login(request: Request):
@@ -524,6 +527,12 @@ def create_app(config, *, db=None, dispatcher=True, vaults=None):
         status = start_with_secrets(job['id'], job['step'], provided)
         if status == 'started':
             return
+        # The worker can cross the idle deadline after API admission but before
+        # asking for secrets. Keep its terminal record and return the real reason.
+        with db.read() as con:
+            current = jobs.get(con, job['id'])
+        if json.loads(current['local']).get('stopped') == 'session_idle_expired':
+            raise ApiError(409, 'session_idle_expired')
         on_busy(status)
         raise ApiError(409, 'resource_busy' if status == 'busy' else 'worker_not_started')
 

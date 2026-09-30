@@ -7,7 +7,7 @@ The caller holds the identity operation lock and supplies an explicit send flag.
 import base64
 import gzip
 
-from . import inquiry, ledger, ledger_protocol, store
+from . import inquiry, ledger, ledger_protocol, store, request_activity
 from .evidence import account
 from .hana_protocol import API
 from .onesign_codec import encode
@@ -91,7 +91,7 @@ class Queries:
                             client.response_headers, raw, request['body'], (meta.get('previous') or {}).get('history_total')))
             result.update(assessed, processing_status='completed')
         except (ValueError, OSError) as error:
-            result['reason'] = str(error) if isinstance(error, ProtocolError) else 'local_processing_error'
+            result['reason'] = str(error) if isinstance(error, (ProtocolError, request_activity.RequestBlocked)) else 'local_processing_error'
             # Common-header verdict survives response decoding/storage failure.
             result.update(accepted={'accepted': True, 'rejected': False}.get(client.last['service_status']),
                           processing_status=client.last['processing_status'])

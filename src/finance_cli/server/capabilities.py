@@ -128,9 +128,12 @@ def global_capabilities():
 
 
 def login_readiness(con, login):
+    from . import session_activity
     session = model.current_session(con, login['id'])
     if login['disabled']:
         return 'login_disabled'
+    if login['institution'] == 'hana' and session is not None and session_activity.metadata(con, session)['idle_expired']:
+        return 'login_required'
     if login['institution'] == 'hana' and login['method'] == 'onesign' and session is not None \
             and session['state'] != 'usable' and adapters.get('hana.onesign.accounts').accepts_session(session):
         return 'query_only'

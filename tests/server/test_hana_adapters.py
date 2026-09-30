@@ -17,7 +17,7 @@ import test_hana_sessions as joint_fixture  # noqa: E402
 
 from Crypto.PublicKey import ECC  # noqa: E402
 
-from finance_cli.server import jobs, worker  # noqa: E402
+from finance_cli.server import jobs, worker, session_activity  # noqa: E402
 from finance_cli.server.db import loads  # noqa: E402
 from finance_cli.services.hana import onesign, onesign_transfer, transport  # noqa: E402
 from finance_cli.services.hana.onesign_state import State  # noqa: E402
@@ -76,6 +76,22 @@ class JointPathTests(HanaCase):
         refused = self.post('/jobs', {'name': 'hana.login', 'login_id': self.login['id'],
                                       'secrets': {'certificate_password': 'x'}})
         self.assertEqual(refused.json()['error'], 'registration_required:app_profile,login_input')
+
+    def test_joint_idle_clock_tracks_http_and_blocks_expired_query(self):
+        self.link_registration()
+        at = time.time()
+        with patch.object(session_activity, 'now', return_value=at):
+            self.run_job(self.submit('hana.login', login_id=self.login['id'])['id'],
+                         {'certificate_password': 'Synthetic-Password!'})
+        with patch.object(session_activity, 'now', return_value=at + 599):
+            self.run_job(self.submit('hana.accounts.list', login_id=self.login['id'])['id'])
+            row = self.get('/logins').json()['logins'][0]
+            self.assertEqual(row['session']['last_request_at'], at + 599)
+        count = len(self.bank.requests)
+        with patch.object(session_activity, 'now', return_value=at + 1199):
+            refused = self.post('/jobs', {'name': 'hana.accounts.list', 'login_id': self.login['id']})
+            self.assertEqual(refused.json()['error'], 'session_idle_expired')
+        self.assertEqual(count, len(self.bank.requests))
 
     def test_login_accounts_history_export_inquiry_security_extend(self):
         self.link_registration()
@@ -207,6 +223,106 @@ class OneSignPathTests(HanaCase):
             input = {'start_date': time.strftime('%Y-%m-%d'), 'end_date': time.strftime('%Y-%m-%d'), **input}
         return self.run_job(self.submit('hana.onesign.' + suffix, login_id=self.login['id'], target_id=target['id'],
                                         input=input, parent_job_id=parent)['id'], self.vault)
+
+    def test_idle_boundary_polling_restart_and_new_login(self):
+        from finance_cli.server.db import Database
+        at = time.time()
+        with patch.object(session_activity, 'now', return_value=at):
+            self.signed_in()
+        with patch.object(session_activity, 'now', return_value=at + 599):
+            queued = self.submit('hana.onesign.accounts', login_id=self.login['id'])
+            row = self.get('/logins').json()['logins'][0]
+            self.assertEqual(row['session']['last_request_at'], at)
+            self.assertFalse(row['session']['idle_expired'])
+            self.get('/jobs')
+            self.get('/vaults')
+        count = len(self.services.calls)
+        with patch.object(session_activity, 'now', return_value=at + 600):
+            row = self.get('/logins').json()['logins'][0]
+            self.assertEqual(row['readiness'], 'login_required')
+            self.assertTrue(row['session']['idle_expired'])
+            self.assertEqual(row['session']['last_request_at'], at)
+            with Database(self.db.file()).read() as con:
+                session = con.execute('SELECT * FROM sessions WHERE id=?', (row['current_session_id'],)).fetchone()
+                self.assertTrue(session_activity.metadata(con, session)['idle_expired'])
+                self.assertEqual((session['state'], json.loads(session['verdict'])), ('usable', {'accepted': True}))
+            with self.assertRaisesRegex(jobs.NotReady, '^session_idle_expired$'):
+                self.submit('hana.onesign.accounts', login_id=self.login['id'])
+            stopped = self.run_job(queued['id'], self.vault)
+            self.assertEqual((stopped['outcome'], stopped['local']['stopped']), ('not_started', 'session_idle_expired'))
+            self.assertEqual(count, len(self.services.calls))
+            self.signed_in()  # Explicit login is allowed; no automatic query follows it.
+            fresh = self.get('/logins').json()['logins'][0]
+            self.assertNotEqual(fresh['current_session_id'], row['current_session_id'])
+            self.assertEqual(fresh['session']['last_request_at'], at + 600)
+            self.assertFalse(fresh['session']['idle_expired'])
+
+    def test_idle_expiry_during_secret_entry_and_at_send_boundary(self):
+        at = time.time()
+        with patch.object(session_activity, 'now', return_value=at):
+            self.signed_in()
+        count = len(self.services.calls)
+        with patch.object(session_activity, 'now', return_value=at + 599) as clock:
+            job = self.submit('hana.onesign.accounts', login_id=self.login['id'])
+
+            def delayed_input(stream, names):
+                clock.return_value = at + 600
+                return dict(self.vault)
+
+            with patch.object(worker, 'read_secrets', delayed_input):
+                stopped = self.run_job(job['id'], self.vault)
+            self.assertEqual((stopped['outcome'], stopped['local']['stopped']), ('not_started', 'session_idle_expired'))
+            self.assertEqual(count, len(self.services.calls))
+            # A slow preparation after reserve() is checked again at HTTP send.
+            clock.return_value = at + 599
+            job = self.submit('hana.onesign.accounts', login_id=self.login['id'])
+            original = onesign.operate
+
+            def delayed_send(*args, **kwargs):
+                clock.return_value = at + 600
+                return original(*args, **kwargs)
+
+            with patch.object(onesign, 'operate', delayed_send):
+                stopped = self.run_job(job['id'], self.vault)
+            self.assertEqual(stopped['local']['stopped'], 'session_idle_expired')
+            self.assertEqual(stopped['service_verdict']['error'], 'session_idle_expired')
+            self.assertIsNone(stopped['service_verdict']['accepted'])
+            self.assertEqual(count, len(self.services.calls))
+            self.assertEqual(self.get('/logins').json()['logins'][0]['session']['last_request_at'], at)
+            # Worker admission can also cross the deadline before its "ready" handshake.
+            clock.return_value = at + 599
+
+            def delayed_worker(job_id, step, secrets):
+                clock.return_value = at + 600
+                worker.run(self.db, job_id, step, control=io.StringIO(), stdin=io.StringIO())
+                return 'skipped'
+
+            with patch('finance_cli.server.app.start_with_secrets', delayed_worker):
+                refused = self.post('/jobs', {'name': 'hana.onesign.accounts', 'login_id': self.login['id'],
+                                             'secrets': self.vault})
+            self.assertEqual((refused.status_code, refused.json()['error']), (409, 'session_idle_expired'))
+            self.assertEqual(count, len(self.services.calls))
+
+    def test_idle_expiry_preserves_transfer_guard_and_local_exports(self):
+        at = time.time()
+        with patch.object(session_activity, 'now', return_value=at):
+            target = self.query_setup()
+            history = self.query_job(target, 'history.list')
+            prepared = self.prepare(target)
+        count = len(self.services.calls)
+        with patch.object(session_activity, 'now', return_value=at + 600):
+            with self.assertRaisesRegex(jobs.NotReady, '^session_idle_expired$'):
+                jobs.accept_confirmation(self.db, prepared['id'], prepared['awaiting']['digest'], 'web:test')
+            final = self.get('/jobs/' + prepared['id']).json()
+            self.assertEqual(final['status'], 'expired')
+            self.assertEqual(final['service_verdict'], prepared['service_verdict'])
+            with self.db.read() as con:
+                session = con.execute('SELECT * FROM sessions WHERE id=?', (prepared['session_id'],)).fetchone()
+                self.assertEqual((session['state'], session['note']), ('consumed', 'transfer_prepared'))
+            exported = self.query_job(target, 'history.export', history['id'])
+            self.assertEqual(exported['outcome'], 'success', exported)
+            self.assertEqual(count, len(self.services.calls))
+            self.assertEqual(self.get('/logins').json()['logins'][0]['session']['last_request_at'], at)
 
     def test_same_login_queries_before_and_after_transfer_and_sealed_receipts(self):
         from finance_cli.services.hana import ledger_protocol as lp

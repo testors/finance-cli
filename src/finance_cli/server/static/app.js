@@ -71,14 +71,46 @@ export function target(id) { return state.targets.find(t => t.id === id) || null
 function viewKey() { return `${state.profileId}:${state.mode}`; }
 
 export async function refreshModel() {
-  const [profiles, logins, targets, capabilities, vaults] = await Promise.all([
-    api.get('/profiles'), api.get('/logins'), api.get('/targets'), api.get('/capabilities'), api.get('/vaults')]);
+  const [profiles, , targets, capabilities, vaults] = await Promise.all([
+    api.get('/profiles'), refreshLogins(), api.get('/targets'), api.get('/capabilities'), api.get('/vaults')]);
   state.vaults = Object.fromEntries(vaults.vaults.map(v => [v.name, v.unlocked]));
   state.profiles = profiles.profiles;
-  state.logins = logins.logins;
   state.targets = targets.targets;
   state.capabilities = capabilities;
   if (state.profileId !== 'all' && !state.profiles.some(p => p.id === state.profileId && !p.disabled)) setProfile('all');
+}
+
+async function refreshLogins() {
+  const value = await api.get('/logins');
+  state.logins = value.logins;
+  state.sessionClock = {server: value.server_time, local: Date.now() / 1000};
+  return value;
+}
+
+export function bankSessionExpired(row) {
+  if (row?.institution !== 'hana' || !row.session?.idle_expires_at) return false;
+  const clock = state.sessionClock;
+  const at = clock?.server === undefined ? Date.now() / 1000 : clock.server + Date.now() / 1000 - clock.local;
+  return at >= row.session.idle_expires_at;
+}
+
+export async function expiredBankLogin(ctx, id) {
+  ui.toast(ui.message('session_idle_expired'));
+  await actions.login(ctx, {dataset: {login: id, reason: 'session_idle_expired'}});
+}
+
+export async function ensureBankSession(ctx, id) {
+  if (!bankSessionExpired(login(id))) return true;
+  // Another tab may have used this session. This is local metadata, no bank request.
+  await refreshLogins();
+  if (!bankSessionExpired(login(id))) return true;
+  await expiredBankLogin(ctx, id);
+  return false; // Logging in never replays the interrupted operation.
+}
+
+function usesBankSession(name) {
+  return name.startsWith('hana.') && !['hana.login', 'hana.onesign.login',
+    'hana.history.export', 'hana.onesign.history.export'].includes(name);
 }
 
 export function setProfile(id) {
@@ -236,8 +268,13 @@ function makeContext(token) {
     async run(name, fields, {panel, key, onDone, secrets} = {}) {
       let job;
       try {
+        if (usesBankSession(name) && !await ensureBankSession(context, fields.login_id)) return null;
         job = await submit(name, {...fields, ...(secrets ? {secrets} : {}), profile_id: profile()?.id || undefined});
       } catch (error) {
+        if (error.code === 'session_idle_expired') {
+          await expiredBankLogin(context, fields.login_id);
+          return null;
+        }
         const message = ui.message(error.code);
         if (document.getElementById(panel)) document.getElementById(panel).innerHTML = jobState(null, message);
         ui.toast(message);
@@ -257,6 +294,13 @@ function makeContext(token) {
         ui.toast(ui.message(error.code));
         return null;
       });
+      if (final?.name?.startsWith('hana.') && final.login_id) {
+        await refreshLogins().catch(() => {}); // A display refresh cannot change the job's outcome.
+        if (final.local?.stopped === 'session_idle_expired' && context.current()) {
+          await expiredBankLogin(context, final.login_id);
+          return null;
+        }
+      }
       if (final && context.current()) await onDone?.(final);
       return final;
     },

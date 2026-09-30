@@ -4,7 +4,7 @@
 import {api, submit} from './api.js';
 import * as ui from './ui.js';
 import {certificateActions} from './certificates.js';
-import {applyRemember, askSecrets, changeView, jobState, login, onesignStore, profile, refreshModel, rememberField,
+import {applyRemember, askSecrets, bankSessionExpired, changeView, ensureBankSession, expiredBankLogin, jobState, login, onesignStore, profile, refreshModel, rememberField,
   render, scopeLogins, scopeTargets, SECRET_LABELS, secretFields, showJob, state, target} from './app.js';
 
 const {esc, icon, tag, note, heading, money} = ui;
@@ -26,8 +26,9 @@ function setupNotice(featureId) {
 function canQuery(row) { return ['ready', 'query_only'].includes(row.readiness); }
 
 function readiness(row) {
+  if (bankSessionExpired(row)) return tag('세션 만료 · 다시 로그인', 'warning');
   const value = row.readiness;
-  return value === 'query_only' ? tag('조회 가능', '') : value === 'ready' ? tag('세션 있음', '') : value === 'login_disabled' ? tag('사용 중지', 'neutral') : tag('로그인 필요', 'warning');
+  return value === 'query_only' ? tag('조회용 세션 있음', '') : value === 'ready' ? tag('세션 있음', '') : value === 'login_disabled' ? tag('사용 중지', 'neutral') : tag('로그인 필요', 'warning');
 }
 
 const key = (name, fields = {}) => [name, fields.login_id || '', fields.target_id || '', fields.parent || ''].join('|');
@@ -287,10 +288,16 @@ function confirmDialog(ctx, job) {
     const form = event.target;
     form.querySelector('button[type=submit]').disabled = true;
     try {
+      if (transfer && !await ensureBankSession(ctx, job.login_id)) return;
       const secrets = await applyRemember(Object.fromEntries(new FormData(form).entries()), store);
       form.reset();
       await api.post(`/jobs/${encodeURIComponent(job.id)}/confirm`, {confirmation: awaiting.digest, secrets});
     } catch (error) {
+      if (error.code === 'session_idle_expired') {
+        clearInterval(timer);
+        await expiredBankLogin(ctx, job.login_id);
+        return;
+      }
       ui.toast(ui.message(error.code));
       form.querySelector('button[type=submit]').disabled = false;
       return;
@@ -327,9 +334,16 @@ function accountSelect(list, id = 'account', label = '계좌') {
 // Bank query dates follow Korea time even before 09:00 KST or from an overseas browser.
 const bankDate = (daysAgo = 0) => new Date(Date.now() + 9 * 3600000 - daysAgo * 86400000).toISOString().slice(0, 10);
 
+function loginButton(row, primary = false) {
+  if (row.disabled) return '';
+  return ui.button(row.current_session_id ? '다시 로그인' : '로그인',
+    `data-action="login" data-login="${esc(row.id)}"`, primary ? 'primary' : 'secondary');
+}
+
 function accountsJobName(row) { return row.method === 'onesign' ? 'hana.onesign.accounts' : 'hana.accounts.list'; }
 
 async function runHanaQuery(ctx, suffix, fields, options) {
+  if (suffix !== 'history.export' && !await ensureBankSession(ctx, fields.login_id)) return;
   const owner = login(fields.login_id);
   const onesign = owner?.method === 'onesign';
   const secrets = onesign ? await askSecrets('내역 조회', [SECRET_LABELS.vault_passphrase],
@@ -357,7 +371,7 @@ async function accountsView(ctx) {
     if (!rows.length) unknown += 1;
     for (const account of rows) if (typeof account.balance === 'number') { total += account.balance; counted += 1; }
     const sameSession = job && job.session_id && job.session_id === row.current_session_id && row.method === 'joint_certificate';
-    return `<section class="panel"><div class="panel-heading"><div><h2>${esc(row.display_name)}</h2><p class="meta">${esc(ui.METHOD[row.method])} · ${job?.observed_at ? '조회 ' + ui.time(job.observed_at) : '미조회'}</p></div><div class="pill-row">${readiness(row)}${ui.verification('live_untested')}</div></div>${panel('job-' + row.id, job && job.status !== 'finished' ? job : null)}${rows.length ? `<div class="table-wrap"><table class="table data"><thead><tr><th>계좌</th><th>번호</th><th>통화</th><th class="num">잔액</th><th>대상</th></tr></thead><tbody>${rows.map(a => `<tr><td>${esc(a.label)}</td><td>${esc(a.account_number)}</td><td>${esc(a.currency)}</td><td class="num">${state.hidden ? '••••••' : money(a.balance)}</td><td>${mapping[a.ref] ? tag('등록됨') : `<button class="text-button" data-action="register-candidate" data-job="${esc(job.id)}" data-login="${esc(row.id)}" data-ref="${esc(a.ref)}">대상 등록</button>`}</td></tr>`).join('')}</tbody></table></div>` : `<div class="empty-state">${job ? outcomeNote(job) || '표시할 계좌가 없어요.' : '아직 조회하지 않았어요.'}</div>`}<div class="section-actions">${!canQuery(row) || sameSession ? ui.button('로그인', `data-action="login" data-login="${esc(row.id)}"`, 'primary') : ''}${canQuery(row) && !sameSession ? ui.button('잔액 조회', `data-action="accounts-query" data-login="${esc(row.id)}"`, 'primary', 'refresh') : ''}${sameSession ? '<span class="muted-block">이 세션의 계좌 조회는 이미 기록했어요. 새로 로그인하면 다시 조회할 수 있어요.</span>' : ''}</div></section>`;
+    return `<section class="panel"><div class="panel-heading"><div><h2>${esc(row.display_name)}</h2><p class="meta">${esc(ui.METHOD[row.method])} · ${job?.observed_at ? '조회 ' + ui.time(job.observed_at) : '미조회'}</p></div><div class="pill-row">${readiness(row)}${ui.verification('live_untested')}</div></div>${panel('job-' + row.id, job && (job.status !== 'finished' || job.outcome !== 'success') ? job : null)}${rows.length ? `<div class="table-wrap"><table class="table data"><thead><tr><th>계좌</th><th>번호</th><th>통화</th><th class="num">잔액</th><th>대상</th></tr></thead><tbody>${rows.map(a => `<tr><td>${esc(a.label)}</td><td>${esc(a.account_number)}</td><td>${esc(a.currency)}</td><td class="num">${state.hidden ? '••••••' : money(a.balance)}</td><td>${mapping[a.ref] ? tag('등록됨') : `<button class="text-button" data-action="register-candidate" data-job="${esc(job.id)}" data-login="${esc(row.id)}" data-ref="${esc(a.ref)}">대상 등록</button>`}</td></tr>`).join('')}</tbody></table></div>` : `<div class="empty-state">${job ? outcomeNote(job) || '표시할 계좌가 없어요.' : '아직 조회하지 않았어요.'}</div>`}<div class="section-actions">${canQuery(row) && !sameSession ? ui.button('잔액 조회', `data-action="accounts-query" data-login="${esc(row.id)}"`, 'primary', 'refresh') : ''}${loginButton(row, !canQuery(row) || sameSession)}${sameSession ? '<span class="muted-block">이 세션의 계좌 조회는 이미 기록했어요. 새로 로그인하면 다시 조회할 수 있어요.</span>' : ''}</div></section>`;
   }).join('');
   return heading('내 계좌', '은행 로그인별로 모아 보고, 로그인 상태와 조회 시각을 구별해요.') + setupNotice('hana-accounts') +
     `<section class="balance-overview"><div><div class="balance-label">조회한 계좌 잔액 합계<button class="icon-button" data-action="privacy" aria-label="${state.hidden ? '잔액 표시' : '잔액 숨기기'}">${icon('eye')}</button></div><div class="total-balance number">${counted ? (state.hidden ? '••••••' : money(total)) : '—'}<small>원</small></div><div class="balance-meta"><span>${counted}개 계좌 합산</span>${unknown ? `<span>미조회 ${unknown}곳은 합계에서 제외</span>` : ''}</div></div><div class="overview-side"><p>필요할 때, 바로 이체하세요.</p><button class="button on-dark" data-view="transfer">이체하기 ${icon('transfer')}</button></div></section><div class="stack">${panels}</div>`;
@@ -369,7 +383,7 @@ async function historyView(ctx) {
   const today = bankDate();
   const week = bankDate(6);
   return heading('거래 내역', '계좌별 입출금 내역을 조회해요. 다음 페이지는 직접 요청해야 가져와요.') + setupNotice('hana-history') +
-    `<section class="panel"><form class="filter-bar" data-submit="history-query">${accountSelect(list)}<label class="field-inline">시작일<input type="date" name="start_date" value="${week}" required></label><label class="field-inline">종료일<input type="date" name="end_date" value="${today}" required></label><label class="field-inline">구분<select name="direction"><option value="all">전체</option><option value="deposit">입금</option><option value="withdrawal">출금</option></select></label><label class="field-inline">정렬<select name="order"><option value="desc">최신순</option><option value="asc">과거순</option></select></label><label class="field-inline">검색<input name="search" maxlength="25"></label><button class="button primary" type="submit">${icon('refresh')}조회</button></form>${panel('job-panel', null)}<div id="results"><div class="empty-state">계좌와 기간을 정해 조회하세요. 이 세션에서 계좌 조회를 먼저 해야 해요.</div></div></section>`;
+    `<section class="panel"><form class="filter-bar" data-submit="history-query">${accountSelect(list)}<label class="field-inline">시작일<input type="date" name="start_date" value="${week}" required></label><label class="field-inline">종료일<input type="date" name="end_date" value="${today}" required></label><label class="field-inline">구분<select name="direction"><option value="all">전체</option><option value="deposit">입금</option><option value="withdrawal">출금</option></select></label><label class="field-inline">정렬<select name="order"><option value="desc">최신순</option><option value="asc">과거순</option></select></label><label class="field-inline">검색<input name="search" maxlength="25"></label><button class="button primary" type="submit">${icon('refresh')}조회</button><button class="button secondary" type="button" data-action="account-login">다시 로그인</button></form>${panel('job-panel', null)}<div id="results"><div class="empty-state">계좌와 기간을 정해 조회하세요. 이 세션에서 계좌 조회를 먼저 해야 해요.</div></div></section>`;
 }
 
 function historyRows(job, append = false) {
@@ -388,7 +402,7 @@ async function transferView(ctx) {
   return heading('이체', '보내기 전에 받는 분과 금액을 확인하세요.') + setupNotice('hana-transfer') +
     `<div class="steps"><span class="active"><b>1</b>정보 입력</span><i></i><span><b>2</b>내용 확인</span><i></i><span><b>3</b>완료</span></div>` +
     note('하나인증서 로그인 한 번으로 잔액·거래 내역·이체 내역을 조회하고 이체할 수 있어요. 이체 후에도 조회는 계속 가능해요. 다음 이체를 준비할 때는 새 로그인이 필요해요. 이 기능은 실서버 미검증이에요.') +
-    `<div class="transfer-layout"><form class="panel form-panel" data-submit="transfer-prepare"><div class="field"><label for="source-account">어느 계좌에서 보낼까요?</label><select id="source-account" name="target_id">${list.map(t => `<option value="${esc(t.id)}">${esc(t.display_name)} · ${esc(t.identity?.account_number)} (${esc(login(t.login_id)?.display_name)} · ${esc(login(t.login_id)?.readiness === 'ready' ? '세션 있음' : '새 이체 로그인 필요')})</option>`).join('')}</select></div><div class="field"><label for="recipient-account">받는 계좌</label><div class="field-row"><select id="recipient-bank" name="bank" aria-label="받는 은행">${BANKS.map(([code, name]) => `<option value="${code}">${name}</option>`).join('')}</select><input id="recipient-account" name="account" inputmode="numeric" autocomplete="off" required pattern="[0-9-]{8,30}" placeholder="숫자만 입력"></div></div><div class="field"><label for="transfer-amount">얼마를 보낼까요?</label><div class="amount-input"><input id="transfer-amount" name="amount" inputmode="numeric" autocomplete="off" required pattern="[0-9,]+"><span>원</span></div><div class="amount-presets">${presets.map(v => `<button type="button" data-action="amount-add" data-add="${v}">+${money(v / 10000)}만</button>`).join('')}<button type="button" data-action="amount-clear">지우기</button></div></div><div class="form-actions"><button class="button primary" type="submit">이체 내용 확인 ${icon('arrow')}</button><p class="field-help">다음 단계에서 저장소 암호와 출금 계좌 비밀번호를 받아 은행의 확인 화면까지 준비해요. 이때는 이체하지 않아요.</p></div></form><aside class="panel transfer-summary"><h2>진행 방식</h2><div class="info-block">${icon('shield')} 1) 준비: 받는 분 이름·수수료를 은행에서 확인<br>2) 확인: 내용을 보고 PIN(필요한 경우)과 함께 실행 예약<br>3) 실행: 한 번만 전송, 자동 재전송 없음<br>4) 결과 조회: 이체 내역으로 따로 대조</div></aside></div>${panel('job-panel', null)}`;
+    `<div class="transfer-layout"><form class="panel form-panel" data-submit="transfer-prepare"><div class="field"><label for="source-account">어느 계좌에서 보낼까요?</label><select id="source-account" name="target_id">${list.map(t => `<option value="${esc(t.id)}">${esc(t.display_name)} · ${esc(t.identity?.account_number)} (${esc(login(t.login_id)?.display_name)} · ${esc(login(t.login_id)?.readiness === 'ready' ? '세션 있음' : '새 이체 로그인 필요')})</option>`).join('')}</select></div><div class="field"><label for="recipient-account">받는 계좌</label><div class="field-row"><select id="recipient-bank" name="bank" aria-label="받는 은행">${BANKS.map(([code, name]) => `<option value="${code}">${name}</option>`).join('')}</select><input id="recipient-account" name="account" inputmode="numeric" autocomplete="off" required pattern="[0-9-]{8,30}" placeholder="숫자만 입력"></div></div><div class="field"><label for="transfer-amount">얼마를 보낼까요?</label><div class="amount-input"><input id="transfer-amount" name="amount" inputmode="numeric" autocomplete="off" required pattern="[0-9,]+"><span>원</span></div><div class="amount-presets">${presets.map(v => `<button type="button" data-action="amount-add" data-add="${v}">+${money(v / 10000)}만</button>`).join('')}<button type="button" data-action="amount-clear">지우기</button></div></div><div class="form-actions"><button class="button primary" type="submit">이체 내용 확인 ${icon('arrow')}</button><button class="button secondary" type="button" data-action="account-login">다시 로그인</button><p class="field-help">다음 단계에서 저장소 암호와 출금 계좌 비밀번호를 받아 은행의 확인 화면까지 준비해요. 이때는 이체하지 않아요.</p></div></form><aside class="panel transfer-summary"><h2>진행 방식</h2><div class="info-block">${icon('shield')} 1) 준비: 받는 분 이름·수수료를 은행에서 확인<br>2) 확인: 내용을 보고 PIN(필요한 경우)과 함께 실행 예약<br>3) 실행: 한 번만 전송, 자동 재전송 없음<br>4) 결과 조회: 이체 내역으로 따로 대조</div></aside></div>${panel('job-panel', null)}`;
 }
 
 async function inquiryView(ctx) {
@@ -397,7 +411,7 @@ async function inquiryView(ctx) {
   const today = bankDate();
   const month = bankDate(30);
   return heading('이체 내역', '완료된 이체와 처리 결과를 확인하세요.') + setupNotice('hana-inquiry') +
-    `<section class="panel"><form class="filter-bar" data-submit="inquiry-query">${accountSelect(list)}<label class="field-inline">시작일<input type="date" name="start_date" value="${month}" required></label><label class="field-inline">종료일<input type="date" name="end_date" value="${today}" required></label><button class="button primary" type="submit">${icon('refresh')}조회</button></form>${panel('job-panel', null)}<div id="results"></div><div class="list-footer">행을 누르면 이체 상세를 조회해요.</div></section>`;
+    `<section class="panel"><form class="filter-bar" data-submit="inquiry-query">${accountSelect(list)}<label class="field-inline">시작일<input type="date" name="start_date" value="${month}" required></label><label class="field-inline">종료일<input type="date" name="end_date" value="${today}" required></label><button class="button primary" type="submit">${icon('refresh')}조회</button><button class="button secondary" type="button" data-action="account-login">다시 로그인</button></form>${panel('job-panel', null)}<div id="results"></div><div class="list-footer">행을 누르면 이체 상세를 조회해요.</div></section>`;
 }
 
 async function securityView(ctx) {
@@ -458,7 +472,7 @@ const SESSION_LABEL = {usable: '사용 가능', consumed: '세션 사용함', ex
 
 function loginStatus(row) {
   if (row.disabled) return tag('사용 중지', 'neutral');
-  if (row.readiness === 'query_only') return tag('조회 가능', '') + '<span class="meta">새 이체 시 로그인 필요</span>';
+  if (row.readiness === 'query_only') return tag('조회용 세션 있음', '') + '<span class="meta">새 이체 시 로그인 필요</span>';
   if (row.readiness === 'ready') return tag('로그인됨', '') + (row.session?.checked_at ? `<span class="meta">확인 ${ui.time(row.session.checked_at)}</span>` : '');
   const session = row.session;
   if (!session) return tag('로그인 필요', 'warning');
@@ -473,9 +487,10 @@ function verifyAction(row) {
 function primaryAction(row, targets) {
   if (row.disabled) return '';
   const attrs = `data-login="${esc(row.id)}"`;
-  if (!canQuery(row)) return ui.button('로그인', `data-action="login" ${attrs}`, 'primary');
-  if (!targets.length) { const [action, label] = verifyAction(row); return ui.button(label, `data-action="${action}" ${attrs}`, 'primary'); }
-  return '';
+  if (!canQuery(row)) return loginButton(row, true);
+  const relogin = row.institution === 'hana' ? loginButton(row) : '';
+  if (!targets.length) { const [action, label] = verifyAction(row); return ui.button(label, `data-action="${action}" ${attrs}`, 'primary') + relogin; }
+  return relogin;
 }
 
 function signingLines(row) {
@@ -664,7 +679,8 @@ export const actions = {
   privacy: () => { state.hidden = !state.hidden; render(); },
   login: async (ctx, button) => {
     const row = login(button.dataset.login);
-    const secrets = await askSecrets(`${row.display_name} 로그인`, loginSecrets(row), row.institution === 'hometax' ? '공동인증서로 홈택스에 로그인해요.' : row.method === 'onesign' ? '하나인증서로 새 로그인 세션을 만들어요.' : '앱 인증과 공동인증서 로그인을 진행해요.', {store: onesignStore(row)});
+    const reason = button.dataset.reason === 'session_idle_expired' ? ui.message('session_idle_expired') + ' ' : '';
+    const secrets = await askSecrets(`${row.display_name} 로그인`, loginSecrets(row), reason + (row.institution === 'hometax' ? '공동인증서로 홈택스에 로그인해요.' : row.method === 'onesign' ? '하나인증서로 새 로그인 세션을 만들어요.' : '앱 인증과 공동인증서 로그인을 진행해요.'), {store: onesignStore(row)});
     if (!secrets) return;
     await runForLogin(ctx, loginJob(row), row, {}, {secrets, onDone: job => { ui.toast(ui.OUTCOME[job.outcome]?.[0] || ''); if (job.local?.stopped) ui.toast(ui.message(job.local.stopped)); return afterModel(ctx); }});
   },
@@ -677,6 +693,7 @@ export const actions = {
     await runForLogin(ctx, 'hometax.targets.discover', row, {}, {onDone: job => candidatesDialog(ctx, job, row.id)});
   },
   'accounts-query': async (ctx, button) => {
+    if (!await ensureBankSession(ctx, button.dataset.login)) return;
     const row = login(button.dataset.login);
     let secrets;
     if (row.method === 'onesign') {
@@ -703,6 +720,10 @@ export const actions = {
       await refreshModel();
       if (state.view !== 'settings') render();
     } catch (error) { ui.toast(ui.message(error.code)); }
+  },
+  'account-login': (ctx, button) => {
+    const chosen = target(new FormData(button.closest('form')).get('target_id'));
+    return actions.login(ctx, {dataset: {login: chosen.login_id}});
   },
   'history-query': async (ctx, form) => {
     const input = formInput(form);
@@ -758,6 +779,7 @@ export const actions = {
   'transfer-prepare': async (ctx, form) => {
     const data = new FormData(form);
     const source = target(data.get('target_id'));
+    if (!await ensureBankSession(ctx, source.login_id)) return;
     const owner = login(source.login_id);
     if (owner.readiness !== 'ready') { ui.toast('하나인증서로 새로 로그인한 뒤 준비하세요.'); return; }
     const amount = Number(String(data.get('amount')).replace(/\D/g, ''));
@@ -771,6 +793,7 @@ export const actions = {
   },
   reconcile: async (ctx, button) => {
     const parent = await api.get('/jobs/' + encodeURIComponent(button.dataset.job));
+    if (!await ensureBankSession(ctx, parent.login_id)) return;
     const secrets = await askSecrets('이체 결과 조회', [SECRET_LABELS.vault_passphrase], '같은 이체를 다시 보내지 않고 이체 내역에서 결과를 대조해요.', {store: onesignStore(login(parent.login_id), true)});
     if (!secrets) return;
     await ctx.run('hana.transfer.reconcile', {login_id: parent.login_id, target_id: parent.target_id, parent_job_id: parent.id}, {
@@ -823,7 +846,7 @@ export const actions = {
     const items = [];
     const item = (run, label, hint = '', tone = '') => items.push(`<button type="button" class="${tone}" data-action="menu-run" data-run="${run}" data-login="${esc(row.id)}"><span>${esc(label)}</span>${hint ? `<small>${esc(hint)}</small>` : ''}</button>`);
     if (!row.disabled) {
-      item('login', row.readiness === 'ready' ? '다시 로그인' : '로그인', onesign ? '새 세션을 만들어요' : '');
+      item('login', row.current_session_id ? '다시 로그인' : '로그인', onesign ? '새 세션을 만들어요' : '');
       if (hometax) { item('session-check', '세션 확인', '저장된 세션이 아직 유효한지 확인해요'); item('discover', '사용자·사업장 확인', '대상을 추가로 등록해요'); }
       if (row.institution === 'hana') item('accounts-query', '계좌 조회·등록', '대상을 추가로 등록해요');
       if (row.institution === 'hana' && !onesign) item('extend', '로그인 연장');

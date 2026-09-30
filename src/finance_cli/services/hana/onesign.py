@@ -8,7 +8,7 @@ from zoneinfo import ZoneInfo
 from Crypto.PublicKey import RSA
 
 from . import hana_protocol, onesign_crypto as pin, onesign_setup, onesign_signup_protocol as signup
-from . import onesign_issue_protocol as issue, nfilter_crypto
+from . import onesign_issue_protocol as issue, nfilter_crypto, request_activity
 from .onesign_io import Client, ACCOUNTS, send_http
 from .onesign_keys import KeyStore
 from .onesign_signup import Signup, ms
@@ -176,7 +176,7 @@ def operate(state, action, run, *, session='signup', send=False, inputs=None, ex
             result.update(outcome='completed',result=value)
         return {**value,'network_used':client.sent>0,'accepted':True,'processing_status':'completed','automatic_retry':False}
     except Exception as exc:
-        code = str(exc) if isinstance(exc,pin.ProtocolError) else 'local_processing_error'
+        code = str(exc) if isinstance(exc,(pin.ProtocolError, request_activity.RequestBlocked)) else 'local_processing_error'
         issued = bool(issuance and issuance.certificate_issued)
         try:
             issued = issued or state.snapshot()['issuance'].get('certificate_issued',False)

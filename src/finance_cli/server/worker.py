@@ -16,7 +16,7 @@ import sys
 from finance_cli.core import storage
 from finance_cli.core.paths import data_home
 
-from . import model
+from . import model, session_activity
 from . import adapters as registry
 from .adapters.base import Stop, StepResult
 from .config import private_directory
@@ -37,6 +37,8 @@ class Context:
         self.input = loads(job['input'], {})
         self.attempt = loads(job['attempt'], {})
         self.partial = {}
+        self.last_bank_request_at = None
+        self.idle_blocked = False
         self.previous = None
         if step != adapter.first_step:
             self.previous = {'step': (loads(job['awaiting'], {}) or {}).get('step'), 'outcome': job['outcome'],
@@ -65,10 +67,30 @@ class Context:
 
     def reserve(self, **detail):
         """Persist that an institution request may be sent from now on."""
+        self.check_idle()
         self.attempt.update(sent=True, reserved_at=now(), reserved_step=self.step, **detail)
         with self.db.write() as con:
             con.execute('UPDATE jobs SET attempt=?, updated_at=? WHERE id=?', (dumps(self.attempt), now(), self.job['id']))
             self.db.event(con, self.job['id'], 'request_reserved', step=self.step)
+
+    def check_idle(self):
+        with self.db.read() as con:
+            reason = session_activity.refusal(con, self.adapter, self.session, self.step)
+        if reason:
+            raise Stop(reason)
+
+    def before_hana_request(self, scope):
+        from finance_cli.services.hana.request_activity import RequestBlocked
+        with self.db.write() as con:
+            reason = session_activity.refusal(con, self.adapter, self.session, self.step)
+            if reason:
+                self.idle_blocked = True
+                raise RequestBlocked(reason)
+            if scope == 'bank':
+                at = session_activity.now()
+                if self.session is not None:
+                    session_activity.record(con, self.session['id'], at)
+                self.last_bank_request_at = at
 
     def remember(self, **values):
         """Store non-secret step data the next step needs (e.g. a draft path)."""
@@ -107,6 +129,8 @@ class Context:
             session_id = model.add_session(con, login_id=self.login['id'], location=relative,
                                            revision=self.job['login_revision'], job_id=self.job['id'], state=state,
                                            verdict=verdict, current_target=current_target, name=name)
+            if self.last_bank_request_at is not None:
+                session_activity.record(con, session_id, self.last_bank_request_at)
             if supersede:
                 model.mark_session(con, supersede, 'consumed', 'superseded_by_' + session_id)
             if move_pointer:
@@ -204,6 +228,11 @@ def precheck(con, job, adapter, step):
         session = con.execute('SELECT * FROM sessions WHERE id=?', (job['session_id'],)).fetchone()
         if not adapter.accepts_session(session):
             return 'fixed_session_not_usable'
+    if job['session_id']:
+        session = con.execute('SELECT * FROM sessions WHERE id=?', (job['session_id'],)).fetchone()
+        reason = session_activity.refusal(con, adapter, session, step)
+        if reason:
+            return reason
     return None
 
 
@@ -281,9 +310,14 @@ def run(db, job_id, step, *, control=None, stdin=None):
             if secrets is None:
                 raise Stop('step_input_missing')
             ctx.secrets = secrets
-            result = adapter.run(ctx, step)
+            ctx.check_idle()  # Secret entry may have taken the session past its deadline.
+            from finance_cli.services.hana import request_activity
+            with request_activity.observe(ctx.before_hana_request if adapter.service == 'hana' else None):
+                result = adapter.run(ctx, step)
             if not isinstance(result, StepResult):
                 raise TypeError('adapter_result_type')
+            if ctx.idle_blocked:
+                result.local['stopped'] = session_activity.EXPIRED
         except Stop as stop:
             result = stopped(ctx, stop.code, stop.sent or ctx.sent_in_step(), stop.detail)
         except Exception as error:

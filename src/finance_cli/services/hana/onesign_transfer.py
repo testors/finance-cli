@@ -5,7 +5,7 @@ import hashlib
 from zoneinfo import ZoneInfo
 
 from . import onesign_crypto as pin, onesign_compat as compat, transfer_format
-from . import onesign_transfer_protocol as protocol, nfilter_crypto
+from . import onesign_transfer_protocol as protocol, nfilter_crypto, request_activity
 from .onesign import record, ms
 from .onesign_codec import encode
 from .onesign_io import Client, send_http
@@ -268,7 +268,7 @@ def operate(state,action,transaction,run,session,*,send=False,intent=None,inputs
             value.update(outcome='completed',result=result)
         return {**result,'processing_status':'completed','network_used':client.sent>0}
     except Exception as exc:
-        result = {'error':str(exc) if isinstance(exc,pin.ProtocolError) else 'local_processing_error',
+        result = {'error':str(exc) if isinstance(exc,(pin.ProtocolError, request_activity.RequestBlocked)) else 'local_processing_error',
             'service_status':client.last['service_status'],'accepted':True if client.last['service_status']=='accepted' else False if client.last['service_status']=='rejected' else None,
             'processing_status':'stopped','network_used':client.sent>0,'automatic_retry':False,
             'execution_result':client.last.get('execution_result')}

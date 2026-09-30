@@ -388,6 +388,7 @@ class HistoryDetail(HistoryFollowUp):
 class HistoryExport(HistoryFollowUp):
     name = 'hana.history.export'
     title = '거래 내역 저장'
+    steps = {'run': Step('run', sends=False)}
 
     def run(self, ctx, step):
         from finance_cli.services.hana import ledger
