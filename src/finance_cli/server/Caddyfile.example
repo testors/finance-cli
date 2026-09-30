@@ -1,0 +1,26 @@
+# Reference Caddyfile for the finance-cli web server (docs/web-app-plan.md, "운영 결정").
+#
+# Caddy terminates TLS and forwards to the API server, which only listens on
+# 127.0.0.1. Keep the site address identical to the configured public origin:
+#   fin server config --public-origin https://finance.example.ts.net
+# The server trusts X-Forwarded-* only from loopback peers and only for the
+# client address; cookies, CSRF and enrollment follow the public origin.
+#
+# Do not add file_server or other paths: the server's packaged app is the only
+# static content, and session files, raw responses and vaults are never served.
+
+finance.example.ts.net {
+	# Pick one certificate method and keep it in your install notes:
+	# (a) Caddy's internal CA; install its root certificate on every device:
+	tls internal
+	# (b) A public certificate via ACME DNS validation for a private host name
+	#     (needs a Caddy build with your DNS provider module):
+	# tls {
+	# 	dns <provider> <credentials>
+	# }
+
+	request_body {
+		max_size 3MB
+	}
+	reverse_proxy 127.0.0.1:8740
+}

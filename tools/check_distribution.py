@@ -41,6 +41,7 @@ for args, source in (
     (['--format','json-v1','hana','session','list'], ''),
     (['--format','json-v1','giro','auth','bootstrap'], ''),
     (['--format','json-v1','hometax','auth','replay','cert-login'], '{}'),
+    (['server','status'], ''),
 ):
     sys.stdin = io.StringIO(source)
     capture = io.StringIO()
@@ -63,7 +64,30 @@ with tempfile.TemporaryDirectory() as destination:
         'svg': '<svg xmlns="http://www.w3.org/2000/svg"><image href="data:image/png;base64,'+encoded+'"/></svg>',
         'width': 2100, 'height': 2970}]})
     assert result['complete'] and result['image_count'] == 1
-print(json.dumps({'commands':len(rows),'python_report_archive':True,'source_access':False,'network_used':False}))
+import asyncio
+from finance_cli.server.app import create_app
+from finance_cli.server.config import Config
+app = create_app(Config(), dispatcher=False)
+async def request(path, method='GET'):
+    # One in-process ASGI request: no socket is opened.
+    messages = []
+    scope = {'type': 'http', 'asgi': {'version': '3.0'}, 'http_version': '1.1', 'method': method, 'scheme': 'http',
+             'path': path, 'raw_path': path.encode(), 'query_string': b'', 'root_path': '',
+             'headers': [(b'host', b'127.0.0.1:8740')], 'client': ('127.0.0.1', 50000), 'server': ('127.0.0.1', 8740)}
+    async def receive():
+        return {'type': 'http.request', 'body': b'', 'more_body': False}
+    async def send(message):
+        messages.append(message)
+    await app(scope, receive, send)
+    return messages[0]['status'], b''.join(m.get('body', b'') for m in messages[1:])
+web = {}
+for path in ('/', '/static/app.js', '/static/views.js', '/static/app.css', '/api/v1/auth/state', '/api/v1/capabilities'):
+    status, body = asyncio.run(request(path))
+    web[path] = status
+    assert body, path
+assert web == {'/': 200, '/static/app.js': 200, '/static/views.js': 200, '/static/app.css': 200,
+               '/api/v1/auth/state': 200, '/api/v1/capabilities': 401}, web
+print(json.dumps({'commands':len(rows),'python_report_archive':True,'web_app':web,'source_access':False,'network_used':False}))
 '''
 
 
@@ -84,7 +108,9 @@ def main():
     with zipfile.ZipFile(wheel) as archive:
         names = archive.namelist()
     for required in ('giro/model_schema.json', 'hometax_cli/InvoiceSigner.java', 'hometax_cli/runtime/package-lock.json',
-                     'hometax_cli/runtime_require.cjs', 'finance_cli/credentials/registry.py'):
+                     'hometax_cli/runtime_require.cjs', 'finance_cli/credentials/registry.py',
+                     'finance_cli/server/static/index.html', 'finance_cli/server/static/app.js',
+                     'finance_cli/server/static/app.css', 'finance_cli/server/Caddyfile.example'):
         if required not in names:
             raise RuntimeError('missing package asset: ' + required)
     with tempfile.TemporaryDirectory(prefix='finance-distribution-') as temp:
@@ -93,7 +119,7 @@ def main():
         env['FINANCE_HOME'] = str(temporary / 'user-data')
         run([sys.executable, '-m', 'venv', str(temporary / 'venv')], cwd=temporary, env=env)
         python = temporary / 'venv/bin/python'
-        run([str(python), '-m', 'pip', 'install', '--disable-pip-version-check', str(wheel)], cwd=temporary, env=env)
+        run([str(python), '-m', 'pip', 'install', '--disable-pip-version-check', str(wheel) + '[web]'], cwd=temporary, env=env)
         blocked = [str(ROOT)]
         report = json.loads(run([str(python), '-I', '-c', SMOKE, json.dumps(blocked)], cwd=temporary, env=env))
         report.update(wheel=wheel.name, package_files=len(names), isolated_install=True)

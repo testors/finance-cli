@@ -15,7 +15,8 @@ def main():
     env = {**os.environ, 'FINANCE_PYTHON': sys.executable, 'PATH': os.pathsep.join((str(Path(sys.executable).parent),
         str(Path(java_executable()).parent), os.environ.get('PATH', '')))}
     commands = [(name, [sys.executable, '-m', 'unittest', 'discover', '-s', str(ROOT / directory)])
-                for name, directory in [('shared', 'tests'), ('hometax', 'tests/hometax'), ('giro', 'tests/giro')]]
+                for name, directory in [('shared', 'tests'), ('hometax', 'tests/hometax'), ('giro', 'tests/giro'),
+                                                  ('server', 'tests/server')]]
     commands.append(('hometax-node', ['node', '--test', *[str(p) for p in sorted((ROOT / 'tests/hometax').glob('*.test.mjs'))]]))
     reports = []
     for name, command in commands:

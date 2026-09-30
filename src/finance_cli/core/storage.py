@@ -73,10 +73,34 @@ def atomic_json(path, value):
             os.unlink(pending)
 
 
+_held = set()
+
+
+@contextmanager
+def hold(path):
+    """Keep a lock for a worker that already owns the resource.
+
+    Only lock() calls on this exact path inside the same process reuse it;
+    every other acquisition keeps failing immediately.
+    """
+    path = no_symlinks(path)
+    if path in _held:
+        raise ValueError('lock_already_held')
+    with lock(path):
+        _held.add(path)
+        try:
+            yield
+        finally:
+            _held.discard(path)
+
+
 @contextmanager
 def lock(path):
     import fcntl
     path = no_symlinks(path)
+    if path in _held:
+        yield
+        return
     fd = os.open(path, os.O_RDWR | os.O_CREAT | os.O_NOFOLLOW, 0o600)
     try:
         fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)

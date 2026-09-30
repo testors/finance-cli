@@ -14,6 +14,7 @@ from finance_cli.cli.credentials import add_selection, resolve
 from finance_cli.cli.output import ArgumentParser, emit, error, structured
 
 from . import auth
+from . import serial
 from . import web_auth
 
 
@@ -203,69 +204,9 @@ def main(argv=None) -> int:
             cert_command.add_argument("--timeout", type=float, default=180, help="페이지 초기화·대기열 관찰 시간(초)")
     args = parser.parse_args(argv)
     try:
-        if getattr(args, 'profile', None):
-            args.credential = resolve(args, 'hometax')
-        if args.command in ("session", "account", "business", "tax", "returns", "report", "invoice"):
-            Path(args.output).parent.mkdir(mode=0o700, parents=True, exist_ok=True)
-            config = {key: value for key, value in vars(args).items() if value is not None and key != 'profile'}
-            if args.command == "invoice" and args.operation == "issue":
-                config["session"] = args.session or args.prepared
-                password = (sys.stdin.buffer.readline().removesuffix(b"\n").removesuffix(b"\r")
-                            if args.password_stdin else getpass.getpass("발급용 인증서 비밀번호: ").encode())
-                config["password"] = base64.b64encode(password).decode("ascii")
-            adapter = "session.mjs" if args.command == "session" else "report.mjs" if args.command == "report" else "business.mjs"
-            if args.command == "returns" and args.operation in ("receipt", "document"):
-                adapter = "returns_report.mjs"
-            return run_node(adapter, config)
-        if args.operation in ("prepare-cert", "login-cert"):
-            if Path(args.output).exists():
-                raise ValueError("Output already exists")
-            result = prepare(args)
-            callback = result.callback()
-            if args.operation == "prepare-cert":
-                request = web_auth.certificate_request(
-                    base64.b64encode(result.signed_data).decode("ascii"),
-                    base64.b64encode(result.random).decode("ascii"), args.app_version)
-                secret_file(args.output, {"callback": callback, "logical_request": request})
-                emit({"scope": "offline_certificate_prepare", "prepared": True,
-                      "output": args.output, "network_requests": 0}, indent=None)
-                return 0
-            Path(args.output).parent.mkdir(mode=0o700, parents=True, exist_ok=True)
-            config = {"callback": callback, "appVersion": args.app_version,
-                      "output": args.output, "timeout": args.timeout}
-            return run_node('browserless.mjs', config)
-        data = read_json(args.input)
-        if args.operation == "encode-cert-callback":
-            output = auth.certificate_callback(data["signDataBase64"], data["vidRandomBase64"])
-        elif args.operation == "fido-context":
-            output = {"scope": "fido_sdk_context", "context": auth.fido_context(
-                data["authCode"], data["deviceModel"], data["androidRelease"], data.get("policyId"))}
-        elif args.operation == "cert-request":
-            output = web_auth.certificate_request(data["signDataBase64"], data["vidRandomBase64"],
-                                                 data.get("appVersion", "14.3"),
-                                                 data.get("osNm", "Android"), data.get("departmentId"))
-        else:
-            if args.flow == "cert-register":
-                decision = auth.certificate_registration(data)
-            elif args.flow == "cert-login":
-                decision = web_auth.certificate_login(data)
-            elif args.flow == "qr-confirm":
-                decision = auth.qr_confirmation(data)
-            elif args.flow == "logout":
-                if not isinstance(data, list):
-                    raise ValueError("로그아웃 입력은 서비스 도메인 순서의 응답 배열이어야 합니다.")
-                decision = auth.logout(data)
-            else:
-                decision = auth.fido_auth_callback(
-                    data.get("original", {}), data["requestCode"], data["errorCode"],
-                    data.get("description"), data.get("token"))
-            for warning in decision.warnings:
-                print("경고: " + warning, file=sys.stderr)
-            code = 1 if decision.branch == "failure" else 0
-            emit(decision.as_dict(), code, indent=None)
-            return code
-        emit(output, indent=None)
-        return 0
+        return run(args)
+    except BlockingIOError:
+        return error('resource_busy', '다른 홈택스 작업이 실행 중입니다. 끝난 뒤 다시 실행하세요.')
     except ImportError:
         return error('dependency_unavailable', '필요한 실행 의존성을 확인하세요. 설치 안내와 fin runtime status hometax를 참고하세요.')
     except (OSError, ValueError, TypeError, KeyError, AttributeError) as exc:
@@ -276,6 +217,74 @@ def main(argv=None) -> int:
             return error('certificate_error', str(exc))
         else:
             return error('local_input_or_processing_error', '로컬 입력을 읽거나 변환할 수 없습니다. 명령의 입력 형식을 확인하세요.')
+
+
+def run(args):
+    if getattr(args, 'profile', None):
+        args.credential = resolve(args, 'hometax')
+    if args.command in ("session", "account", "business", "tax", "returns", "report", "invoice"):
+        Path(args.output).parent.mkdir(mode=0o700, parents=True, exist_ok=True)
+        config = {key: value for key, value in vars(args).items() if value is not None and key != 'profile'}
+        if args.command == "invoice" and args.operation == "issue":
+            config["session"] = args.session or args.prepared
+            password = (sys.stdin.buffer.readline().removesuffix(b"\n").removesuffix(b"\r")
+                        if args.password_stdin else getpass.getpass("발급용 인증서 비밀번호: ").encode())
+            config["password"] = base64.b64encode(password).decode("ascii")
+        adapter = "session.mjs" if args.command == "session" else "report.mjs" if args.command == "report" else "business.mjs"
+        if args.command == "returns" and args.operation in ("receipt", "document"):
+            adapter = "returns_report.mjs"
+        with serial.operation():
+            return run_node(adapter, config)
+    if args.operation in ("prepare-cert", "login-cert"):
+        if Path(args.output).exists():
+            raise ValueError("Output already exists")
+        result = prepare(args)
+        callback = result.callback()
+        if args.operation == "prepare-cert":
+            request = web_auth.certificate_request(
+                base64.b64encode(result.signed_data).decode("ascii"),
+                base64.b64encode(result.random).decode("ascii"), args.app_version)
+            secret_file(args.output, {"callback": callback, "logical_request": request})
+            emit({"scope": "offline_certificate_prepare", "prepared": True,
+                  "output": args.output, "network_requests": 0}, indent=None)
+            return 0
+        Path(args.output).parent.mkdir(mode=0o700, parents=True, exist_ok=True)
+        config = {"callback": callback, "appVersion": args.app_version,
+                  "output": args.output, "timeout": args.timeout}
+        with serial.operation():
+            return run_node('browserless.mjs', config)
+    data = read_json(args.input)
+    if args.operation == "encode-cert-callback":
+        output = auth.certificate_callback(data["signDataBase64"], data["vidRandomBase64"])
+    elif args.operation == "fido-context":
+        output = {"scope": "fido_sdk_context", "context": auth.fido_context(
+            data["authCode"], data["deviceModel"], data["androidRelease"], data.get("policyId"))}
+    elif args.operation == "cert-request":
+        output = web_auth.certificate_request(data["signDataBase64"], data["vidRandomBase64"],
+                                             data.get("appVersion", "14.3"),
+                                             data.get("osNm", "Android"), data.get("departmentId"))
+    else:
+        if args.flow == "cert-register":
+            decision = auth.certificate_registration(data)
+        elif args.flow == "cert-login":
+            decision = web_auth.certificate_login(data)
+        elif args.flow == "qr-confirm":
+            decision = auth.qr_confirmation(data)
+        elif args.flow == "logout":
+            if not isinstance(data, list):
+                raise ValueError("로그아웃 입력은 서비스 도메인 순서의 응답 배열이어야 합니다.")
+            decision = auth.logout(data)
+        else:
+            decision = auth.fido_auth_callback(
+                data.get("original", {}), data["requestCode"], data["errorCode"],
+                data.get("description"), data.get("token"))
+        for warning in decision.warnings:
+            print("경고: " + warning, file=sys.stderr)
+        code = 1 if decision.branch == "failure" else 0
+        emit(decision.as_dict(), code, indent=None)
+        return code
+    emit(output, indent=None)
+    return 0
 
 
 if __name__ == "__main__":

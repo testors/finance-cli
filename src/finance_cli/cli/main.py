@@ -33,6 +33,12 @@ def capabilities():
                  'live': ['explicit PIN-free bootstrap probes'], 'live_login': False}},
         'credentials': {'joint': ['import-npki', 'import-pfx', 'list', 'show', 'export', 'hometax-selection', 'hana-signing'],
                         'financial': {'scope': 'offline crypto library', 'remote_management': False}},
+        'web': {'optional_dependency': 'finance-cli[web]', 'command': 'fin server',
+                'scope': ['browser-enrollment', 'business-profiles', 'institution-logins-and-targets', 'jobs',
+                          'hana', 'hometax', 'giro-bills'],
+                'server_managed': ['certificate-import-export', 'onesign-issuance-and-setup', 'runtime-install',
+                                   'device-registration-files'],
+                'binding': 'loopback', 'remote_access': 'https reverse proxy', 'live_tested': False},
         'network_used': False}
 
 
@@ -114,6 +120,31 @@ def hometax_main(argv):
     return run([v for v in argv if v != '--send'] or ['--help'])
 
 
+def record_history(service, argv, code):
+    """Link a CLI or agent run to the web server's shared history, if one exists.
+
+    Only the command words are kept (no option values, inputs or results), and
+    a recording failure never changes the command's JSON output or exit code.
+    """
+    if not argv or any(value in ('-h', '--help') for value in argv):
+        return code
+    try:
+        from finance_cli.server import db as server_db
+        if not server_db.exists():
+            return code
+        from finance_cli.server.jobs import record_cli
+        words = []
+        for value in argv:
+            if value.startswith('-') or len(words) == 4:
+                break
+            words.append(value)
+        origin = 'agent' if os.environ.get('FINANCE_REQUEST_ORIGIN') == 'agent' else 'cli'
+        record_cli(server_db.Database(), origin=origin, command=[service, *words], exit_code=code, service=service)
+    except Exception:
+        pass
+    return code
+
+
 def main(argv=None):
     argv = list(sys.argv[1:] if argv is None else argv)
     format_name, home, option_error = 'legacy', None, None
@@ -160,6 +191,7 @@ def dispatch(argv):
   hometax     홈택스 로그인·조회·보고서·세금계산서 (통신 시 --send)
   giro        지로 오프라인 도구·명시적 초기 프로브 (--send/--live)
   runtime     홈택스 Node 런타임 status/install
+  server      웹앱 서버 설정·시작·브라우저 등록 (선택 설치 finance-cli[web])
   capabilities  구현 범위와 기관별 경계 (JSON)
   paths       사용자 데이터 위치 (읽기 전용)
   --version   패키지 버전
@@ -184,12 +216,15 @@ def dispatch(argv):
             return profile_main(rest)
         elif command == 'hana':
             from finance_cli.services.hana.cli import main as run
-            return run(rest or ['--help'])
+            return record_history('hana', rest, run(rest or ['--help']))
         elif command == 'hometax':
-            return hometax_main(rest)
+            return record_history('hometax', rest, hometax_main(rest))
         elif command == 'giro':
             from giro.__main__ import main as run
-            return run(['--live' if value == '--send' else value for value in rest] or ['--help'])
+            return record_history('giro', rest, run(['--live' if value == '--send' else value for value in rest] or ['--help']))
+        elif command == 'server':
+            from finance_cli.server.cli import main as run
+            return run(rest or ['--help'])
         elif command == 'runtime':
             from finance_cli.core import runtime
             parser = ArgumentParser(prog='fin runtime')
