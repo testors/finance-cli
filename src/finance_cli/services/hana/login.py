@@ -166,7 +166,7 @@ def authenticated_session(session):
     return request
 
 
-def accounts(name, *, send=False):
+def accounts(name, *, send=False, observe=None):
     session = store.session_path(name)
     with store.lock(session):
         request = authenticated_session(session)
@@ -177,6 +177,8 @@ def accounts(name, *, send=False):
         if store.child(session, 'accounts').exists():
             raise ValueError('recorded_attempt_exists_do_not_replay: accounts')
         result = transport.send(session, 'accounts', request, lambda stage, *rest: assess('accounts', *rest))
+        if observe is not None:
+            observe(result)  # Preserve the bank verdict before decoding/saving the selection.
         result['session_current_validity'] = 'unverified'
         if result['accepted']:
             rows = kotlin_object(storage.read(store.child(session, 'accounts', 'body.bin'))).get('mainAcctList')

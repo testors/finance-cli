@@ -230,6 +230,52 @@ def compact(value):
     return value.replace('-', '')
 
 
+def validate_history_controls(ctx, *, transfer=False):
+    """Validate before the optional account-list request, just as before the clock request."""
+    from finance_cli.services.hana import inquiry, ledger_protocol
+    config = {**ctx.input, 'start_date': compact(ctx.input['start_date']),
+              'end_date': compact(ctx.input['end_date'])}
+    if not config.get('search'):
+        config.pop('search', None)
+    try:
+        if transfer:
+            inquiry.check_period(config['start_date'], config['end_date'])
+        else:
+            ledger_protocol.plan(config, inquiry.today_kst().strftime('%Y%m%d'),
+                                 account_number(ctx.snapshot.get('target')))
+    except ValueError:
+        raise Stop('invalid_history_controls') from None
+
+
+def observe_accounts(ctx, result):
+    stages = [{'stage': 'accounts', **verdict(result)}]
+    accepted = result.get('accepted')
+    ctx.observe(service_verdict={'stages': stages},
+                outcome='not_started' if accepted is True else outcome(accepted))
+    return stages
+
+
+def require_accounts_result(result):
+    if result.get('accepted') is not True or result.get('processing_status', 'completed') != 'completed':
+        raise Stop('accounts_query_incomplete', sent=True)
+
+
+def ensure_query_accounts(ctx, name):
+    """Prime only a fresh session; never replay an existing one-shot account attempt."""
+    from finance_cli.services.hana import login, store
+    session = store.session_path(name)
+    if store.child(session, 'account-selection.json').exists() or store.child(session, 'accounts').exists():
+        return []
+    ctx.reserve()
+    try:
+        result = login.accounts(name, send=True, observe=lambda result: observe_accounts(ctx, result))
+    except (ValueError, OSError) as error:
+        raise Stop(safe_code(error), sent=True) from None
+    stages = observe_accounts(ctx, result)
+    require_accounts_result(result)
+    return stages
+
+
 def send_two_step(function, *args, **kwargs):
     """Prepare the draft, then send that unchanged draft once."""
     function(*args, send=False, **kwargs)
@@ -262,13 +308,17 @@ class History(JointSessionAdapter):
     def run(self, ctx, step):
         from finance_cli.services.hana import ledger
         name = self.session(ctx)
+        validate_history_controls(ctx)
+        stages = ensure_query_accounts(ctx, name)
         path = self.config(ctx, name)
         ctx.reserve()
-        receipts, stages = {}, []
+        receipts = {}
+        ctx.observe(outcome='unknown')
         try:
             for stage in ('clock', 'account'):
                 result = send_two_step(ledger.run, name, stage, path)
                 stages.append({'stage': stage, **verdict(result, ('accepted', 'reason'))})
+                ctx.observe(service_verdict={'stages': stages}, outcome=outcome(result.get('accepted'), completed=False))
                 if result.get('accepted') is not True:
                     return StepResult(service_verdict={'stages': stages}, outcome=outcome(result.get('accepted')))
                 receipts[stage] = result['receipt_directory']
@@ -430,17 +480,22 @@ class TransferHistory(JointSessionAdapter):
     def run(self, ctx, step):
         from finance_cli.services.hana import inquiry, store
         name = self.session(ctx)
+        validate_history_controls(ctx, transfer=True)
+        stages = ensure_query_accounts(ctx, name)
         path = input_file(ctx, 'inquiry-input.json', {'account_index': account_index(ctx, name),
                                                       'start_date': compact(ctx.input['start_date']),
                                                       'end_date': compact(ctx.input['end_date'])})
         ctx.reserve()
+        ctx.observe(outcome='unknown')
         try:
             result = send_two_step(inquiry.run, name, 'history', path)
         except (ValueError, OSError) as error:
             raise Stop(safe_code(error), sent=True) from None
         rows, local = None, {}
-        ctx.observe(service_verdict=verdict(result, ('accepted', 'reason', 'row_count', 'warnings')),
-                    outcome=outcome(result.get('accepted')))
+        service = verdict(result, ('accepted', 'reason', 'row_count', 'warnings'))
+        if stages:
+            service['stages'] = stages
+        ctx.observe(service_verdict=service, outcome=outcome(result.get('accepted')))
         if result.get('accepted') is True:
             try:
                 _, payload = inquiry.saved(store.session_path(name), result['receipt_directory'], 'history',
@@ -449,7 +504,7 @@ class TransferHistory(JointSessionAdapter):
                 ctx.remember(inquiry={'path': str(path), 'receipt': result['receipt_directory']})
             except (ValueError, OSError, KeyError, TypeError):
                 local['saved_rows_unreadable'] = True
-        return StepResult(service_verdict=verdict(result, ('accepted', 'reason', 'row_count', 'warnings')),
+        return StepResult(service_verdict=service,
                           outcome=outcome(result.get('accepted')), local=local,
                           result={'rows': masked_rows(rows), 'transfer_confirmed': False})
 

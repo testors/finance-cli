@@ -143,6 +143,68 @@ class JointPathTests(HanaCase):
         self.assertEqual(extend['result']['login_extension_accepted'], True)
 
 
+    def fresh_query_setup(self):
+        self.link_registration()
+        self.joint_login()
+        accounts = self.run_job(self.submit('hana.accounts.list', login_id=self.login['id'])['id'])
+        return self.register_account(self.login['id'], accounts)
+
+    def joint_login(self):
+        return self.run_job(self.submit('hana.login', login_id=self.login['id'])['id'],
+                            {'certificate_password': 'Synthetic-Password!'})
+
+    def joint_query(self, target, name):
+        today = time.strftime('%Y-%m-%d')
+        return self.run_job(self.submit(name, login_id=self.login['id'], target_id=target['id'],
+                                        input={'start_date': today, 'end_date': today})['id'])
+
+    def test_history_and_inquiry_prime_fresh_joint_session_once(self):
+        target = self.fresh_query_setup()
+        for name in ('hana.history.list', 'hana.inquiry.history'):
+            with self.subTest(name=name):
+                self.joint_login()
+                count = len(self.bank.requests)
+                result = self.joint_query(target, name)
+                self.assertEqual(result['outcome'], 'success', result)
+                paths = [r[1] for r in self.bank.requests[count:]]
+                self.assertTrue(paths[0].endswith(joint_fixture.PATHS['accounts']))
+                self.assertEqual(sum(p.endswith(joint_fixture.PATHS['accounts']) for p in paths), 1)
+                self.assertTrue(result['service_verdict']['stages'][0]['accepted'])
+                count = len(self.bank.requests)
+                other = 'hana.inquiry.history' if name == 'hana.history.list' else 'hana.history.list'
+                cached = self.joint_query(target, other)
+                self.assertEqual(cached['outcome'], 'success', cached)
+                self.assertFalse(any(r[1].endswith(joint_fixture.PATHS['accounts'])
+                                     for r in self.bank.requests[count:]))
+
+    def test_joint_account_rejection_and_save_failure_are_not_replayed(self):
+        from finance_cli.services.hana import store
+        target = self.fresh_query_setup()
+        self.joint_login()
+        self.bank.overrides[joint_fixture.PATHS['accounts']] = joint_fixture.business({}, code='1')
+        count = len(self.bank.requests)
+        rejected = self.joint_query(target, 'hana.history.list')
+        self.assertEqual(rejected['outcome'], 'rejected', rejected)
+        self.assertFalse(rejected['service_verdict']['stages'][0]['accepted'])
+        self.joint_query(target, 'hana.inquiry.history')
+        self.assertEqual(len(self.bank.requests), count + 1)
+        del self.bank.overrides[joint_fixture.PATHS['accounts']]
+        self.joint_login()
+        count = len(self.bank.requests)
+        real_write = store.write_new
+
+        def fail_selection(path, value):
+            if path.name == 'account-selection.json':
+                raise OSError('synthetic disk failure')
+            return real_write(path, value)
+        with patch.object(store, 'write_new', fail_selection):
+            failed = self.joint_query(target, 'hana.history.list')
+        self.assertEqual(failed['outcome'], 'not_started', failed)
+        self.assertTrue(failed['service_verdict']['stages'][0]['accepted'])
+        self.joint_query(target, 'hana.inquiry.history')
+        self.assertEqual(len(self.bank.requests), count + 1)
+
+
 class OneSignPathTests(HanaCase):
     @classmethod
     def setUpClass(cls):
@@ -600,8 +662,8 @@ class OneSignPathTests(HanaCase):
         self.assertEqual(checked['local']['stopped'], 'fixed_session_not_usable')
         self.assertEqual(len(self.services.calls), count)
 
-    def test_query_requires_current_session_accounts_and_cannot_mix_receipts(self):
-        from finance_cli.services.hana import onesign_queries
+    def test_query_loads_current_session_accounts_and_cannot_mix_receipts(self):
+        from finance_cli.services.hana import ledger_protocol as lp, onesign_queries
         target = self.query_setup()
         history = self.query_job(target, 'history.list')
         self.assertEqual(history['outcome'], 'success', history)
@@ -609,9 +671,17 @@ class OneSignPathTests(HanaCase):
             saved = json.loads(jobs.get(con, history['id'])['attempt'])['history']['receipts']['page']
         self.signed_in()
         count = len(self.services.calls)
-        missing = self.query_job(target, 'history.list')
-        self.assertEqual(missing['local']['stopped'], 'accounts_query_required_in_session')
-        self.assertEqual(len(self.services.calls), count)
+        fresh = self.query_job(target, 'history.list')
+        self.assertEqual(fresh['outcome'], 'success', fresh)
+        self.assertEqual([c[1] for c in self.services.calls[count:]],
+                         [onesign.ACCOUNTS, lp.PATHS['clock'], lp.PATHS['account'], lp.PATHS['recent']])
+        self.assertEqual([s['stage'] for s in fresh['service_verdict']['stages']],
+                         ['accounts', 'clock', 'account', 'page'])
+        self.assertEqual(fresh['session_id'], self.get('/logins').json()['logins'][0]['current_session_id'])
+        count = len(self.services.calls)
+        inquiry = self.query_job(target, 'inquiry.history')
+        self.assertEqual(inquiry['outcome'], 'success', inquiry)
+        self.assertEqual(len(self.services.calls), count + 1)
         with State('synthetic', onesign_fixture.PASSWORD) as state:
             current = list(state.snapshot()['sessions'])[-1]
             source = onesign_queries.Queries(state, current)
@@ -620,6 +690,85 @@ class OneSignPathTests(HanaCase):
         foreign = self.post('/jobs', {'name': 'hana.onesign.history.export', 'login_id': self.login['id'],
                                       'target_id': target['id'], 'parent_job_id': history['id'], 'secrets': self.vault})
         self.assertEqual(foreign.json()['error'], 'session_consumed')
+
+    def test_inquiry_can_be_first_query_after_login(self):
+        from finance_cli.services.hana import inquiry
+        target = self.query_setup()
+        self.signed_in()
+        count = len(self.services.calls)
+        result = self.query_job(target, 'inquiry.history')
+        self.assertEqual(result['outcome'], 'success', result)
+        self.assertEqual([c[1] for c in self.services.calls[count:]], [onesign.ACCOUNTS, inquiry.PATHS['history']])
+        self.assertTrue(result['service_verdict']['stages'][0]['accepted'])
+
+    def test_account_preflight_never_uses_old_or_unusable_accounts(self):
+        target = self.query_setup()
+        cases = [({}, 'accounts_query_required_in_session'),
+                 ({'mainAcctList': []}, 'account_not_in_session_accounts'),
+                 ({'mainAcctList': [{'acctNo': onesign_fixture.RECIPIENT, 'curCd': 'KRW'}]},
+                  'account_not_in_session_accounts')]
+        for value, error in cases:
+            with self.subTest(value=value):
+                self.signed_in()
+                self.services.override[onesign.ACCOUNTS] = value
+                count = len(self.services.calls)
+                result = self.query_job(target, 'history.list')
+                self.assertEqual(result['local']['stopped'], error, result)
+                self.assertEqual(result['outcome'], 'not_started')
+                self.assertTrue(result['service_verdict']['stages'][0]['accepted'])
+                self.assertEqual([c[1] for c in self.services.calls[count:]], [onesign.ACCOUNTS])
+                # A recorded malformed/empty list is not silently refreshed.
+                self.query_job(target, 'inquiry.history')
+                self.assertEqual(len(self.services.calls), count + 1)
+
+    def test_account_preflight_rejection_transport_loss_and_save_failure_stop_without_retry(self):
+        target = self.query_setup()
+        self.signed_in()
+        count = len(self.services.calls)
+
+        def rejected(*args):
+            _, headers, raw, cookies = self.services(*args)
+            return 403, headers, raw, cookies
+        with patch.object(onesign, 'operate', functools.partial(onesign.operate, exchange=rejected)):
+            refused = self.query_job(target, 'history.list')
+        self.assertEqual(refused['outcome'], 'rejected', refused)
+        self.assertFalse(refused['service_verdict']['stages'][0]['accepted'])
+        self.assertEqual([c[1] for c in self.services.calls[count:]], [onesign.ACCOUNTS])
+        self.signed_in()
+        count = len(self.services.calls)
+        original = self.services.override[onesign.ACCOUNTS]
+        self.services.override[onesign.ACCOUNTS] = OSError('synthetic response lost')
+        lost = self.query_job(target, 'history.list')
+        self.assertEqual(lost['outcome'], 'unknown', lost)
+        self.assertIsNone(lost['service_verdict']['stages'][0]['accepted'])
+        self.assertEqual([c[1] for c in self.services.calls[count:]], [onesign.ACCOUNTS])
+        self.services.override[onesign.ACCOUNTS] = original
+        self.signed_in()
+        real_record = State.record
+
+        def fail_receipt(state, run, name, value):
+            if run.endswith('-accounts') and name == 'http-0001-response':
+                raise OSError('synthetic disk failure')
+            return real_record(state, run, name, value)
+        count = len(self.services.calls)
+        with patch.object(State, 'record', fail_receipt):
+            failed = self.query_job(target, 'inquiry.history')
+        self.assertEqual(failed['outcome'], 'not_started', failed)
+        self.assertTrue(failed['service_verdict']['stages'][0]['accepted'])
+        self.assertEqual(failed['local']['stopped'], 'accounts_query_incomplete')
+        self.assertEqual([c[1] for c in self.services.calls[count:]], [onesign.ACCOUNTS])
+
+    def test_invalid_controls_send_no_account_preflight(self):
+        target = self.query_setup()
+        self.signed_in()
+        count = len(self.services.calls)
+        for suffix, value in [('history.list', {'start_date': '2099-01-01', 'end_date': '2099-01-01'}),
+                              ('history.list', {'search': '😀' * 13}),
+                              ('inquiry.history', {'start_date': '1900-01-01'})]:
+            result = self.query_job(target, suffix, **value)
+            self.assertEqual((result['outcome'], result['local']['stopped']),
+                             ('not_started', 'invalid_history_controls'))
+        self.assertEqual(len(self.services.calls), count)
 
     def test_wrong_passphrase_and_pin_stop_before_requests(self):
         before = len(self.services.calls)
