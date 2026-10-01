@@ -163,9 +163,14 @@ def _trace_pass_steps(*, outer):
             break
         tokens = _tokens(line)
         if tokens[0].startswith(b'TracerPid'):
-            tracer = _atoi(_value(tokens))
-            if tracer == 0:
+            current = _atoi(_value(tokens))
+            if current == 0:
+                if not outer:
+                    # Helper jumps directly to close/return its sticky flag.
+                    yield Effect('native_fclose', (stream,))
+                    return int(tracer != 0)
                 break
+            tracer = current  # a later zero does not clear the outer flag/PID
         if tokens[0].startswith(b'Uid'):
             uid = _value(tokens)
             break
@@ -240,7 +245,14 @@ def native_pid_stat_steps(pid):
         raise AnalysisLimit('null PID JNI call requires runtime observation')
     if type(pid) is not str:
         raise AnalysisLimit('resolved Java PID string required')
-    raw = jni_modified_utf8(pid)
+    return (yield from native_pid_bytes_stat_steps(jni_modified_utf8(pid)))
+
+
+def native_pid_bytes_stat_steps(pid_bytes):
+    """The same PID branch on the actual GetStringUTFChars result."""
+    if type(pid_bytes) is not bytes:
+        raise AnalysisLimit('native PID strcmp requires nonnull UTF bytes')
+    raw = pid_bytes.split(b'\0', 1)[0]
     if raw in (b'0', b'', b'null') or len(raw) <= 1:
         return 123
     path = b'/proc/' + raw + b'/stat'

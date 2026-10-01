@@ -49,16 +49,31 @@ def first_response_file_steps(source_dir, process_name, encoded_challenge, encod
 def _first_response(digest, encoded_challenge, encoded_rule, app_info, version):
     if encoded_challenge is None:
         raise NativeRuleError(20)
-    challenge_text = jni_modified_utf8(encoded_challenge)
+    return first_response_native_bytes(digest, jni_modified_utf8(encoded_challenge),
+        jni_modified_utf8(encoded_rule), jni_modified_utf8(app_info), jni_modified_utf8(version))
+
+
+def first_response_native_bytes(digest, challenge_text, rule_text, app_info, version):
+    """Arithmetic on resolved JNI UTF bytes, including explicit null pointers.
+
+    These are not host-encoded substitutes for JNI observations. The digest
+    comes from the inner file stage; this function performs no environment IO.
+    """
+    if type(digest) is not bytes or len(digest) != 32:
+        raise AnalysisLimit('resolved native package SHA-256 bytes required')
+    if any(value is not None and type(value) is not bytes
+           for value in (challenge_text, rule_text, app_info, version)):
+        raise AnalysisLimit('resolved native UTF bytes or observed null pointer required')
+    if challenge_text is None:
+        raise NativeRuleError(20)
     try:
         challenge = native_base64_decode(challenge_text)
     except NativeBase64Error:
         raise NativeRuleError(21) from None
     # The caller decodes the same rule twice. On deterministic byte inputs the
     # outputs coincide; allocation failure/partial native memory is unmodeled.
-    rule = decode_rule(jni_modified_utf8(encoded_rule))
-    plan = parse_rule(rule, parsing_positions(challenge, jni_modified_utf8(app_info),
-                                              jni_modified_utf8(version)))
+    rule = decode_rule(rule_text)
+    plan = parse_rule(rule, parsing_positions(challenge, app_info, version))
     response = evaluate_rule(plan, digest, challenge, extra=None)
     return b'::'.join((base64.b64encode(response), base64.b64encode(digest),
                        challenge_text.split(b'\0', 1)[0]))

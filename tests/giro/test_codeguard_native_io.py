@@ -99,6 +99,16 @@ class NativeProcessTests(unittest.TestCase):
         self.assertEqual(result, 127)
         self.assertIn(('native_fopen', (b'/proc/44/status', b'r')), effects)
 
+    def test_repeated_tracer_zero_does_not_clear_previous_nonzero_flag(self):
+        result, effects = self.check(['one', b'TracerPid:44\n', b'TracerPid:0\n', None,
+                                      'tracer', None, None])
+        self.assertEqual(result, 127)
+        self.assertIn(('native_fopen', (b'/proc/44/status', b'r')), effects)
+        result, effects = self.check(['one', b'TracerPid:0\n', None,
+                                      'two', b'TracerPid:44\n', b'TracerPid:0\n', None])
+        self.assertEqual(result, 127)
+        self.assertEqual(len([e for e in effects if e[0] == 'native_fopen']), 2)
+
     def test_uid_check_is_raw_substring_not_integer_equality(self):
         result, _ = self.check(['one', b'TracerPid:44\n', b'Uid:100\t100\t100\n', None,
             'tracer', b'Uid:100\n', None, 'two', b'TracerPid:0\n', None])
