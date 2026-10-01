@@ -37,7 +37,7 @@ class AuthenticatedSession:
         """Accept an observed login result, never an imported 'logged_in' flag."""
         if login.origin != 'response' or not login.app_success or login.code != '000':
             raise GiroError('성공한 지로 로그인 응답이 필요합니다.')
-        if not device_id or not isinstance(key, bytes) or len(key) != 16:
+        if not isinstance(device_id, str) or not isinstance(key, bytes) or len(key) != 16:
             raise GiroError('로그인에 사용한 기기 식별자와 SEED 세션 키가 필요합니다.')
         if not isinstance(cookies, CookieJar) or not user_agent or any(c in user_agent for c in '\r\n'):
             raise GiroError('로그인에 사용한 쿠키 저장소와 User-Agent가 필요합니다.')

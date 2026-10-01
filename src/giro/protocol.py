@@ -141,6 +141,7 @@ def auth_plan():
                                       "live_exchange_and_server_token"]},
             {"endpoint": "auth.pin", "mode": "ENCRYPT", "method": "POST",
              "implemented_components": ["single_attempt_pin_login_coordinator",
+                                        "device_identity_selection_from_explicit_observations",
                                         "unregistered_device_identity_verification_route",
                                         "mandatory_recipient_rules_before_envelope",
                                         "isolated_certificate_and_shared_service_transport",
@@ -154,7 +155,7 @@ def auth_plan():
         ],
         "blockers": [
             "CodeGuard 원문 JSON/쿠키→generateToken·CMD101/200/300까지 오프라인 연결; JNI/OS 실제 입력·값 변환 경계·실제 통신/발급 미완성",
-            "builder→anchor/CTL→필수 경로/CRL 연결 및 제한된 공개 cache/LDAP executor 구현; 현재 자료 검증·일반 selector/provider·CTL trust 상태·수신자 설치 미완성",
+            "공개 루트 준비·cache/LDAP·필수 경로/CRL 연결 구현; 일반 selector/provider·CTL trust 상태와 수신자 구성의 추가 검증 필요",
             "등록 기기 ID와 본인정보 등록 상태 필요; 기기 정보를 자동 수집하지 않음",
             "PIN 로그인→조회·납부의 쿠키/키 연결은 합성 검증; 정상 보호 모듈·현재 신뢰 자료·등록 기기 입력과 실서버 수락 검증 필요",
             "비Android 서버가 목표; Android 프로세스/패키지 결합의 독립 구현 가능 범위는 미확정이며 호스트 정보나 검사 통과 상수로 대체하지 않음",

@@ -129,7 +129,7 @@ class LoginAttempt:
 class PinLogin:
     def __init__(self, *, device_id, user_agent, recipient: RecipientContext,
                  protection: ProtectionRuntime):
-        if not isinstance(device_id, str) or not device_id:
+        if not isinstance(device_id, str):
             raise GiroError('로그인에 사용할 기기 식별자가 필요합니다.')
         if not isinstance(user_agent, str) or not user_agent or any(c in user_agent for c in '\r\n'):
             raise GiroError('업무 요청에 사용할 User-Agent가 필요합니다.')

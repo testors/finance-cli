@@ -173,6 +173,25 @@ class LoginTests(unittest.TestCase):
         self.pin.assert_not_called()
         self.assertFalse(self.login._used)
 
+    def test_observed_empty_device_id_is_preserved_through_login_and_query(self):
+        self.login = PinLogin(device_id='', user_agent='SYNTHETIC-CLIENT',
+                              recipient=self.context, protection=self.protection)
+        result = self.run_login()
+        self.assertTrue(result.report()['session_ready'], result.report())
+        self.assertEqual(result.session.device_id, '')
+        self.assertTrue(AuthenticatedClient(result.session).query('national.list', {}, send=True).app_success)
+        for name, fields, _, _ in self.server.calls:
+            self.assertEqual(fields['deviceId'], [''])
+            if name in ('auth.device-status', 'auth.pin'):
+                self.assertEqual(fields['deviceUniqNo'], [''])
+
+    def test_missing_device_observation_is_not_an_empty_identity(self):
+        for value in (None, False, 0, object()):
+            with self.subTest(type=type(value).__name__), self.assertRaises(GiroError):
+                PinLogin(device_id=value, user_agent='SYNTHETIC-CLIENT',
+                         recipient=self.context, protection=self.protection)
+        self.assertEqual(self.server.steps, [])
+
     def test_recipient_rules_run_before_protection_device_or_pin(self):
         self.context.stores = (MaterialStore((self.cert(1),), (self.crl(0), self.crl(1, revoked=True))),)
         result = self.run_login()
