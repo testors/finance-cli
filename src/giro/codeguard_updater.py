@@ -2,8 +2,9 @@
 
 No socket, SDK execution, preference IO, weak-key guessing or token issuance.
 HTTP effects preserve call/catch ordering, not a replacement HTTP stack.
-Pure JSON/cookie adapters are available in codeguard_http_values; actual IO,
-certificate/PRNG observations still require explicit adapters.
+Pure JSON/cookie adapters are available in codeguard_http_values. Optional
+codeguard_http/codeguard_crypto executors cover known normal IO/key values;
+environment and unsupported provider observations remain external.
 """
 import base64
 from dataclasses import dataclass
@@ -72,7 +73,8 @@ def wrapped_key_steps(runtime, agent):
 
     Original uses new Random(), setSeed(currentTimeMillis), nextBytes(16).
     No real-time seed prediction/guessing is implemented. The explicit adapter
-    returns the bytes from that operation; tests supply only synthetic bytes.
+    returns the bytes from that operation; codeguard_crypto implements the
+    known arithmetic for this client's own exchange with its explicit clock.
     """
     try:
         random = yield Effect('new_java_random')

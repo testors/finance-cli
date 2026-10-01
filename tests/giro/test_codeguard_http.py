@@ -25,6 +25,7 @@ from giro.android_headers import project_header_values_steps
 from giro.codeguard_updater import challenge_steps, token_steps
 from giro.codeguard_service import generate_token_http_values_steps
 from giro.codeguard_codec import java_seed_encrypt
+from giro.codeguard_crypto import CodeGuardCrypto, CRYPTO_EFFECTS, project_crypto_steps
 from giro.codeguard_certificate_values import NativeByteArrayValue
 from giro.codeguard_fingerprint_values import KnownCertificateStream
 from giro.codeguard_package import project_package_steps
@@ -190,17 +191,16 @@ class HTTPTests(unittest.TestCase):
         self.server.reply = reply
         self.obs.preferences['CERT'] = ''
         self.obs.agent.certificate_text = ''
-        self.obs.overrides['android_parse_x509'] = lambda e: x509.load_der_x509_certificate(e.args[0])
-        self.obs.overrides['certificate_public_key'] = lambda e: e.args[0].public_key()
-        self.obs.overrides['rsa_cipher_final'] = lambda e: self.private.public_key().encrypt(e.args[1], padding.PKCS1v15())
         transport = self.transport()
         generator = generate_token_http_values_steps(self.obs.main, self.obs.runtime, self.obs.agent,
             locale_language='ko', project_headers=True, server_url=self.base,
             timeout=1000, root_check=True, rooting_info=False, encrypted_token=False)
+        generator = project_crypto_steps(generator, crypto=CodeGuardCrypto())
         self.assertEqual(drive(project_http_steps(generator, transport=transport), self.obs.reply), 'loopback-issued')
         self.assertEqual([call[0] for call in self.server.calls], [101, 200, 300])
         self.assertEqual(state['key'], self.obs.agent.key)
         self.assertEqual(self.obs.runtime.data.hash_key, b'known'.hex().upper())
+        self.assertTrue(CRYPTO_EFFECTS.isdisjoint(self.obs.kinds()))
 
     def test_get_mode_uses_query_and_keeps_empty_cookie_without_agent_fallback(self):
         self.obs.preferences['GETMODE'] = True
@@ -218,6 +218,7 @@ class HTTPTests(unittest.TestCase):
         self.obs.main.pid = '123'
         first, second, package = NativeObservations(), NonceObservations(), PackageObservations()
         second.der = self.certificate.public_bytes(serialization.Encoding.DER)
+        self.obs.agent.certificate_text = base64.b64encode(second.der).decode()
         second.digest = hashlib.sha256(second.der).digest()
         second.override = lambda e: (True, NativeByteArrayValue(second.der)) if (
             e.kind == 'native_jni' and e.args[:3] == ('CallObjectMethod', 'signature', 'toByteArray')) else (False, None)
@@ -239,6 +240,7 @@ class HTTPTests(unittest.TestCase):
             timeout=1000, root_check=True, rooting_info=False, encrypted_token=False)
         generator = project_package_steps(project_native_value_steps(generator, service='service',
             certificate_values=True), certificate_values=True)
+        generator = project_crypto_steps(generator, crypto=CodeGuardCrypto())
         result = drive(project_http_steps(generator, transport=self.transport()), reply)
         self.assertEqual(result, 'calculated-loopback')
         materials = NonceArtifacts(*(package.files[package.destination+suffix] for suffix in (
@@ -250,6 +252,7 @@ class HTTPTests(unittest.TestCase):
         for coarse in ('native_start', 'native_get_nonce', 'check_fingerprint', 'check_zip_os14'):
             self.assertNotIn(coarse, self.obs.kinds())
         self.assertEqual(self.obs.requests, [])
+        self.assertTrue(CRYPTO_EFFECTS.isdisjoint(self.obs.kinds()))
 
     def test_no_send_and_endpoint_scope_stop_before_socket_or_body(self):
         transport = self.transport(send=False)

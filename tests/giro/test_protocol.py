@@ -76,6 +76,7 @@ class ProtocolTests(unittest.TestCase):
         self.assertIn('task_manager_lifetime_and_explicit_callback_dispatch', cg['implemented_components'])
         self.assertIn('known_local_error_json_clock_and_map_profiles', cg['implemented_components'])
         self.assertIn('explicit_verified_http1_exchange_executor', cg['implemented_components'])
+        self.assertIn('own_exchange_clock_random_and_rsa_executor', cg['implemented_components'])
         self.assertIn('certificate_provider_failures_and_local_error_runtime_boundaries', cg['remaining_components'])
         self.assertIn('framework_queue_future_cancellation_and_thread_observations', cg['remaining_components'])
         self.assertIn('actual_updater_preference_and_platform_io', cg['remaining_components'])
