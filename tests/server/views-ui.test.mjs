@@ -66,6 +66,77 @@ test('Hometax connection shows missing runtime before asking for a password', as
   assert.equal(ui.asked.length, 0);
 });
 
+const syntheticDue = {authCommonNm: null, chrgNm: null, applcEndDt: null, adtTxamt: null,
+  itrfNm: '합성 세목', pmtDdt: '20261025', romAmt: 123456, nromAmt: 900000, pmtAmt: 700000,
+  txhfOgzNm: '합성 세무서', txtnClNm: '합성 과세구분', bankElctPmtPblNo: 'synthetic-payment'};
+
+async function showDues(t, items, {outcome = 'success', complete = true, itemCount} = {}) {
+  const ui = await setup(t, 'joint_certificate', 'ready');
+  ui.row.institution = 'hometax';
+  ui.state.targets[0].kind = 'personal';
+  const job = {id: 'dues-job', name: 'hometax.tax.dues', status: 'finished', outcome,
+    login_id: 'login', target_id: 'target', result: {items, item_count: itemCount, pagination: {complete}}};
+  ui.state.cache.set('hometax.tax.dues||target|', job);
+  ui.document.querySelector('main').innerHTML = await ui.views.dues(ui.ctx);
+  return ui;
+}
+
+test('dues uses labeled tax, deadline and amount fields even when the first fields are empty', async t => {
+  const ui = await showDues(t, [syntheticDue]);
+  const table = ui.document.querySelector('#results table');
+  assert.deepEqual([...table.querySelectorAll('th')].map(n => n.textContent), ['세목', '납부기한', '납부할 세액', '관서명']);
+  assert.deepEqual([...table.querySelectorAll('td')].map(n => n.textContent), ['합성 세목', '2026-10-25', '123,456원', '합성 세무서']);
+  assert.equal(ui.document.querySelector('#results .list-footer').textContent, '홈택스 조회 결과 1건 · 조회 완료');
+  assert.doesNotMatch(ui.document.querySelector('#results').textContent, /authCommonNm|chrgNm|applcEndDt|adtTxamt|900,000|700,000/);
+  await ui.actions.row(ui.ctx, table.querySelector('tbody tr'));
+  const detail = ui.document.querySelector('#dialog-content').textContent;
+  assert.match(detail, /납부할 세액 상세/);
+  assert.match(detail, /과세구분합성 과세구분/);
+  assert.match(detail, /전자납부번호synthetic-payment/);
+  assert.doesNotMatch(detail, /authCommonNm|itrfNm|romAmt|null/);
+  assert.equal(ui.calls.length, 0);
+  assert.equal(ui.asked.length, 0);
+});
+
+test('dues retains zero, exact numeric strings and missing values without blank rows', async t => {
+  const ui = await showDues(t, [
+    {...syntheticDue, romAmt: 0}, {...syntheticDue, romAmt: '9007199254740993'},
+    {itrfNm: '<img src=x>', pmtDdt: null, romAmt: null, nromAmt: 80000},
+  ]);
+  const rows = [...ui.document.querySelectorAll('#results tbody tr')];
+  assert.equal(rows[0].querySelectorAll('td')[2].textContent, '0원');
+  assert.equal(rows[1].querySelectorAll('td')[2].textContent, '9,007,199,254,740,993원');
+  assert.deepEqual([...rows[2].querySelectorAll('td')].map(n => n.textContent), ['<img src=x>', '확인 안 됨', '확인 안 됨', '확인 안 됨']);
+  assert.equal(ui.document.querySelector('#results img'), null);
+  assert.match(ui.document.querySelector('#results .list-footer').textContent, /조회 결과 3건/);
+});
+
+test('dues distinguishes an empty completed query from missing or incomplete results', async t => {
+  const empty = await showDues(t, []);
+  assert.equal(empty.document.querySelector('#results table'), null);
+  assert.match(empty.document.querySelector('#results').textContent, /조회된 납부할 세액이 없어요/);
+  assert.match(empty.document.querySelector('#results .list-footer').textContent, /조회 결과 0건 · 조회 완료/);
+  for (const [items, options] of [[null, {}], [[], {outcome: 'unknown', complete: false}],
+    [[], {outcome: 'partial_success', complete: false}]]) {
+    const ui = await showDues(t, items, options);
+    assert.equal(ui.document.querySelector('#results .list-footer'), null);
+    assert.doesNotMatch(ui.document.querySelector('#results').textContent, /조회 결과 0건|조회 완료|조회된 납부할 세액이 없어요/);
+  }
+  const missing = await showDues(t, null);
+  missing.document.querySelector('main').innerHTML = await missing.views.taxhome(missing.ctx);
+  assert.equal(missing.document.querySelector('[data-view="dues"] .number').textContent, '결과 확인 필요');
+});
+
+test('dues explains display limits and preserves partially returned items', async t => {
+  const ui = await showDues(t, Array.from({length: 201}, () => syntheticDue), {itemCount: 1200});
+  assert.equal(ui.document.querySelectorAll('#results tbody tr').length, 200);
+  assert.equal(ui.document.querySelector('#results .list-footer').textContent, '홈택스 조회 결과 1200건 중 200건 표시 · 조회 완료');
+  const partial = await showDues(t, [syntheticDue], {outcome: 'partial_success', complete: false});
+  assert.match(partial.document.querySelector('#results').textContent, /일부만 성공/);
+  assert.match(partial.document.querySelector('#results .list-footer').textContent, /조회 결과 1건 · 조회 범위 확인 필요/);
+  assert.equal(partial.document.querySelectorAll('#results tbody tr').length, 1);
+});
+
 for (const method of ['onesign', 'joint_certificate']) {
   test(`${method} security queries use the selected login without an account target`, async t => {
     const ui = await setup(t, method);

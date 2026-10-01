@@ -125,11 +125,33 @@ function formInput(form) {
   return value;
 }
 
+function duesRow(row) {
+  const text = value => value === null || value === undefined || String(value).trim() === '' ? '확인 안 됨' : String(value);
+  const amount = text(row?.romAmt);
+  const won = /^-?\d+$/.test(amount) ? BigInt(amount).toLocaleString('ko-KR') + '원' : amount;
+  return {'세목': text(row?.itrfNm), '납부기한': text(row?.pmtDdt).replace(/^(\d{4})(\d{2})(\d{2})$/, '$1-$2-$3'),
+    '납부할 세액': won, '관서명': text(row?.txhfOgzNm), '과세구분': text(row?.txtnClNm),
+    '전자납부번호': text(row?.bankElctPmtPblNo)};
+}
+
+function duesResults(job, items) {
+  if (!Array.isArray(items)) return outcomeNote(job) + '<div class="empty-state">조회 항목을 확인하지 못했어요. 납부할 세액이 0건이라는 뜻은 아니에요.</div>';
+  const complete = job.outcome === 'success' && job.result?.pagination?.complete === true;
+  if (!items.length && !complete) return outcomeNote(job) + '<div class="empty-state">표시할 항목이 없지만, 조회가 완료되지 않아 납부 대상이 없는지 확인할 수 없어요.</div>';
+  const total = job.result?.item_count;
+  const count = Number.isSafeInteger(total) && total >= items.length ? total : items.length;
+  const shown = items.slice(0, 200);
+  const table = items.length ? ui.rowsTable(shown.map(duesRow), {group: 'dues', keys: ['세목', '납부기한', '납부할 세액', '관서명']})
+    : '<div class="empty-state">조회된 납부할 세액이 없어요.</div>';
+  return outcomeNote(job) + table + `<div class="list-footer">홈택스 조회 결과 ${count}건${shown.length < count ? ` 중 ${shown.length}건 표시` : ''} · ${complete ? '조회 완료' : '조회 범위 확인 필요'}</div>`;
+}
+
 function taxResults(job, group) {
   if (!job) return '<div class="empty-state">아직 조회하지 않았어요. 조회를 누르면 서버 작업으로 실행해요.</div>';
   if (job.status !== 'finished') return '';
   const items = job.result?.items;
   rememberRows(group, items, {job});
+  if (group === 'dues') return duesResults(job, items);
   const pagination = job.result?.pagination;
   return outcomeNote(job) + (items ? ui.rowsTable(items, {group}) : '') +
     (pagination ? `<div class="list-footer">${items?.length ?? 0}건 · ${pagination.complete ? '마지막 페이지까지 확인' : '페이지 확인 필요'}${pagination.reason ? ' · ' + esc(pagination.reason) : ''}</div>` : '');
@@ -168,7 +190,8 @@ async function taxHome(ctx) {
   const [dues, refunds, invoices] = await Promise.all([latest('hometax.tax.dues', {target_id: current.id}),
     latest('hometax.tax.refunds', {target_id: current.id}), latest('hometax.invoice.list', {target_id: current.id})]);
   const metric = (label, job, view) => {
-    const value = job?.status === 'finished' && job.outcome === 'success' ? `${job.result?.items?.length ?? 0}건` : job ? (ui.OUTCOME[job.outcome]?.[0] || ui.STATUS[job.status]?.[0]) : '미조회';
+    const count = Array.isArray(job?.result?.items) ? job.result.items.length : null;
+    const value = job?.status === 'finished' && job.outcome === 'success' ? (count === null ? '결과 확인 필요' : `${count}건`) : job ? (ui.OUTCOME[job.outcome]?.[0] || ui.STATUS[job.status]?.[0]) : '미조회';
     return `<button class="panel metric" data-view="${view}"><span>${esc(label)}</span><strong class="number">${esc(value)}</strong><small>${job?.observed_at ? '조회 ' + ui.time(job.observed_at) : '조회 기록 없음'}${icon('arrow')}</small></button>`;
   };
   return heading('세금 요약', `${esc(current.display_name)}의 세금과 증빙을 한곳에서 확인하세요.`) + setupNotice('hometax-tax') + targetBar(taxTargets(), current) +
@@ -655,6 +678,10 @@ export const actions = {
     const entry = state.rows[group];
     const item = entry?.rows?.[Number(index)];
     if (!item) return;
+    if (group === 'dues') {
+      ui.showDialog('납부할 세액 상세', `${ui.fieldsList(duesRow(item))}<div class="dialog-actions"><button class="button primary" data-ui="close">닫기</button></div>`);
+      return;
+    }
     let buttons = '';
     if (group === 'returns' && item.rtnCvaId) {
       const source = entry.job?.name === 'hometax.returns.status' ? 'status' : 'list';
