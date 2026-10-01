@@ -99,6 +99,8 @@ def main(argv=None) -> int:
         item.add_argument("--session", required=True)
         item.add_argument("--output", required=True, help="서비스 조회 결과와 갱신 세션을 저장할 새 0600 JSON")
         item.add_argument("--timeout", type=float, default=60)
+        item.add_argument("--tin", help="같은 실행에서 선택·확인할 사업장 TIN; 개인은 ORIGIN, 생략 시 현재 세션 대상")
+        item.add_argument("--timings", action="store_true", help="요약 JSON에 세션 초기화·사업장 전환·조회 소요 시간 포함")
         if operation != "dues":
             item.add_argument("--from", default=argparse.SUPPRESS, help="조회 시작일; 서비스 기본값 사용 가능")
             item.add_argument("--to", default=argparse.SUPPRESS, help="조회 종료일")
@@ -225,6 +227,8 @@ def run(args):
     if args.command in ("session", "account", "business", "tax", "returns", "report", "invoice"):
         Path(args.output).parent.mkdir(mode=0o700, parents=True, exist_ok=True)
         config = {key: value for key, value in vars(args).items() if value is not None and key != 'profile'}
+        if args.command == "tax" and args.tin is not None:
+            config["target"] = {"tin": config.pop("tin"), "kind": "personal" if args.tin == "ORIGIN" else "business"}
         if args.command == "invoice" and args.operation == "issue":
             config["session"] = args.session or args.prepared
             password = (sys.stdin.buffer.readline().removesuffix(b"\n").removesuffix(b"\r")

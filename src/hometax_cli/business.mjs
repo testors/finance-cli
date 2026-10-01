@@ -55,6 +55,9 @@ export class BusinessRuntime {
     this.nativeRequests = [];
     this.reportPages = [];
     this.popupInputs = {};
+    this.targetChecks = [];
+    this.targetVerified = false;
+    this.timings = [];
   }
 
   get window() {return this.page?.dom?.window;}
@@ -77,6 +80,7 @@ export class BusinessRuntime {
         const action = url.pathname === '/jsonAction.do' ? url.searchParams.get('actionId') : null;
         const service = action?.startsWith('A') ? {action_id:action, branch:'no_action',
           origin:url.origin, response_observed:false, callback_completed:false} : undefined;
+        const started = performance.now();
         if (service) this.services.push(service);
         this.pending++;
         const success = settings.success, error = settings.error, complete = settings.complete;
@@ -88,6 +92,7 @@ export class BusinessRuntime {
         try {return ajax.call($, {...settings,
           success(response) {
             if (service) {
+              service.response_ms = Math.round(performance.now() - started);
               service.response_observed = true;
               service.branch = serviceBranch(response);
               service.response = clone(response);
@@ -106,7 +111,7 @@ export class BusinessRuntime {
             }
           },
           error() {
-            if (service) service.transport_error = true;
+            if (service) {service.transport_error = true; service.response_ms = Math.round(performance.now() - started);}
             try {return error?.apply(this, arguments);}
             catch (error) {finish(); throw error;}
           },
@@ -140,6 +145,33 @@ export class BusinessRuntime {
     this.storageByOrigin = this.page.storageByOrigin || {};
     await this.settle();
     return this;
+  }
+
+  async timed(stage, action) {
+    const start = performance.now();
+    try {return await action();}
+    finally {this.timings.push({stage, duration_ms:Math.round(performance.now() - start)});}
+  }
+
+  async ensureTarget(target) {
+    const account = this.account();
+    this.targetChecks.push({operation:'account.show', branch:'success', reason:'verified_session'});
+    const wanted = target.tin === 'ORIGIN' ? (account.rprsTin === '' ? account.tin : account.rprsTin) : target.tin;
+    if (!account.tin || !wanted) return false;
+    if (account.tin !== wanted) {
+      let selected;
+      try {
+        selected = await this.timed('business.select', () => this.businessSelect(target.kind === 'personal' ? 'ORIGIN' : wanted));
+      } finally {
+        const service = this.last('ATXPPAAA003A01');
+        this.targetChecks.push({operation:'business.select', branch:selected?.branch || service?.branch || 'no_action',
+          reason:selected?.reason || (service ? 'original_service_result' : 'original_action_not_observed')});
+      }
+      if (selected.branch !== 'success' || selected.data?.account?.tin !== wanted || !this.ready) return false;
+    }
+    this.confirmedTarget = {tin:wanted};
+    this.targetVerified = true;
+    return true;
   }
 
   snapshot() {
@@ -553,11 +585,13 @@ export class BusinessRuntime {
 export async function runBusiness(config, dependencies = {}) {
   if (!Number.isSafeInteger(Math.ceil(config.timeout * 1000)) || config.timeout <= 0)
     throw new Error('Invalid timeout');
+  if (config.target && (config.command !== 'tax' || !['personal','business'].includes(config.target.kind) ||
+      typeof config.target.tin !== 'string' || !config.target.tin.trim())) throw new Error('Invalid target');
   const output = await fs.open(config.output, 'wx', 0o600);
   const runtime = new BusinessRuntime(config, dependencies);
   let result = {branch:'no_action', reason:'unobserved'}, record;
   try {
-    await runtime.open();
+    await runtime.timed('session.open', () => runtime.open());
     if (runtime.ready) {
       if (config.command === 'account' && config.operation === 'show') {
         if (config.domain === 'ht' && !await runtime.menu(TAX_PAGES.payments)) result = runtime.unavailable();
@@ -567,8 +601,11 @@ export async function runBusiness(config, dependencies = {}) {
         result = await runtime.businessList(config.status);
       else if (config.command === 'business' && config.operation === 'select')
         result = await runtime.businessSelect(config.tin);
-      else if (config.command === 'tax' && TAX_PAGES[config.operation])
-        result = await runtime.tax(config.operation);
+      else if (config.command === 'tax' && TAX_PAGES[config.operation]) {
+        if (config.target && !await runtime.ensureTarget(config.target))
+          result = {branch:'no_action', reason:'target_unverified', data:{account:runtime.account()}};
+        else result = await runtime.timed('tax.'+config.operation, () => runtime.tax(config.operation));
+      }
       else if (config.command === 'returns' && ['list','status','forms'].includes(config.operation))
         result = await runtime.returns(config.operation);
       else if (config.command === 'invoice' && INVOICE_PAGES[config.operation])
@@ -596,6 +633,9 @@ export async function runBusiness(config, dependencies = {}) {
     try {
       record = runtime.page ? runtime.record(result) : {scope:'browserless_business',
         operation:config.command+'.'+config.operation,...result, warnings:runtime.warnings};
+      Object.assign(record, {timings:runtime.timings}, config.target ? {
+        target_verified:runtime.targetVerified, target_check:runtime.targetChecks,
+        confirmed_target:runtime.confirmedTarget} : {});
       record.session_file_saved = true;
       await output.writeFile(JSON.stringify(record, null, 2));
     } catch (_) {
@@ -613,6 +653,8 @@ export async function runBusiness(config, dependencies = {}) {
   }
   return {scope:record.scope, operation:record.operation, branch:record.branch, reason:record.reason,
     action_id:record.action_id, session_file_saved:record.session_file_saved,
+    ...(config.target ? {target_verified:runtime.targetVerified, target_check:runtime.targetChecks} : {}),
+    ...(config.timings ? {timings:runtime.timings} : {}),
     item_count:Array.isArray(record.data?.items) ? record.data.items.length : undefined,
     warnings:record.warnings};
 }

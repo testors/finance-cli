@@ -162,6 +162,26 @@ class CliContractTests(unittest.TestCase):
             self.assertNotIn('SYNTHETIC-PRIVATE', json.dumps(value) + errors)
             run.assert_called_once()
 
+    def test_hometax_tax_target_and_timing_options_share_one_child_and_keep_send_gate(self):
+        for operation in ('dues', 'payments', 'refunds', 'notices'):
+            for tin in ('B-SYNTHETIC', 'ORIGIN'):
+                args = ['hometax', 'tax', operation, '--session', 'nonexistent',
+                        '--output', str(self.root / 'out.json'), '--tin', tin, '--timings']
+                with patch('hometax_cli.__main__.subprocess.run') as child:
+                    code, value, _ = self.result(args)
+                child.assert_not_called()
+                self.assertNotEqual(code, 0)
+                with patch('hometax_cli.__main__.subprocess.run', return_value=subprocess.CompletedProcess(
+                        [], 0, '{"branch":"success","timings":[]}')) as child:
+                    code, value, _ = self.result([*args, '--send'])
+                self.assertEqual(code, 0)
+                self.assertEqual(value['result'], {'branch': 'success', 'timings': []})
+                child.assert_called_once()
+                config = json.loads(child.call_args.kwargs['input'])
+                self.assertEqual(config['target'], {'tin': tin, 'kind': 'personal' if tin == 'ORIGIN' else 'business'})
+                self.assertTrue(config['timings'])
+                self.assertFalse((self.root / 'out.json').exists())
+
     def test_keyboard_interrupt_has_no_assumed_business_verdict(self):
         with patch('finance_cli.services.hana.cli.dispatch', side_effect=KeyboardInterrupt):
             code, value, _ = self.result(['hana', 'accounts', '--session', 'synthetic'])

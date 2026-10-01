@@ -23,3 +23,24 @@ test('API errors keep setup reasons and the stable error code', async () => {
     return true;
   });
 });
+
+test('tax job polling caps at one second without submitting or retrying the job', async () => {
+  const source = await readFile(new URL('../../src/finance_cli/server/static/api.js', import.meta.url), 'utf8');
+  for (const name of ['hometax.tax.dues', 'hometax.tax.payments', 'hana.accounts']) {
+    const delays = [], requests = [];
+    const context = createContext({
+      fetch: async (url, options) => {
+        requests.push([url, options.method]);
+        return {ok:true, json:async () => ({name, status:requests.length < 8 ? 'running' : 'finished'})};
+      },
+      setTimeout: (resolve, delay) => {delays.push(delay); resolve();},
+    });
+    const module = new SourceTextModule(source, {context});
+    await module.link(() => {throw new Error('unexpected import');});
+    await module.evaluate();
+    const result = await module.namespace.follow('synthetic');
+    assert.equal(result.status, 'finished');
+    assert.equal(Math.max(...delays), name.startsWith('hometax.tax.') ? 1000 : 3000);
+    assert.ok(requests.every(([url, method]) => url === '/api/v1/jobs/synthetic' && method === 'GET'));
+  }
+});

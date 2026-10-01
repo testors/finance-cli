@@ -449,26 +449,49 @@ class TargetQuery(HometaxAdapter):
     def run(self, ctx, step):
         check_runtime()
         chain = Chain(ctx)
-        confirmed = chain.ensure_target()
         target = ctx.snapshot['target']
-        ctx.observe(confirmed_target={'tin': mask_account(confirmed.get('tin')), 'target_id': target['id']})
-        record, summary, output_error = chain.run('business.mjs', {'command': self.command, 'operation': self.operation,
-                                                                   'timeout': 60.0, **self.config(ctx.input)})
+        config = {'command': self.command, 'operation': self.operation, 'timeout': 60.0, **self.config(ctx.input)}
+        if self.command == 'tax':
+            config.update(target={'tin': target['identity']['tin'], 'kind': target['kind']}, timings=True)
+            record, summary, output_error = chain.run('business.mjs', config)
+            source = {**(summary or {}), **(record or {})}
+            checks = source.get('target_check')
+            chain.checks = [pick(item, ('operation', 'branch', 'reason', 'action_id'))
+                            for item in checks if isinstance(item, dict)] if isinstance(checks, list) else []
+            if source.get('target_verified') is False:
+                chain.require_session()
+                raise Stop('target_unverified', sent=True, detail={'target_check': chain.checks})
+            confirmed = {'tin': target['identity']['tin']} if source.get('target_verified') is True else {}
+            if confirmed:
+                ctx.observe(confirmed_target={'tin': mask_account(confirmed.get('tin')), 'target_id': target['id']})
+        else:
+            confirmed = chain.ensure_target()
+            ctx.observe(confirmed_target={'tin': mask_account(confirmed.get('tin')), 'target_id': target['id']})
+            record, summary, output_error = chain.run('business.mjs', config)
         verdict = verdict_of(record, summary)
         verdict = {**(verdict or {}), 'target_check': chain.checks} if verdict else {'target_check': chain.checks}
         data = (record or {}).get('data') if isinstance((record or {}).get('data'), dict) else {}
         local = chain.local(output_error)
+        if self.command == 'tax':
+            timings = source.get('timings')
+            local['timings'] = [pick(item, ('stage', 'duration_ms')) for item in
+                                timings if isinstance(item, dict)
+                                and item.get('stage') in ('session.open', 'business.select', 'tax.' + self.operation)
+                                and type(item.get('duration_ms')) in (int, float)
+                                and 0 <= item['duration_ms'] < float('inf')] if isinstance(timings, list) else []
         account = data.get('account')
-        mismatch = isinstance(account, dict) and account.get('tin') != target['identity'].get('tin')
+        mismatch = (self.command == 'tax' and not confirmed) or (
+            isinstance(account, dict) and account.get('tin') != target['identity'].get('tin'))
+        confirmed_view = {'tin': mask_account(confirmed.get('tin')), 'target_id': target['id']} if confirmed else None
         ctx.observe(service_verdict=verdict, outcome='unknown' if mismatch else outcome_of(verdict))
         if mismatch:
-            # The answer belongs to another taxpayer: keep the verdict, withhold the data.
+            # The answer's taxpayer differs or is unconfirmed: keep the verdict, withhold the data.
             local['target_mismatch_after_query'] = True
             return StepResult(service_verdict=verdict, outcome='unknown', local=local,
-                              confirmed_target={'tin': mask_account(confirmed.get('tin')), 'target_id': target['id']})
+                              confirmed_target=confirmed_view)
         outcome = outcome_of(verdict)
         return StepResult(service_verdict=verdict, outcome=outcome, local=local, result=self.result(data),
-                          confirmed_target={'tin': mask_account(confirmed.get('tin')), 'target_id': target['id']})
+                          confirmed_target=confirmed_view)
 
     def result(self, data):
         pagination = data.get('pagination')

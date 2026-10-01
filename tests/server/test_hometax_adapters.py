@@ -25,6 +25,13 @@ def session_record(branch='success', **extra):
             'branch': branch, **extra}
 
 
+def tax_record(*, switched=False, **extra):
+    checks = [{'operation': 'account.show', 'branch': 'success', 'reason': 'verified_session'}]
+    if switched:
+        checks.append({'operation': 'business.select', 'branch': 'success', 'reason': 'original_service_result'})
+    return session_record(**{'target_verified': True, 'target_check': checks, **extra})
+
+
 class FakeNode:
     """Writes synthetic records where the real Node command would."""
 
@@ -50,7 +57,8 @@ class FakeNode:
         elif record is not False:
             output.write_text(json.dumps(record))
             output.chmod(0o600)
-        return {k: record[k] for k in ('branch', 'reason') if isinstance(record, dict) and k in record}, None
+        return {k: record[k] for k in ('branch', 'reason', 'target_verified', 'target_check', 'timings')
+                if isinstance(record, dict) and k in record}, None
 
 
 class HometaxAdapterTests(ServerCase):
@@ -83,7 +91,8 @@ class HometaxAdapterTests(ServerCase):
         def walk(item):
             if isinstance(item, dict):
                 for key, child in item.items():
-                    self.assertNotIn(key, SECRET_KEYS)
+                    if key != 'source' or child != 'stdout_summary':
+                        self.assertNotIn(key, SECRET_KEYS)
                     walk(child)
             elif isinstance(item, list):
                 for child in item:
@@ -139,20 +148,24 @@ class HometaxAdapterTests(ServerCase):
         self.assertEqual(target['identity']['business_number'], '••••••7890')
         job = self.submit('hometax.tax.dues', target_id=target['id'])
         node = FakeNode({
-            'account.show': session_record(data={'account': PERSONAL}),
-            'business.select': session_record(data={'account': BUSINESS}),
-            'tax.dues': session_record(action_id='ATERMAAA004R01', reason='original_service_result', data={
+            'tax.dues': tax_record(switched=True, action_id='ATERMAAA004R01', reason='original_service_result',
+                timings=[{'stage': 'session.open', 'duration_ms': 2800, 'source': 'private'},
+                         {'stage': 'tax.dues', 'duration_ms': 6200},
+                         {'stage': 'private', 'duration_ms': 1}, {'stage': 'tax.dues', 'duration_ms': 'private'}], data={
                 'items': [{'itrfNm': '부가가치세', 'pmtAmt': 340000, 'txprDscmNo': '1234567890', 'nested': {'x': 1}}],
                 'pages': [{'branch': 'success', 'items': [], 'page_info': {'pageNum': 1, 'totalCount': 1}}],
                 'pagination': {'requested_all': False, 'complete': True}, 'source': {'raw': True}, 'account': BUSINESS})})
         result = self.run_job(job['id'], node=node)
-        self.assertEqual([c[0] for c in node.calls], ['account.show', 'business.select', 'tax.dues'])
-        self.assertEqual(node.calls[1][1]['tin'], 'B0002')
+        self.assertEqual([c[0] for c in node.calls], ['tax.dues'])
+        self.assertEqual(node.calls[0][1]['target'], {'kind': 'business', 'tin': 'B0002'})
+        self.assertTrue(node.calls[0][1]['timings'])
         self.assertEqual(result['outcome'], 'success', result)
         row = result['result']['items'][0]
         self.assertEqual((row['itrfNm'], row['pmtAmt'], row['txprDscmNo']), ('부가가치세', 340000, '••••••7890'))
         self.assertNotIn('nested', row)
         self.assertNoSecrets(result)
+        self.assertEqual(result['local']['timings'], [{'stage': 'session.open', 'duration_ms': 2800},
+                                                    {'stage': 'tax.dues', 'duration_ms': 6200}])
         self.assertEqual([c['operation'] for c in result['service_verdict']['target_check']],
                          ['account.show', 'business.select'])
         sessions = self.get(f"/logins/{self.login['id']}/sessions").json()['sessions']
@@ -162,24 +175,24 @@ class HometaxAdapterTests(ServerCase):
         self.login_session()
         target = self.register('business')
         job = self.submit('hometax.tax.dues', target_id=target['id'])
-        node = FakeNode({'account.show': session_record(data={'account': PERSONAL}),
-                         'business.select': session_record(data={'account': PERSONAL})})
+        node = FakeNode({'tax.dues': tax_record(switched=True, target_verified=False, branch='no_action',
+                                                reason='target_unverified', data={'account': PERSONAL})})
         result = self.run_job(job['id'], node=node)
         self.assertEqual((result['outcome'], result['local']['stopped']), ('unknown', 'target_unverified'))
-        self.assertNotIn('tax.dues', [c[0] for c in node.calls])
+        self.assertEqual([c[0] for c in node.calls], ['tax.dues'])
+        self.assertEqual(result['local']['detail']['target_check'][1]['branch'], 'success')
+        self.assertIsNone(result['result'])
 
     def test_unavailable_service_differs_from_zero_rows(self):
         self.login_session()
         target = self.register('personal')
         zero = self.submit('hometax.tax.dues', target_id=target['id'])
-        node = FakeNode({'account.show': session_record(data={'account': PERSONAL}),
-                         'tax.dues': session_record(reason='original_service_result', data={
+        node = FakeNode({'tax.dues': tax_record(reason='original_service_result', timings=None, target_check=None, data={
                              'items': [], 'pagination': {'complete': True}, 'account': PERSONAL})})
         result = self.run_job(zero['id'], node=node)
         self.assertEqual((result['outcome'], result['result']['items']), ('success', []))
         unavailable = self.submit('hometax.tax.dues', target_id=target['id'])
-        node = FakeNode({'account.show': session_record(data={'account': PERSONAL}),
-                         'tax.dues': session_record(branch='no_action', reason='original_dues_navigation_not_observed')})
+        node = FakeNode({'tax.dues': tax_record(branch='no_action', reason='original_dues_navigation_not_observed')})
         result = self.run_job(unavailable['id'], node=node)
         self.assertEqual(result['outcome'], 'unknown')
         self.assertIsNone(result['result']['items'])
@@ -190,17 +203,50 @@ class HometaxAdapterTests(ServerCase):
         target = self.register('personal')
         before = self.get(f"/logins/{self.login['id']}/sessions").json()['current_session_id']
         job = self.submit('hometax.tax.dues', target_id=target['id'])
-        unsaved = session_record(reason='original_service_result', data={'items': [], 'account': PERSONAL},
+        unsaved = tax_record(reason='original_service_result', data={'items': [], 'account': PERSONAL},
                                  session_file_saved=False)
-        node = FakeNode({'account.show': session_record(data={'account': PERSONAL}), 'tax.dues': unsaved})
+        node = FakeNode({'tax.dues': unsaved})
         result = self.run_job(job['id'], node=node)
         self.assertEqual((result['outcome'], result['local']['session_saved']), ('success', False))
         sessions = self.get(f"/logins/{self.login['id']}/sessions").json()
-        self.assertNotEqual(sessions['current_session_id'], before)
+        self.assertEqual(sessions['current_session_id'], before)
         current = [s for s in sessions['sessions'] if s['id'] == sessions['current_session_id']][0]
         self.assertEqual(current['state'], 'stale')
         refused = self.post('/jobs', {'name': 'hometax.tax.dues', 'login_id': self.login['id'], 'target_id': target['id']})
         self.assertEqual(refused.json()['error'], 'session_stale')
+
+    def test_combined_query_keeps_stdout_success_when_result_file_cannot_be_saved(self):
+        self.login_session()
+        target = self.register('personal')
+        job = self.submit('hometax.tax.dues', target_id=target['id'])
+        calls = []
+
+        def node(script, config):
+            calls.append((script, config))
+            return {'branch': 'success', 'reason': 'original_service_result', 'target_verified': True,
+                    'target_check': [{'operation': 'account.show', 'branch': 'success'}],
+                    'session_file_saved': False, 'timings': [{'stage': 'tax.dues', 'duration_ms': 42}]}, None
+
+        result = self.run_job(job['id'], node=node)
+        self.assertEqual(len(calls), 1)
+        self.assertEqual(result['outcome'], 'success', result)
+        self.assertFalse(result['local']['session_saved'])
+        self.assertEqual(result['local']['timings'], [{'stage': 'tax.dues', 'duration_ms': 42}])
+        self.assertEqual(result['service_verdict']['source'], 'stdout_summary')
+        self.assertIsNone(result['result']['items'])
+        self.assertNoSecrets(result)
+
+    def test_query_with_changed_or_unconfirmed_target_withholds_rows_without_rewriting_verdict(self):
+        self.login_session()
+        target = self.register('personal')
+        for record in (tax_record(data={'account': BUSINESS, 'items': [{'itrfNm': '다른 대상'}]}),
+                       session_record(data={'account': PERSONAL, 'items': [{'itrfNm': '확인되지 않은 대상'}]})):
+            job = self.submit('hometax.tax.dues', target_id=target['id'])
+            result = self.run_job(job['id'], node=FakeNode({'tax.dues': record}))
+            self.assertEqual(result['outcome'], 'unknown')
+            self.assertEqual(result['service_verdict']['branch'], 'success')
+            self.assertTrue(result['local']['target_mismatch_after_query'])
+            self.assertIsNone(result['result'])
 
     def test_revision_change_marks_sessions_stale_until_rechecked(self):
         self.login_session()
@@ -220,8 +266,7 @@ class HometaxAdapterTests(ServerCase):
         target = self.register('personal')
         first = self.submit('hometax.tax.dues', target_id=target['id'])
         second = self.submit('hometax.tax.dues', target_id=target['id'])
-        node = FakeNode({'account.show': session_record(data={'account': PERSONAL}),
-                         'tax.dues': session_record(data={'items': [], 'account': PERSONAL})})
+        node = FakeNode({'tax.dues': tax_record(data={'items': [], 'account': PERSONAL})})
         self.assertEqual(self.run_job(first['id'], node=node)['outcome'], 'success')
         result = self.run_job(second['id'], node=FakeNode({}))
         self.assertEqual((result['outcome'], result['local']['stopped']), ('not_started', 'fixed_session_not_usable'))
@@ -304,8 +349,7 @@ class HometaxAdapterTests(ServerCase):
         self.login_session()
         target = self.register('personal')
         job = self.submit('hometax.tax.dues', target_id=target['id'])
-        self.run_job(job['id'], node=FakeNode({'account.show': session_record(data={'account': PERSONAL}),
-                                                'tax.dues': session_record(data={'items': [], 'account': PERSONAL})}))
+        self.run_job(job['id'], node=FakeNode({'tax.dues': tax_record(data={'items': [], 'account': PERSONAL})}))
         text = json.dumps(self.get(f"/logins/{self.login['id']}/sessions").json())
         self.assertNotIn('P0001', text)
 

@@ -63,7 +63,7 @@ export async function follow(jobId, onUpdate, isCurrent = () => true) {
     onUpdate?.(job);
     if (TERMINAL.has(job.status) || job.status === 'awaiting_input') return job;
     await new Promise(resolve => setTimeout(resolve, delay));
-    delay = Math.min(delay * 1.4, 3000);
+    delay = Math.min(delay * 1.4, job.name?.startsWith('hometax.tax.') ? 1000 : 3000);
   }
 }
 

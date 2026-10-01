@@ -366,6 +366,14 @@ fin hometax tax notices  --session S.json --output /path/to/new-notices.json --s
 
 - 표준출력 요약의 `item_count`와 `branch`를 먼저 보고, 자세한 내용(`data`)은 `--output` 파일에서 확인합니다.
 - 기간을 생략하면 서비스 화면의 기본값을 씁니다. `--timeout`(기본 60초)은 단계별 대기 시간입니다.
+- 네 명령 모두 `--tin TIN`을 지정하면 같은 실행에서 사업장을 확인·전환한 뒤 조회합니다. 개인으로 돌아가려면 `--tin ORIGIN`을 사용합니다. 생략하면 현재 세션의 대상으로 조회합니다. 같은 대상이면 전환하지 않으며, 지정한 대상을 확인하지 못하면 세액 조회를 시작하지 않습니다.
+- `--timings`를 추가하면 요약 JSON의 `timings`에 `session.open`(초기화), 필요한 경우 `business.select`(전환), `tax.dues` 등 조회 단계의 `duration_ms`가 표시됩니다. 조회 시간에는 서비스 화면 진입·권한 확인이 포함됩니다. 이 시간은 결과 파일에도 기록되며, 옵션을 생략한 표준출력 형식은 그대로입니다.
+
+```sh
+fin hometax tax dues --session S.json --output /path/to/new-dues.json --tin TIN --timings --send
+```
+
+웹앱의 세액·납부 내역·환급금·전자고지 조회도 이 경로를 사용합니다. 사용자 확인과 조회를 한 실행에서 처리해 반복 초기화를 줄이며, 작업의 `local.timings`에 단계별 시간을 남깁니다.
 
 ### 신고 조회
 
