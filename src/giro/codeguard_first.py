@@ -10,6 +10,7 @@ from .codeguard_codec import (decode_rule, evaluate_rule, java_utf8,
                               jni_modified_utf8, native_base64_decode,
                               NativeBase64Error)
 from .codeguard_inputs import package_digest
+from .codeguard_native_io import package_digest_read_steps
 from .codeguard_rule import AnalysisLimit, NativeRuleError, parse_rule, parsing_positions
 
 
@@ -21,7 +22,21 @@ def first_response_arithmetic(package_bytes, encoded_challenge, encoded_rule, ap
     is NOT that operand. Return bytes before JNI NewStringUTF, not a statement
     that JNI/OS checks passed. The original encoded challenge is preserved.
     """
-    digest = package_digest(package_bytes)
+    return _first_response(package_digest(package_bytes), encoded_challenge,
+                           encoded_rule, app_info, version)
+
+
+def first_response_read_steps(file_size, encoded_challenge, encoded_rule, app_info, version):
+    """The same arithmetic from observed native fread calls, including short reads.
+
+    Entry requires completed JNI/process/path resolution and file positioning.
+    Only the digest/arithmetic stage is expanded; this is NOT native_start.
+    """
+    digest = yield from package_digest_read_steps(file_size)
+    return _first_response(digest, encoded_challenge, encoded_rule, app_info, version)
+
+
+def _first_response(digest, encoded_challenge, encoded_rule, app_info, version):
     if encoded_challenge is None:
         raise NativeRuleError(20)
     challenge_text = jni_modified_utf8(encoded_challenge)
