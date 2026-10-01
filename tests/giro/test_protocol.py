@@ -14,7 +14,7 @@ class ProtocolTests(unittest.TestCase):
         self.assertEqual(auth_plan()['steps'][0]['method'], 'POST')
 
     def test_explicit_offline_catalog_no_arbitrary_urls(self):
-        self.assertEqual(len(ENDPOINTS), 17)
+        self.assertEqual(len(ENDPOINTS), 19)
         for ep in ENDPOINTS.values():
             self.assertFalse(ep.describe()['network_enabled'])
             self.assertNotIn('InsSearchKey', ep.path)

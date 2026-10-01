@@ -11,6 +11,8 @@
     "local.detail": "kr/or/giro/android/net/query/service/localtax/localtaxsearch/QryLocaltaxQryBillDetail",
     "customs.list": "kr/or/giro/android/net/query/service/ntax/tariff/QryTariffQryBillList",
     "customs.detail": "kr/or/giro/android/net/query/service/ntax/tariff/QryTariffQryBillDetail",
+    "receipts.list": "kr/or/giro/android/net/query/mygiro/receipt/QryReceiptList",
+    "receipts.detail": "kr/or/giro/android/net/query/mygiro/receipt/QryReceiptDetail",
     "accounts.registered": "kr/or/giro/android/net/query/mygiro/account/QryUserAcntList",
     "accounts.payable": "kr/or/giro/android/net/query/service/common/QryAppQryPayableAccountList",
     "accounts.banks": "kr/or/giro/android/net/query/service/common/QryAppQryPayableBankList",
@@ -422,6 +424,74 @@
         "when": "string"
       }
     },
+    "kr/or/giro/android/net/query/mygiro/receipt/QryReceiptList": {
+      "fields": {
+        "endDate": "string",
+        "page": "string",
+        "pageNaviMap": {
+          "model": "kr/or/giro/android/model/PageNaviMap"
+        },
+        "pageSize": "string",
+        "receiptList": {
+          "list": "kr/or/giro/android/net/query/mygiro/receipt/QryReceiptList$ReceiptData"
+        },
+        "startDate": "string",
+        "todayY4MD": "string"
+      },
+      "parent": "kr/or/giro/android/net/query/QryCommon"
+    },
+    "kr/or/giro/android/net/query/mygiro/receipt/QryReceiptList$ReceiptData": {
+      "fields": {
+        "canQrySumPayList": "string",
+        "companyName": "string",
+        "giroNo": "string",
+        "isNapbuCancel": "string",
+        "key": "string",
+        "napbuSystem": "string",
+        "paidDate": "string",
+        "paidMny": "string",
+        "sortCode": "string",
+        "strNapbuCount": "string",
+        "strNapbuSystem": "string",
+        "strNapbuType": "string"
+      }
+    },
+    "kr/or/giro/android/net/query/mygiro/receipt/QryReceiptDetail": {
+      "fields": {
+        "QRCodeKey": "string",
+        "acntNo": "string",
+        "bankCode": "string",
+        "bankName": "string",
+        "fiGubunCode": "string",
+        "giroNo": "string",
+        "isCancel": "string",
+        "isCardPayment": "string",
+        "isMobilePayment": "string",
+        "key": "string",
+        "paidDate": "string",
+        "payCode": "string",
+        "receiptItem": {
+          "list": "kr/or/giro/android/model/ReceiptItem"
+        },
+        "signItemList": {
+          "list": "kr/or/giro/android/net/query/mygiro/receipt/QryReceiptDetail$SignItemData"
+        },
+        "sortCode": "string"
+      },
+      "parent": "kr/or/giro/android/net/query/QryCommon"
+    },
+    "kr/or/giro/android/model/ReceiptItem": {
+      "fields": {
+        "n": "string",
+        "v": "string"
+      }
+    },
+    "kr/or/giro/android/net/query/mygiro/receipt/QryReceiptDetail$SignItemData": {
+      "fields": {
+        "n": "string",
+        "v": "string"
+      }
+    },
     "kr/or/giro/android/net/query/mygiro/account/QryUserAcntList": {
       "fields": {
         "userAcntList": {
@@ -639,12 +709,6 @@
         "합계납부금액": "string"
       },
       "parent": "kr/or/giro/android/net/query/QryCommon"
-    },
-    "kr/or/giro/android/model/ReceiptItem": {
-      "fields": {
-        "n": "string",
-        "v": "string"
-      }
     },
     "kr/or/giro/android/net/query/service/link/nts/QryLinkNtsProcPayment": {
       "fields": {

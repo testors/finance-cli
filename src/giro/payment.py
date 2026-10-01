@@ -6,7 +6,7 @@ authenticate, register accounts, accept terms, send a payment or retry one.
 from dataclasses import dataclass, field
 
 from .compat import read_model, string_value
-from .crypto import encode_account_password, encrypt_text
+from .crypto import encode_account_password, encode_pin, encrypt_text
 from .errors import GiroError
 from .protocol import build_query, encrypted_form
 from .response import Received, SESSION_END_CODES
@@ -32,10 +32,13 @@ def payment_plan():
         'hometax_link_uses_registered_account_list': False,
         'implemented': ['account_models', 'payable_account_selection',
                         'account_password_codec', 'national_account_request_preparation',
-                        'conditional_auth_routing', 'payment_response_models'],
-        'remaining': ['authenticated_session_transport', 'current_recipient_validation',
-                      'codeguard_and_registered_device_binding', 'bill_to_payment_workflow',
-                      'additional_auth_execution', 'payment_dispatch_and_result_reconciliation'],
+                        'conditional_auth_routing', 'payment_response_models',
+                        'authenticated_session_http_client', 'single_national_bill_workflow',
+                        'additional_pin_encryption', 'durable_single_payment_dispatch',
+                        'receipt_query_transport'],
+        'remaining': ['authenticated_session_bootstrap', 'current_recipient_validation',
+                      'codeguard_and_registered_device_binding', 'certificate_fido_additional_auth',
+                      'cli_web_login_and_payment_integration', 'live_server_acceptance'],
     }
 
 
@@ -173,19 +176,23 @@ def prepare_registered_payment(fields, payable_response, account_index, *, login
     return AccountPayment(payment, auth, _mask_account(account['accountNo']))
 
 
-def encode_registered_payment(prepared, *, account_password_provider, key, device_id):
+def encode_registered_payment(prepared, *, account_password_provider, key, device_id,
+                              additional_pin_provider=None):
     """Create an encrypted body in memory. Never send, persist or log it.
 
-    Additional-authentication branches remain unimplemented. In those branches
-    no password is collected. The input provider supplies only the account
-    password; it is never confused with a login PIN or certificate password.
+    Additional PIN authentication uses six digits and the same session key.
+    Certificate/FIDO branches require their own authentication implementation.
     """
-    if prepared.authentication != 'none':
+    pin_auth = (prepared.authentication == 'additional'
+                and prepared.fields.get('addCertMethod') == '2')
+    if prepared.authentication != 'none' and not (pin_auth and additional_pin_provider is not None):
         raise GiroError('추가 인증 실행은 아직 지원하지 않습니다.')
     if not isinstance(key, bytes) or len(key) != 16:
         raise GiroError('SEED 세션 키는 정확히 16바이트여야 합니다.')
     fields = dict(prepared.fields)
     fields['acntPwd'] = encode_account_password(account_password_provider(), key)
+    if pin_auth:
+        fields['encAddCertValue'] = encode_pin(additional_pin_provider(), key)
     text = build_query('national.payment', fields, device_id=device_id)
     return encrypted_form(encrypt_text(text, key))
 
