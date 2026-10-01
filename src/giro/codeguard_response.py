@@ -56,7 +56,8 @@ def os_status_digest(source):
     return base64.b64encode(java_seed_encrypt(digest, RULE_KEY, RULE_IV)).decode('ascii')
 
 
-def oscheck_steps(state, *, challenge, root_check, rooting_info, fourth, rcl):
+def oscheck_steps(state, *, challenge, root_check, rooting_info, fourth, rcl,
+                  shared_reads=False):
     """MainService.a(String,ZZ,String,String); not a real OS-check adapter."""
     root_check, rooting_info = observed_bool(root_check), observed_bool(rooting_info)
     source = challenge
@@ -67,7 +68,11 @@ def oscheck_steps(state, *, challenge, root_check, rooting_info, fourth, rcl):
             manager = 'extended' if rcl else 'standard'
             result = yield Effect('device_check', (manager, rcl if rcl else fourth))
             state.detail_enabled = observed_bool(result)
-            if state.detail_enabled:
+            # The worker reads the shared field again after writing it. An
+            # overlapping response can reset it while this worker is running.
+            enabled = (observed_bool((yield Effect('oscheck_detail_enabled')))
+                       if shared_reads else state.detail_enabled)
+            if enabled:
                 source = yield Effect('device_detail', (manager,))
     except JavaFault:
         state.append_log(',E32.4')
@@ -119,7 +124,8 @@ def response_steps(state, *, root_check, rooting_info, decode_certificate=None):
                 state.challenge.challenge, root_check, effective_rooting,
                 state.challenge.fourth, state.challenge.rcl_suffix, 5000))
         except JavaFault as fault:
-            if fault.kind not in ('InterruptedException', 'ExecutionException', 'TimeoutException'):
+            if not any(fault.is_instance(kind) for kind in
+                       ('InterruptedException', 'ExecutionException', 'TimeoutException')):
                 raise
             # Actual observed Future failure only; no cancellation or shutdown here.
             state.os_status = os_status_digest(state.challenge.challenge)
