@@ -32,6 +32,10 @@ def parser():
     auth_sub = auth.add_subparsers(dest="action", required=True)
     auth_sub.add_parser("plan", help="확인된 인증 흐름과 미해결 항목")
     auth_sub.add_parser("login", help="미구현: 네트워크 요청 없이 오류 반환")
+    trust = auth_sub.add_parser('prepare-trust', help='고정 해시의 공개 루트 2개 준비; 기본은 무통신 계획')
+    trust.add_argument('--cache', help='명시적인 기존 절대경로 디렉터리; 공개 인증서·폐지목록 전용')
+    trust.add_argument('--live', '--send', dest='live', action='store_true',
+                       help='캐시에 없는 공개 루트만 LDAP 조회; 최대 2회, 로그인·PIN 없음')
     bootstrap = auth_sub.add_parser("bootstrap", help="PIN 없는 공개 서버 인증서 조회; 기본은 계획만 출력")
     bootstrap.add_argument("--live", action="store_true", help="고정 HTTPS 경로에 단발 POST; 응답 전문/쿠키 저장 안 함")
     cg_probe=auth_sub.add_parser('codeguard-bootstrap',help='PIN 없는 CMD101 단발 검사; 기본 계획만, CMD200/300 없음')
@@ -133,6 +137,10 @@ def run(args):
             return auth_plan(), 0
         if args.action == "login":
             return {"error": "live_auth_unavailable", **auth_plan()}, 4
+        if args.action == 'prepare-trust':
+            from .recipient_trust import prepare_trust
+            result = prepare_trust(args.cache, send=args.live)
+            return result, 2 if result['processing_issues'] else 0
         if args.action == "bootstrap":
             from .bootstrap import plan, probe_server_cert
             result = probe_server_cert() if args.live else plan()

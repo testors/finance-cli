@@ -208,6 +208,42 @@ class LoginTests(unittest.TestCase):
         self.pin.assert_not_called()
         self.assertNotIn('codeguard.token', self.server.steps)
 
+    def test_unregistered_device_routes_before_datetime_pin_or_token(self):
+        for fields in ({'deviceRegYn': 'N'}, {'deviceRegYn': None},
+                       {'deviceRegYn': 'y'}, {'deviceRegYn': True}, {}):
+            with self.subTest(fields=fields):
+                self.server.steps.clear()
+                self.login = PinLogin(device_id='SYNTHETIC-DEVICE', user_agent='SYNTHETIC-CLIENT',
+                                      recipient=self.context, protection=self.protection)
+                self.server.responses['auth.device-status'] = (200, {'responseCode': '000', **fields})
+                result = self.run_login()
+                self.assertTrue(result.response.app_success)
+                self.assertEqual(result.stage, 'device.registration')
+                self.assertEqual(result.report()['next_action'], 'sms_identity_verification')
+                self.assertIsNone(result.report()['login_app_success'])
+                self.assertEqual(result.report()['login_service_decision'], 'unobserved')
+                self.assertEqual(result.processing_issues, [])
+                self.assertEqual(self.server.steps, ['auth.server-cert', 'protection.initialize',
+                                                     'auth.device-status'])
+                self.pin.assert_not_called()
+                with self.assertRaises(GiroError):
+                    self.run_login()
+
+    def test_failed_device_query_is_not_registration_navigation(self):
+        self.server.responses['auth.device-status'] = (200, {'responseCode': '999', 'deviceRegYn': 'N'})
+        result = self.run_login()
+        self.assertEqual(result.stage, 'auth.device-status')
+        self.assertFalse(result.response.app_success)
+        self.assertIsNone(result.report()['next_action'])
+        self.pin.assert_not_called()
+
+    def test_explicit_pin_route_has_no_extra_pin_flag_gate(self):
+        self.server.responses['auth.device-status'] = (200, {'responseCode': '000',
+            'deviceRegYn': 'Y', 'pinLoginYn': 'N', 'defaultLoginType': '0'})
+        result = self.run_login()
+        self.assertTrue(result.report()['session_ready'])
+        self.assertIsNone(result.report()['next_action'])
+
     def test_success_without_session_preserves_success_but_cannot_pay(self):
         self.server.responses['auth.pin'] = (200, {'responseCode': '000'})
         result = self.run_login()

@@ -99,6 +99,7 @@ fin hana plan
 
 # 지로 로컬 계획·자료 해석
 fin giro auth plan
+fin giro auth prepare-trust   # 공개 루트 준비 계획; 통신·파일 접근 없음
 fin giro request national.list
 fin giro bills due --type national --input /path/to/local-response.json --today 2026-09-29
 fin giro payment plan

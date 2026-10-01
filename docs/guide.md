@@ -518,6 +518,15 @@ fin hometax invoice issue --prepared /path/to/new-prepared.json --profile tax --
 
 ## 모바일지로
 
+수신자 검증에 사용할 공개 루트 자료는 다음 명령으로 준비합니다. 기본 실행은 통신·파일 접근 없이 계획만 보여 줍니다. 실제 준비에는 공개 자료 전용 디렉터리를 먼저 만들고 절대경로와 `--send`를 지정합니다.
+
+```sh
+fin giro auth prepare-trust
+fin giro auth prepare-trust --cache /absolute/public-material-cache --send
+```
+
+고정된 공개 LDAP 서버에서 캐시에 없는 루트 인증서를 최대 2회 조회하고, 미리 지정된 SHA-256과 일치하는 자료만 저장합니다. 이미 일치하는 자료가 있으면 다시 조회하지 않습니다. 사용자 인증서·비밀번호·PIN은 사용하지 않습니다. 루트 준비 성공은 로그인 성공이나 서버 인증서의 폐지 검사 완료를 뜻하지 않으며, 실제 로그인·납부는 아직 미지원입니다.
+
 실제 로그인·계좌 조회·납부 전송은 아직 지원하지 않습니다. 아래 명령은 로컬 JSON 자료를 읽으며 서비스에 접속하지 않습니다.
 
 ```sh

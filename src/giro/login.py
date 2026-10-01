@@ -59,6 +59,16 @@ class RecipientContext:
     cache: object = None
     ldap: object = None
 
+    @classmethod
+    def from_public_cache(cls, cache, *, locale_language, stores=(), ldap=None):
+        """Load pinned roots without network. Caller owns the open public cache.
+
+        Extra issuer/CRL stores are explicit; otherwise the validation pipeline
+        discovers them through this cache and the separately enabled LDAP IO.
+        """
+        from .recipient_trust import load_anchors
+        return cls(load_anchors(cache), tuple(stores), locale_language, cache, ldap)
+
     def validate(self, text):
         if not isinstance(text, str):
             raise GiroError('수신자 인증서 자료를 확인하지 못했습니다.')
@@ -103,6 +113,7 @@ class LoginAttempt:
     response: object = None
     session: object = None
     processing_issues: list = field(default_factory=list)
+    next_action: str | None = None
 
     def report(self):
         login = self.response if self.stage == 'auth.pin' else None
@@ -111,7 +122,8 @@ class LoginAttempt:
         return {'stage': self.stage, 'login_app_success': None if login is None else login.app_success,
                 'login_service_decision': decision,
                 'session_ready': self.session is not None and self.session.active,
-                'automatic_retry': False, 'processing_issues': list(self.processing_issues)}
+                'automatic_retry': False, 'processing_issues': list(self.processing_issues),
+                'next_action': self.next_action}
 
 
 class PinLogin:
@@ -178,6 +190,13 @@ class PinLogin:
                         return attempt
                     observed = replay(name, attempt.response, self.state)
                     self.state = observed.state
+                    if name == 'auth.device-status' and not self.state.values['isDeviceReg']:
+                        # Normal app entry routes to SMS identity verification
+                        # before a login screen. This is not a service failure,
+                        # nor permission to register/change a device here.
+                        attempt.stage = 'device.registration'
+                        attempt.next_action = 'sms_identity_verification'
+                        return attempt
                 attempt.stage = 'pin.input'
                 cipher = encode_pin(pin_provider(), self.key)
                 # The first callback is discarded by LoginPinPresenter, but
