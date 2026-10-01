@@ -9,11 +9,11 @@ from email.message import Message
 import http.client
 from http.cookiejar import CookieJar
 import socket
-import ssl
 from threading import RLock
 from time import monotonic
 from urllib.request import Request
 
+from .bootstrap import _tls_context
 from .compat import read_model
 from .crypto import encrypt_text
 from .errors import GiroError
@@ -60,7 +60,7 @@ class WireResponse:
 def _post(path, body, headers):
     """One verified HTTPS request to the fixed service. No redirect or retry."""
     connection = http.client.HTTPSConnection('m.giro.or.kr', timeout=30,
-                                             context=ssl.create_default_context())
+                                             context=_tls_context())
     try:
         connection.request('POST', path, body=body, headers=headers)
         response = connection.getresponse()
@@ -72,23 +72,61 @@ def _post(path, body, headers):
             pass  # Closing an already-read response cannot erase its verdict.
 
 
+def exchange(name, body, *, key, cookies, user_agent, query=None, on_cookie_error=None):
+    """Shared login/service POST. None cookies selects the isolated cert client.
+
+    No retry, redirect, login-state inference or exception text in the result.
+    The caller owns its session lock and decides whether to continue afterward.
+    """
+    path = endpoint(name).path
+    request = Request(BASE_URL + path, data=body, method='POST', headers={
+        'User-Agent': user_agent,
+        'Content-Type': 'application/x-www-form-urlencoded', 'Accept-Encoding': 'gzip'})
+    if cookies is not None:
+        cookies.add_cookie_header(request)
+    headers = dict(request.header_items())
+    try:
+        wire = _post(path, body, headers)
+    except (socket.timeout, TimeoutError):
+        return None, transport_failure(name, timeout=True, request_query=query)
+    except (OSError, http.client.HTTPException):
+        return None, transport_failure(name, request_query=query)
+    cookie_issue = False
+    if cookies is not None:
+        try:
+            cookies.extract_cookies(wire, request)
+        except Exception:
+            cookie_issue = True
+            if on_cookie_error is not None:
+                on_cookie_error()
+    result = receive_bytes(name, wire.status, wire.headers, wire.body,
+                           key=key, request_headers=list(headers.items()), request_query=query)
+    if cookie_issue:
+        result = replace(result, issues=(*result.issues, 'cookie_update_failed'))
+    return wire.status, result
+
+
+def record(events, name, started, status, result):
+    try:
+        code = result.code
+        safe_code = code if isinstance(code, str) and code.isascii() and code.isdigit() and len(code) <= 3 else None
+        events.append({'endpoint': name, 'http_status': status,
+                       'response_code': safe_code, 'origin': result.origin,
+                       'callback': result.callback, 'app_success': result.app_success,
+                       'elapsed_ms': round((monotonic() - started) * 1000),
+                       'processing_issues': list(result.issues)})
+    except Exception:
+        return replace(result, issues=(*result.issues, 'observation_failed'))
+    return result
+
+
 class AuthenticatedClient:
     def __init__(self, session: AuthenticatedSession):
         self.session = session
         self.events = []
 
     def _record(self, name, started, status, result):
-        try:
-            code = result.code
-            safe_code = code if isinstance(code, str) and code.isascii() and code.isdigit() and len(code) <= 3 else None
-            self.events.append({'endpoint': name, 'http_status': status,
-                                'response_code': safe_code, 'origin': result.origin,
-                                'callback': result.callback, 'app_success': result.app_success,
-                                'elapsed_ms': round((monotonic() - started) * 1000),
-                                'processing_issues': list(result.issues)})
-        except Exception:
-            return replace(result, issues=(*result.issues, 'observation_failed'))
-        return result
+        return record(self.events, name, started, status, result)
 
     def require_active(self):
         if not self.session.active:
@@ -113,33 +151,12 @@ class AuthenticatedClient:
         """Caller holds the session lock; payment caller also owns a reservation."""
         self.require_active()
         started = monotonic()
-        path = endpoint(name).path
-        request = Request(BASE_URL + path, data=body, method='POST', headers={
-            'User-Agent': self.session.user_agent,
-            'Content-Type': 'application/x-www-form-urlencoded', 'Accept-Encoding': 'gzip'})
-        self.session.cookies.add_cookie_header(request)
-        headers = dict(request.header_items())
-        try:
-            wire = _post(path, body, headers)
-        except (socket.timeout, TimeoutError):
-            return self._record(name, started, None, transport_failure(name, timeout=True, request_query=query))
-        except (OSError, http.client.HTTPException):
-            return self._record(name, started, None, transport_failure(name, request_query=query))
-        # Cookie bookkeeping is client processing, never the payment verdict.
-        cookie_issue = False
-        try:
-            self.session.cookies.extract_cookies(wire, request)
-        except Exception:
-            self.session.active = False
-            cookie_issue = True
-        result = receive_bytes(name, wire.status, wire.headers, wire.body,
-                               key=self.session.key, request_headers=list(headers.items()),
-                               request_query=query)
-        if cookie_issue:
-            result = replace(result, issues=(*result.issues, 'cookie_update_failed'))
+        status, result = exchange(name, body, key=self.session.key, cookies=self.session.cookies,
+            user_agent=self.session.user_agent, query=query,
+            on_cookie_error=lambda: setattr(self.session, 'active', False))
         if result.session_update is not None:
             self.session.info = result.session_update
         if result.clear_session:
             self.session.active = False
             self.session.info = {}
-        return self._record(name, started, wire.status, result)
+        return self._record(name, started, status, result)
