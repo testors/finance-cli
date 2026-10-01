@@ -84,7 +84,7 @@ def main_instance_steps(process, context):
     except (JavaFault, LinkFault):
         yield Effect('main_monitor_exit', (process,))
         raise
-    # An analysis/Python failure is unresolved execution, not a Java Throwable
+    # A missing observation or Python failure is not a Java Throwable
     # observation from which monitor cleanup or later calls may be inferred.
     yield Effect('main_monitor_exit', (process,))
     return process.instance
