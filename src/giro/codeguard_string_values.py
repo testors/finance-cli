@@ -141,12 +141,14 @@ def _known_string(value):
     return NativeStringValue(value) if type(value) is str else value
 
 
-def project_native_value_steps(generator, *, service):
+def project_native_value_steps(generator, *, service, certificate_values=False):
     """Expand both native calls, marking ONLY their known String arguments.
 
     Environment providers may explicitly return NativeStringValue for contents
     they have resolved. Opaque IDs and missing platform results are untouched.
     Each invocation has its own owned buffer scope and returns plain str/None.
+    certificate_values opts into the normal single-DER/SHA-256 Python backend;
+    it does not resolve PackageManager or Signature.toByteArray observations.
     """
     from .codeguard_native_start import native_start_steps
     from .codeguard_native_nonce import native_nonce_steps
@@ -164,7 +166,11 @@ def project_native_value_steps(generator, *, service):
             elif effect.kind == 'native_get_nonce':
                 key, challenge, mix, split = effect.args
                 body = native_nonce_steps(service, _known_string(key), _known_string(challenge), mix, split)
-                value = yield from project_string_values_steps(body)
+                values = None
+                if certificate_values:
+                    from .codeguard_certificate_values import CertificateValues
+                    values = CertificateValues()
+                value = yield from project_string_values_steps(body, values=values)
             else:
                 value = yield effect
         except Exception as fault:
