@@ -19,7 +19,7 @@ async function setup(t, method = 'onesign', readiness = 'query_only', secret = {
   const target = {id: 'target', login_id: row.id, kind: 'account', display_name: '합성 계좌', identity: {account_number: '12345678901234'}};
   const state = {logins: [row], targets: [target], cache: new Map(), rows: {}, capabilities: {features: []},
     vaults: {synthetic: true}, credentials: [], profiles: []};
-  const calls = [], asked = [], checked = [];
+  const calls = [], asked = [], checked = [], apiCalls = [];
   const ctx = {run: async (name, fields, options) => { calls.push({name, fields, options}); }};
   const values = {
     state, login: id => state.logins.find(r => r.id === id), target: id => state.targets.find(r => r.id === id), profile: () => null,
@@ -38,6 +38,8 @@ async function setup(t, method = 'onesign', readiness = 'query_only', secret = {
   }, {context});
   const api = new SyntheticModule(['api', 'submit'], function () {
     this.setExport('api', {get: async path => {
+      apiCalls.push(path);
+      if (state.failJobList && path.startsWith('/jobs?')) throw new Error('synthetic list error');
       if (path.startsWith('/jobs?')) return {jobs: []};
       return {credentials: [], devices: [], id_cards: []};
     }});
@@ -50,8 +52,62 @@ async function setup(t, method = 'onesign', readiness = 'query_only', secret = {
   const views = new SourceTextModule(await readFile(new URL('views.js', root), 'utf8'), {context});
   await views.link(name => ({'./app.js': app, './api.js': api, './ui.js': ui, './certificates.js': certificates}[name]));
   await views.evaluate();
-  return {ctx, state, calls, asked, checked, row, document: dom.window.document, ...views.namespace};
+  return {ctx, state, calls, asked, checked, apiCalls, row, document: dom.window.document, ...views.namespace};
 }
+
+test('a completed tax query stays current when returning to its screen', async t => {
+  const ui = await setup(t, 'joint_certificate', 'ready');
+  ui.row.institution = 'hometax'; ui.state.targets[0].kind = 'personal';
+  const old = {id: 'old', name: 'hometax.tax.dues', login_id: 'login', target_id: 'target',
+    status: 'finished', outcome: 'success', result: {items: [{itrfNm: '이전 합성 세목', romAmt: 1}],
+      item_count: 1, pagination: {complete: true}}};
+  const fresh = {...old, id: 'fresh', result: {...old.result, items: [{itrfNm: '새 합성 세목', romAmt: 2}]}};
+  ui.state.cache.set('hometax.tax.dues||target|', old);
+  ui.state.cache.set('hometax.tax.dues||another-target|', old);
+  const main = ui.document.querySelector('main');
+  main.innerHTML = await ui.views.dues(ui.ctx);
+  let submissions = 0;
+  ui.ctx.run = async (name, fields, options) => {
+    submissions++;
+    ui.state.cache.set(options.key, fresh);
+    await options.onDone(fresh);
+    return fresh;
+  };
+  await ui.actions['tax-query'](ui.ctx, main.querySelector('form'));
+  assert.match(main.textContent, /새 합성 세목/);
+  main.innerHTML = await ui.views.dues(ui.ctx);
+  assert.match(main.textContent, /새 합성 세목/);
+  assert.doesNotMatch(main.textContent, /이전 합성 세목/);
+  assert.equal(ui.state.cache.get('hometax.tax.dues||another-target|'), old);
+  assert.equal(submissions, 1);
+  assert.equal(ui.apiCalls.length, 0, 'Navigation reuses the completed job without replaying a query');
+});
+
+test('summary and account screens share concurrent job-list reads, with no lasting list cache', async t => {
+  const tax = await setup(t, 'joint_certificate', 'ready');
+  tax.row.institution = 'hometax'; tax.state.targets[0].kind = 'personal';
+  await tax.views.taxhome(tax.ctx);
+  assert.deepEqual(tax.apiCalls, ['/jobs?limit=200']);
+  await tax.views.taxhome(tax.ctx);
+  assert.deepEqual(tax.apiCalls, ['/jobs?limit=200', '/jobs?limit=200']);
+  const bank = await setup(t, 'onesign', 'ready');
+  bank.state.logins = Array.from({length: 3}, (_, i) => ({...bank.row, id: 'synthetic-' + i}));
+  await bank.views.accounts(bank.ctx);
+  assert.deepEqual(bank.apiCalls, ['/jobs?limit=200']);
+  assert.equal(bank.calls.length, 0);
+});
+
+test('a failed shared list read does not prevent the next explicit screen load', async t => {
+  const ui = await setup(t, 'joint_certificate', 'ready');
+  ui.row.institution = 'hometax'; ui.state.targets[0].kind = 'personal';
+  ui.state.failJobList = true;
+  await assert.rejects(ui.views.taxhome(ui.ctx), /synthetic list error/);
+  assert.equal(ui.apiCalls.length, 1);
+  ui.state.failJobList = false;
+  await ui.views.taxhome(ui.ctx);
+  assert.equal(ui.apiCalls.length, 2);
+  assert.equal(ui.calls.length, 0);
+});
 
 test('Hometax connection shows missing runtime before asking for a password', async t => {
   const ui = await setup(t, 'joint_certificate', 'login_required');

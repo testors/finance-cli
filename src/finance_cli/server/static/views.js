@@ -31,13 +31,22 @@ function readiness(row) {
   return value === 'query_only' ? tag('조회용 세션 있음', '') : value === 'ready' ? tag('세션 있음', '') : value === 'login_disabled' ? tag('사용 중지', 'neutral') : tag('로그인 필요', 'warning');
 }
 
-const key = (name, fields = {}) => [name, fields.login_id || '', fields.target_id || '', fields.parent || ''].join('|');
+// A target already identifies its login. Use the same key when a screen knows
+// only the target and when a submitted job also carries the login id.
+const key = (name, fields = {}) => [name, fields.target_id ? '' : fields.login_id || '', fields.target_id || '', fields.parent || ''].join('|');
+let pendingJobList = null;
+
+function recentJobs() {
+  // Share concurrent reads only; the next render can observe new server jobs.
+  if (!pendingJobList) pendingJobList = api.get('/jobs?limit=200').finally(() => { pendingJobList = null; });
+  return pendingJobList;
+}
 
 /* The latest job for a name and fixed login/target, from this tab or the server. */
 async function latest(name, fields = {}) {
   const cached = state.cache.get(key(name, fields));
   if (cached) return cached.result === undefined && cached.status === 'finished' ? api.get('/jobs/' + cached.id) : cached;
-  const listing = await api.get('/jobs?limit=200');
+  const listing = await recentJobs();
   const match = listing.jobs.find(j => j.name === name && (!fields.login_id || j.login_id === fields.login_id)
     && (!fields.target_id || j.target_id === fields.target_id));
   if (!match) return null;
