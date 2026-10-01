@@ -19,6 +19,10 @@ ORIGINS = ('web', 'cli', 'agent')
 class NotReady(ValueError):
     """The request is valid but the login, target or session is not ready."""
 
+    def __init__(self, code, *, reasons=()):
+        super().__init__(code)
+        self.reasons = reasons
+
 
 def digest(value):
     return hashlib.sha256(json.dumps(value, ensure_ascii=False, sort_keys=True, separators=(',', ':'),
@@ -42,7 +46,7 @@ def submit(db, *, name, origin, login_id=None, target_id=None, profile_id=None, 
     from .capabilities import job_state
     state = job_state(adapter)
     if state['status'] != 'available':
-        raise NotReady('capability_unavailable')
+        raise NotReady('capability_unavailable', reasons=state['reasons'])
     if idempotency_key is not None and (not isinstance(idempotency_key, str) or not 8 <= len(idempotency_key) <= 100):
         raise InputError('invalid_idempotency_key')
     for value in (login_id, target_id, profile_id, parent_job_id):

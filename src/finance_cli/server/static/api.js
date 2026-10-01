@@ -3,7 +3,10 @@
 let csrf = null;
 
 export class ApiError extends Error {
-  constructor(status, code) { super(code); this.status = status; this.code = code; }
+  constructor(status, code, reasons = []) {
+    super(code); this.status = status; this.code = code;
+    this.reasons = Array.isArray(reasons) ? reasons.filter(r => typeof r === 'string') : [];
+  }
 }
 
 async function request(method, path, body, headers = {}) {
@@ -25,7 +28,7 @@ async function request(method, path, body, headers = {}) {
   }
   let value = null;
   try { value = await response.json(); } catch (error) { value = null; }
-  if (!response.ok) throw new ApiError(response.status, value && value.error || 'http_' + response.status);
+  if (!response.ok) throw new ApiError(response.status, value && value.error || 'http_' + response.status, value?.reasons);
   return value;
 }
 

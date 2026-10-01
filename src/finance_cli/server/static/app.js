@@ -275,7 +275,8 @@ function makeContext(token) {
           await expiredBankLogin(context, fields.login_id);
           return null;
         }
-        const message = ui.message(error.code);
+        const message = error.code === 'capability_unavailable' && error.reasons?.length
+          ? error.reasons.map(ui.message).join(' ') : ui.message(error.code);
         if (document.getElementById(panel)) document.getElementById(panel).innerHTML = jobState(null, message);
         ui.toast(message);
         return null;

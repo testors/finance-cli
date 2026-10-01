@@ -527,6 +527,7 @@ function connectionCard(row) {
     : `<p class="target-empty">${row.institution === 'hana' ? '아직 조회한 계좌가 없어요. 계좌를 조회하면 바로 사용할 수 있어요.' : '사용자·사업장 확인을 실행하고 결과에서 선택하세요.'}</p>`;
   return `<section class="panel connection-card ${row.disabled ? 'disabled' : ''}" aria-labelledby="login-${esc(row.id)}">
     <div class="connection-head"><div class="bank-symbol">${symbol}</div><div class="connection-title"><h2 id="login-${esc(row.id)}">${esc(row.display_name)}</h2><p class="meta">${esc(ui.INSTITUTION[row.institution])} · ${esc(ui.METHOD[row.method])}${row.credential?.ref ? ' · ' + esc(row.credential.ref) : ''}</p></div><div class="login-status">${loginStatus(row)}</div><div class="connection-actions">${primaryAction(row, targets)}<button type="button" class="icon-button" data-action="login-menu" data-login="${esc(row.id)}" aria-label="${esc(row.display_name)} 더보기">${icon('more')}</button></div></div>
+    ${row.institution === 'hometax' ? setupNotice('hometax-login') : ''}
     <div class="connection-targets"><div class="connection-subhead"><h3>${row.institution === 'hana' ? '계좌' : '대상'} ${targets.length ? `<span class="count">${targets.length}</span>` : ''}</h3>${addTarget}</div>${targets.length ? targets.map(targetRow).join('') : emptyTargets}</div>
     ${signingLines(row) ? `<div class="connection-settings">${signingLines(row)}</div>` : ''}
     <div id="job-${esc(row.id)}"></div></section>`;

@@ -11,7 +11,7 @@ async function setup(t) {
     {url: 'http://127.0.0.1:8740', runScripts: 'outside-only'});
   t.after(() => dom.window.close());
   const context = dom.getInternalVMContext();
-  const data = {local: 5000, server: 1000, asked: [], gets: [], sent: [], error: null, stopped: null};
+  const data = {local: 5000, server: 1000, asked: [], gets: [], sent: [], submissions: 0, error: null, stopped: null};
   context.Date.now = () => data.local * 1000;
   data.row = {id: 'selected', institution: 'hana', method: 'onesign', current_session_id: 's',
     session: {last_request_at: 1000, idle_expires_at: 1600}};
@@ -22,7 +22,8 @@ async function setup(t) {
       return {logins: [structuredClone(data.row)], server_time: data.server};
     }},
     submit: async (name, fields) => {
-      if (data.error) throw {code: data.error};
+      data.submissions++;
+      if (data.error) throw {code: data.error, reasons: data.reasons};
       const job = {id: 'job', name, ...fields}; data.sent.push(job); return job;
     },
     follow: async () => ({...data.sent.at(-1), status: 'finished', outcome: 'success',
@@ -42,7 +43,7 @@ async function setup(t) {
   await app.evaluate();
   Object.assign(app.namespace.state, {logins: [structuredClone(data.row)], sessionClock: {server: 1000, local: 5000}});
   dom.window.document.querySelector('[data-action="capture"]').click();
-  return Object.assign(data, app.namespace);
+  return Object.assign(data, app.namespace, {document: dom.window.document});
 }
 
 test('600-second boundary uses server time despite browser clock offset', async t => {
@@ -101,4 +102,21 @@ test('finished bank work refreshes its persisted deadline; local export needs no
   assert.equal(app.sent.length, 2);
   assert.equal(app.asked.length, 0);
   assert.equal(app.state.logins[0].session.idle_expires_at, 1700); // Local API reads never extend it.
+});
+
+test('unavailable jobs show setup reasons without submitting again', async t => {
+  const app = await setup(t);
+  app.error = 'capability_unavailable';
+  app.reasons = ['hometax_runtime_not_installed', 'node_not_found'];
+  assert.equal(await app.ctx.run('hometax.login', {login_id: 'selected'}, {panel: 'stage'}), null);
+  const message = app.document.querySelector('#stage').textContent;
+  assert.match(message, /홈택스 실행 환경이 설치되지 않았어요/);
+  assert.match(message, /fin runtime install hometax/);
+  assert.match(message, /서버에 Node가 없어요/);
+  assert.equal(message, '접수 안 됨' + app.document.querySelector('#toast').textContent);
+  assert.equal(app.sent.length, 0);
+  assert.equal(app.submissions, 1);
+  app.reasons = [];
+  await app.ctx.run('hometax.login', {login_id: 'selected'}, {panel: 'stage'});
+  assert.match(app.document.querySelector('#stage').textContent, /이 기능은 지금 사용할 수 없어요/);
 });

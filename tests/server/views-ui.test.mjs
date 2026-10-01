@@ -53,6 +53,19 @@ async function setup(t, method = 'onesign', readiness = 'query_only', secret = {
   return {ctx, state, calls, asked, checked, row, document: dom.window.document, ...views.namespace};
 }
 
+test('Hometax connection shows missing runtime before asking for a password', async t => {
+  const ui = await setup(t, 'joint_certificate', 'login_required');
+  ui.row.institution = 'hometax';
+  ui.state.targets = [];
+  ui.state.capabilities.features = [{id: 'hometax-login', status: 'setup_required',
+    reasons: ['hometax_runtime_not_installed']}];
+  ui.document.querySelector('main').innerHTML = await ui.views.settings(ui.ctx);
+  assert.match(ui.document.querySelector('.connection-card').textContent, /홈택스 실행 환경 미설치/);
+  assert.match(ui.document.querySelector('.connection-card').textContent, /fin runtime install hometax/);
+  assert.equal(ui.calls.length, 0);
+  assert.equal(ui.asked.length, 0);
+});
+
 for (const method of ['onesign', 'joint_certificate']) {
   test(`${method} security queries use the selected login without an account target`, async t => {
     const ui = await setup(t, method);

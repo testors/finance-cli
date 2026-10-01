@@ -35,6 +35,7 @@ class CapabilityTests(ServerCase):
             refused = self.post('/jobs', {'name': 'hometax.login', 'login_id': login['id'],
                                           'secrets': {'certificate_password': 'x'}})
         self.assertEqual((refused.status_code, refused.json()['error']), (409, 'capability_unavailable'))
+        self.assertEqual(refused.json()['reasons'], ['hometax_runtime_not_installed'])
         self.assertEqual(self.get('/jobs').json()['jobs'], [])
 
     def test_reviewed_banking_evidence_is_scoped_and_does_not_change_readiness(self):

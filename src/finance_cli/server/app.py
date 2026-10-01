@@ -40,9 +40,10 @@ DOCUMENT_CSP = "sandbox; default-src 'none'; img-src data:; style-src 'unsafe-in
 
 
 class ApiError(Exception):
-    def __init__(self, status, code):
+    def __init__(self, status, code, *, reasons=()):
         super().__init__(code)
         self.status, self.code = status, code
+        self.reasons = reasons
 
 
 def code_of(error, fallback='invalid_request'):
@@ -80,12 +81,15 @@ def create_app(config, *, db=None, dispatcher=True, vaults=None):
     app = FastAPI(title='Finance', docs_url=None, redoc_url=None, openapi_url=None, lifespan=lifespan)
     app.state.config, app.state.db, app.state.dispatcher, app.state.vaults = config, db, worker, vaults
 
-    def error(status, code):
-        return JSONResponse({'error': code}, status_code=status, headers={'Cache-Control': 'no-store'})
+    def error(status, code, *, reasons=()):
+        value = {'error': code}
+        if reasons:
+            value['reasons'] = list(reasons)
+        return JSONResponse(value, status_code=status, headers={'Cache-Control': 'no-store'})
 
     @app.exception_handler(ApiError)
     async def api_error(request, exc):
-        return error(exc.status, exc.code)
+        return error(exc.status, exc.code, reasons=exc.reasons)
 
     @app.exception_handler(RequestValidationError)
     async def validation_error(request, exc):
@@ -154,7 +158,9 @@ def create_app(config, *, db=None, dispatcher=True, vaults=None):
             return function(*args, **kwargs)
         except model.NotFound as exc:
             raise ApiError(404, code_of(exc, 'not_found')) from None
-        except (model.Conflict, jobs.NotReady) as exc:
+        except jobs.NotReady as exc:
+            raise ApiError(409, code_of(exc, 'conflict'), reasons=exc.reasons) from None
+        except model.Conflict as exc:
             raise ApiError(409, code_of(exc, 'conflict')) from None
         except (InputError, ValueError, KeyError, TypeError, AttributeError, sqlite3.InterfaceError,
                 sqlite3.ProgrammingError) as exc:

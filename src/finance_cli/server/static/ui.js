@@ -168,6 +168,7 @@ const MESSAGES = {
   prepared_session_superseded: '초안 이후 다른 작업이 세션을 바꿨어요. 초안을 새로 만드세요.',
   hometax_runtime_not_installed: '홈택스 실행 환경이 설치되지 않았어요. 서버에서 fin runtime install hometax를 실행하세요.',
   node_not_found: '서버에 Node가 없어요.',
+  jdk_17_or_later_required: '계산서 서명에 필요한 JDK 17 이상이 서버에 없어요.',
   registration_required: '기기·앱 등록 정보가 필요해요. 서버에서 fin server registration으로 연결하세요.',
   'registration_required:app_profile,login_input': '앱 프로필 파일과 로그인 입력 파일을 서버에서 fin server registration으로 연결하세요.',
   login_method_not_supported_by_job: '이 로그인 방식에서는 쓸 수 없는 업무예요.',
