@@ -13,7 +13,7 @@
 | 공통 인증서 | NPKI·PFX 가져오기, 목록·정보, 내보내기, 프로필별 선택 | 비밀번호로 암호화한 저장소; CA 신뢰·폐기·기관 등록 확인과 별개 |
 | 하나은행 | 앱·공동인증서 로그인, 계좌·거래·보안매체 조회, 로그인 연장, 하나인증서 신규 발급·서명 로그인·원화 이체, 암호화 번들 이전, 사용자 설치 패키지에서 설정 추출 | 지원 버전 1.0.27; 사용자 서비스 자료 필요; 하나인증서 발급·로그인·조회 성공 및 이체 실행 성공 응답 확인; 세부 미확인 범위는 [실사용 확인표](docs/banking-verification.md) 참고 |
 | 홈택스 | 인증서 로그인, 세션, 사용자·사업장, 세액·신고 조회, 보고서 저장, 전자세금계산서 관련 명령 | Node 런타임 필요; XML 서명은 JDK 17+ 필요; 현재 버전의 실서버 검증 전 |
-| 모바일지로 | 인증·요청 계획, 로컬 고지서·기한 해석, 인증서 검증·CodeGuard 모델, 명시적 초기 프로브 | 실제 로그인·실시간 세금 조회·납부는 아직 미지원 |
+| 모바일지로 | 인증·납부 요청 계획, 로컬 고지서·등록계좌·납부 결과 해석, 인증서 검증·CodeGuard 모델, 명시적 초기 프로브 | 실제 로그인·실시간 세금 조회·납부는 아직 미지원 |
 | 금융인증서 | JWE·PIN KDF·키 포장 등 오프라인 암호 라이브러리 | 발급·클라우드 연결·관리 CLI는 아직 미지원 |
 | 웹앱 (`[web]` 선택 설치) | 위 기관 업무의 웹 작업(조회·준비·확인·실행·결과 조회), 업무 프로필·기관 로그인·대상, 작업 기록, 브라우저 등록·철회, 공동인증서 가져오기·하나인증서 단계별 발급 | 공동·금융인증서 신규 발급은 미지원; 루프백 서버와 Caddy HTTPS 프록시 구성; 설정 추출·인증서 내보내기·런타임 설치는 서버의 CLI로 관리; 하나인증서 뱅킹 일부 실사용 확인, 전체 기능 화면에 세부 범위 표시 |
 
@@ -101,6 +101,9 @@ fin hana plan
 fin giro auth plan
 fin giro request national.list
 fin giro bills due --type national --input /path/to/local-response.json --today 2026-09-29
+fin giro payment plan
+fin giro accounts list --input /path/to/payable-accounts.json
+fin giro payment result --type national --input /path/to/payment-response.json
 ```
 
 홈택스의 로그인·`auth prepare-cert`·`invoice issue`는 인증서 파일 경로를 받지 않고 공통 `--credential`/`--profile`로만 인증서를 선택합니다. 인증서 파일은 먼저 `fin cert joint import`로 가져옵니다(PFX에 인증서가 여럿이면 가져올 때 `--pfx-index`로 선택). 기관별 등록·용도·만료 조건을 충족하는 인증서를 사용해야 합니다. 지로 초기 프로브의 `--send`는 `--live`와 같은 의미이며, 로그인이나 납부 기능을 추가하지 않습니다.

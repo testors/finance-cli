@@ -13,12 +13,12 @@ class ProtocolTests(unittest.TestCase):
         self.assertFalse(auth_plan()['live_login_ready'])
         self.assertEqual(auth_plan()['steps'][0]['method'], 'POST')
 
-    def test_no_payment_or_searchkey_endpoints(self):
-        self.assertEqual(len(ENDPOINTS), 11)
+    def test_explicit_offline_catalog_no_arbitrary_urls(self):
+        self.assertEqual(len(ENDPOINTS), 17)
         for ep in ENDPOINTS.values():
-            self.assertNotIn('ProcPayment', ep.path)
+            self.assertFalse(ep.describe()['network_enabled'])
             self.assertNotIn('InsSearchKey', ep.path)
-        for name in ('national.payment', 'https://example.invalid', '/home/mGiroAppLogin.m'):
+        for name in ('accounts.register', 'https://example.invalid', '/home/mGiroAppLogin.m'):
             with self.assertRaises(GiroError):
                 endpoint(name)
 

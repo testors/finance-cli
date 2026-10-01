@@ -101,8 +101,19 @@ def encode_pin(pin, key):
     """
     if not isinstance(pin, str) or not re.fullmatch(r"[0-9]{6}", pin):
         raise GiroError("간편비밀번호는 ASCII 숫자 6자리여야 합니다.")
+    return _encode_numeric_keypad(pin, key)
+
+
+def encode_account_password(password, key):
+    """Four account-password digits, distinct from the six-digit login PIN."""
+    if not isinstance(password, str) or not re.fullmatch(r"[0-9]{4}", password):
+        raise GiroError("계좌 비밀번호는 ASCII 숫자 4자리여야 합니다.")
+    return _encode_numeric_keypad(password, key)
+
+
+def _encode_numeric_keypad(digits, key):
     result = []
-    for digit in pin:
+    for digit in digits:
         block = bytes((5, NUMERIC_KEYPAD.index(digit) + 1)) + bytes(14)
         result.append(_cbc(key, PIN_IV, block))
     return b"".join(result).hex()

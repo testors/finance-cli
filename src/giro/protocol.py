@@ -36,6 +36,20 @@ _ENDPOINTS = [
              ("작업구분", "deviceUniqNo", "pin", "CODE_RESPONSE"), codeguard_required=True),
     Endpoint("integrated.summary", "/service/integrated/mIntegratedQrySimple.m", "ENCRYPT",
              ("juminNo", "useUIDInfoYn"), session_required=True),
+    Endpoint("accounts.registered", "/mygiro/account/mQryUserAcntList.m", "ENCRYPT", (), True),
+    Endpoint("accounts.payable", "/service/common/mAppQryPayableAccountList.m", "ENCRYPT",
+             ("serviceCode", "isReserve"), True),
+    Endpoint("accounts.banks", "/service/common/mAppQryPayableBankList.m", "ENCRYPT",
+             ("serviceCode", "isReserve")),
+    Endpoint("hometax.detail", "/service/link/nts/mLinkNtsQryBillDetail.m", "ENCRYPT",
+             ("msg", "yakgwanYn")),
+    Endpoint("national.payment", "/service/ntax/ntaxsearch/mNtaxSearchProcPayment.m", "ENCRYPT",
+             ("serviceCode", "sortCode", "giroNo", "key", "when", "mnyEditYn", "bankCode",
+              "계좌번호", "acntPwd", "납부금액", "acntPaymentType", "addCertMethod",
+              "encAddCertValue", "signedval", "ucpidval"), True),
+    Endpoint("hometax.payment", "/service/link/nts/mLinkNtsProcPayment.m", "ENCRYPT",
+             ("serviceCode", "bankCode", "계좌번호", "acntPwd", "납부금액", "addCertMethod",
+              "encAddCertValue", "signedval", "ucpidval")),
 ]
 for _kind, _directory, _prefix in (
     ("national", "ntax/ntaxsearch", "NtaxSearch"),
@@ -55,7 +69,7 @@ def endpoint(name):
     try:
         return ENDPOINTS[name]
     except KeyError:
-        raise GiroError("지원하지 않는 요청입니다. 납부·변경·임의 URL 요청은 제외되어 있습니다.") from None
+        raise GiroError("지원하지 않는 요청입니다. 요청 목록에서 선택해 주세요.") from None
 
 
 def auth_plan():
@@ -138,7 +152,7 @@ def request_plan(name):
     result = ep.describe()
     result["stage"] = "schema-only; not sent"
     result["notes"] = ["필드 목록은 서버 필수값 스키마가 아닌 코드에서 확인한 요청 후보입니다."]
-    if name.endswith(".list"):
+    if name in ('national.list', 'local.list', 'customs.list'):
         result["known_defaults"] = {"page": "1", "pageSize": "10", "agreeUIDInfoSaveYn": "Y",
                                     "showUIDInfoNoticeYn": "N"}
         result["unresolved_defaults"] = []
@@ -146,6 +160,11 @@ def request_plan(name):
         result["notes"].append("본인 조회의 useUIDInfoYn=Y는 계정의 본인정보 등록 상태를 먼저 확인해야 합니다.")
     if name == "auth.datetime":
         result["notes"].append("비로그인 기준 ENVELOP; 로그인 상태에서는 ENCRYPT")
+    if name in ('accounts.payable', 'accounts.banks'):
+        result['known_defaults'] = {'isReserve': 'N'}
+        result['notes'].append('serviceCode는 선택한 납부 대상에서 가져옵니다. 계좌 목록을 자동 등록하지 않습니다.')
+    if name.endswith('.payment'):
+        result['notes'].append('요청·응답 모델만 지원합니다. 납부 전송·인증·출금은 실행하지 않습니다.')
     return result
 
 

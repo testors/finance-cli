@@ -10,7 +10,13 @@
     "local.list": "kr/or/giro/android/net/query/service/localtax/localtaxsearch/QryLocaltaxQryBillList",
     "local.detail": "kr/or/giro/android/net/query/service/localtax/localtaxsearch/QryLocaltaxQryBillDetail",
     "customs.list": "kr/or/giro/android/net/query/service/ntax/tariff/QryTariffQryBillList",
-    "customs.detail": "kr/or/giro/android/net/query/service/ntax/tariff/QryTariffQryBillDetail"
+    "customs.detail": "kr/or/giro/android/net/query/service/ntax/tariff/QryTariffQryBillDetail",
+    "accounts.registered": "kr/or/giro/android/net/query/mygiro/account/QryUserAcntList",
+    "accounts.payable": "kr/or/giro/android/net/query/service/common/QryAppQryPayableAccountList",
+    "accounts.banks": "kr/or/giro/android/net/query/service/common/QryAppQryPayableBankList",
+    "hometax.detail": "kr/or/giro/android/net/query/service/link/nts/QryLinkNtsQryBillDetail",
+    "national.payment": "kr/or/giro/android/net/query/service/ntax/ntaxsearch/QryNtaxSearchProcPayment",
+    "hometax.payment": "kr/or/giro/android/net/query/service/link/nts/QryLinkNtsProcPayment"
   },
   "models": {
     "kr/or/giro/android/net/query/etc/QryServerCert": {
@@ -415,6 +421,296 @@
         "taxName": "string",
         "when": "string"
       }
+    },
+    "kr/or/giro/android/net/query/mygiro/account/QryUserAcntList": {
+      "fields": {
+        "userAcntList": {
+          "list": "kr/or/giro/android/net/query/mygiro/account/QryUserAcntList$UserAcnt"
+        }
+      },
+      "parent": "kr/or/giro/android/net/query/QryCommon"
+    },
+    "kr/or/giro/android/net/query/mygiro/account/QryUserAcntList$UserAcnt": {
+      "fields": {
+        "acntNo": "string",
+        "acntStatus": "string",
+        "bankCode": "string",
+        "bankName": "string",
+        "gubunCode": "string",
+        "manageName": "string"
+      }
+    },
+    "kr/or/giro/android/net/query/service/common/QryAppQryPayableAccountList": {
+      "fields": {
+        "bankCode": "string",
+        "bankServiceList": {
+          "list": "kr/or/giro/android/net/query/service/common/QryAppQryPayableAccountList$BankServiceData"
+        },
+        "isHoliday": "string",
+        "isReserve": "string",
+        "myValidAccountList": {
+          "list": "kr/or/giro/android/net/query/service/common/QryAppQryPayableAccountList$MyValidAccountData"
+        },
+        "paymentConditionItem": {
+          "model": "kr/or/giro/android/net/query/service/common/QryAppQryPayableAccountList$PaymentConditionData"
+        },
+        "serviceCode": "string"
+      },
+      "parent": "kr/or/giro/android/net/query/QryCommon"
+    },
+    "kr/or/giro/android/net/query/service/common/QryAppQryPayableAccountList$BankServiceData": {
+      "fields": {
+        "bankCode": "string",
+        "bankName": "string",
+        "bankStatus": "string",
+        "disableCode": "string",
+        "isAvailTime": "string",
+        "payAvailTimeMsg": "string",
+        "serviceCode": "string"
+      }
+    },
+    "kr/or/giro/android/net/query/service/common/QryAppQryPayableAccountList$MyValidAccountData": {
+      "fields": {
+        "accountNo": "string",
+        "bankCode": "string",
+        "bankGubunCode": "string",
+        "bankName": "string",
+        "bankStatus": "string",
+        "manageName": "string"
+      }
+    },
+    "kr/or/giro/android/net/query/service/common/QryAppQryPayableAccountList$PaymentConditionData": {
+      "fields": {
+        "hasAvailBank": "string",
+        "hasAvailTime": "string",
+        "isAvailDay": "string",
+        "isOtherPayAvailBank": "string"
+      }
+    },
+    "kr/or/giro/android/net/query/service/common/QryAppQryPayableBankList": {
+      "fields": {
+        "bankCode": "string",
+        "bankServiceList": {
+          "list": "kr/or/giro/android/net/query/service/common/QryAppQryPayableBankList$BankServiceData"
+        },
+        "isHoliday": "string",
+        "isReserve": "string",
+        "paymentConditionItem": {
+          "model": "kr/or/giro/android/net/query/service/common/QryAppQryPayableBankList$PaymentConditionData"
+        },
+        "serviceCode": "string"
+      },
+      "parent": "kr/or/giro/android/net/query/QryCommon"
+    },
+    "kr/or/giro/android/net/query/service/common/QryAppQryPayableBankList$BankServiceData": {
+      "fields": {
+        "bankCode": "string",
+        "bankName": "string",
+        "bankStatus": "string",
+        "disableCode": "string",
+        "isAvailTime": "string",
+        "payAvailTimeMsg": "string",
+        "serviceCode": "string"
+      }
+    },
+    "kr/or/giro/android/net/query/service/common/QryAppQryPayableBankList$PaymentConditionData": {
+      "fields": {
+        "hasAvailBank": "string",
+        "hasAvailTime": "string",
+        "isAvailDay": "string",
+        "isOtherPayAvailBank": "string"
+      }
+    },
+    "kr/or/giro/android/net/query/service/link/nts/QryLinkNtsQryBillDetail": {
+      "fields": {
+        "isCardPayableTime": "string",
+        "isCardPayableTimeMsg": "string",
+        "isPayableDayTime": "string",
+        "isPayableDayTimeMsg": "string",
+        "msg": "string",
+        "payCode": "string",
+        "paymentData": {
+          "model": "kr/or/giro/android/net/query/service/link/nts/QryLinkNtsQryBillDetail$PaymentData"
+        },
+        "serviceCode": "string",
+        "userFeeRate": "string",
+        "userFeeRateCheck": "string",
+        "yakgwanYn": "string"
+      },
+      "parent": "kr/or/giro/android/net/query/QryCommon"
+    },
+    "kr/or/giro/android/net/query/service/link/nts/QryLinkNtsQryBillDetail$PaymentData": {
+      "fields": {
+        "bonTax": "string",
+        "calYear": "string",
+        "cardYn": "string",
+        "eduTax": "string",
+        "encPayerJuminNo": "string",
+        "encPayerSaupNo": "string",
+        "feeGroup": "string",
+        "giroNo": "string",
+        "isSaupCardSelectable": "string",
+        "key": "string",
+        "napbuNo": "string",
+        "napseGubun": "string",
+        "napseName": "string",
+        "napseNo": "string",
+        "nongTax": "string",
+        "orgName": "string",
+        "pay1date": "string",
+        "pay2date": "string",
+        "payInMny": "string",
+        "payMny": "string",
+        "payOutMny": "string",
+        "payerId": "string",
+        "payerJuminNo": "string",
+        "payerName": "string",
+        "sortCode": "string",
+        "taxCode": "string",
+        "taxName": "string",
+        "verifyCertYn": "string",
+        "when": "string"
+      }
+    },
+    "kr/or/giro/android/net/query/service/ntax/ntaxsearch/QryNtaxSearchProcPayment": {
+      "fields": {
+        "acntJuminNo": "string",
+        "acntPaymentType": "string",
+        "acntPwd": "string",
+        "addCertMethod": "string",
+        "addUserAcntYn": "string",
+        "bankCode": "string",
+        "cardCompanyCode": "string",
+        "cardKind": "string",
+        "cardNo": "string",
+        "cardNo1": "string",
+        "cardNo2": "string",
+        "cardNo3": "string",
+        "cardNo4": "string",
+        "cardPaymentType": "string",
+        "cardTrack2Yn": "string",
+        "cardValidMonth": "string",
+        "cardValidYear": "string",
+        "cardVirYn": "string",
+        "cavv": "string",
+        "checkCardYn": "string",
+        "encAddCertValue": "string",
+        "expireYm": "string",
+        "feeGroup": "string",
+        "giroNo": "string",
+        "key": "string",
+        "manageName": "string",
+        "merchantPayId": "string",
+        "mnyEditYn": "string",
+        "otc": "string",
+        "partnerOrderId": "string",
+        "payResultSuccessAddMessage": "string",
+        "payResultSuccessMessage": "string",
+        "payerTelChk": "string",
+        "payerTelNo": "string",
+        "receiptItem": {
+          "list": "kr/or/giro/android/model/ReceiptItem"
+        },
+        "sellerOrderReferenceKey": "string",
+        "serviceCode": "string",
+        "simplePayType": "string",
+        "sortCode": "string",
+        "tid": "string",
+        "trackii": "string",
+        "trid": "string",
+        "usePoint": "string",
+        "useTrackiiFlag": "string",
+        "when": "string",
+        "xid": "string",
+        "거래구분": "string",
+        "거래번호": "string",
+        "거래일시": "string",
+        "계좌번호": "string",
+        "납부금액": "string",
+        "납부대행수수료": "string",
+        "납부세액": "string",
+        "납부은행": "string",
+        "납부자명": "string",
+        "납부카드": "string",
+        "요금종류": "string",
+        "청구기관명": "string",
+        "카드번호": "string",
+        "할부기간": "string",
+        "합계납부금액": "string"
+      },
+      "parent": "kr/or/giro/android/net/query/QryCommon"
+    },
+    "kr/or/giro/android/model/ReceiptItem": {
+      "fields": {
+        "n": "string",
+        "v": "string"
+      }
+    },
+    "kr/or/giro/android/net/query/service/link/nts/QryLinkNtsProcPayment": {
+      "fields": {
+        "acntPwd": "string",
+        "addCertMethod": "string",
+        "bankCode": "string",
+        "cardCompanyCode": "string",
+        "cardKind": "string",
+        "cardNo": "string",
+        "cardNo1": "string",
+        "cardNo2": "string",
+        "cardNo3": "string",
+        "cardNo4": "string",
+        "cardPaymentType": "string",
+        "cardTrack2Yn": "string",
+        "cardValidMonth": "string",
+        "cardValidYear": "string",
+        "cardVirYn": "string",
+        "cavv": "string",
+        "checkCardYn": "string",
+        "encAddCertValue": "string",
+        "encPayerJuminNo": "string",
+        "encPayerSaupNo": "string",
+        "expireYm": "string",
+        "feeGroup": "string",
+        "giroNo": "string",
+        "key": "string",
+        "merchantPayId": "string",
+        "napseGubun": "string",
+        "otc": "string",
+        "partnerOrderId": "string",
+        "payResultSuccessAddMessage": "string",
+        "payResultSuccessMessage": "string",
+        "payerId": "string",
+        "payerTelNo": "string",
+        "receiptItem": {
+          "list": "kr/or/giro/android/model/ReceiptItem"
+        },
+        "sellerOrderReferenceKey": "string",
+        "serviceCode": "string",
+        "simplePayType": "string",
+        "sortCode": "string",
+        "tid": "string",
+        "trackii": "string",
+        "trid": "string",
+        "usePoint": "string",
+        "useTrackiiFlag": "string",
+        "verifyCertYn": "string",
+        "when": "string",
+        "xid": "string",
+        "거래구분": "string",
+        "거래일시": "string",
+        "계좌번호": "string",
+        "납부금액": "string",
+        "납부대행수수료": "string",
+        "납부세액": "string",
+        "납부은행": "string",
+        "납부자명": "string",
+        "납부카드": "string",
+        "요금종류": "string",
+        "청구기관명": "string",
+        "카드번호": "string",
+        "할부기간": "string",
+        "합계납부금액": "string"
+      },
+      "parent": "kr/or/giro/android/net/query/QryCommon"
     }
   },
   "protocol_version": "4.9.5_209"

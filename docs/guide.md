@@ -516,6 +516,22 @@ fin hometax invoice issue --prepared /path/to/new-prepared.json --profile tax --
 | 종료코드 `3` | 서비스 판정을 관찰하지 못함. 결과 파일의 `warnings`, `reason` 확인 |
 | Node 관련 오류 | `fin runtime status hometax` 후 필요하면 `fin runtime install hometax` |
 
+## 모바일지로
+
+실제 로그인·계좌 조회·납부 전송은 아직 지원하지 않습니다. 아래 명령은 로컬 JSON 자료를 읽으며 서비스에 접속하지 않습니다.
+
+```sh
+fin giro payment plan
+fin giro accounts list --input /path/to/payable-accounts.json
+fin giro payment result --type national --input /path/to/payment-response.json
+```
+
+`accounts list`는 납부 가능 계좌 응답의 등록계좌를 순서대로 보여 줍니다. 계좌번호는 가리고 금융기관의 납부 가능 상태를 별도로 표시합니다. 조회가 성공해도 계좌 목록을 받지 못했다면 0건으로 표시하지 않습니다. 계좌별 인증서·프로필 설정은 필요하지 않습니다.
+
+`payment plan`은 등록계좌 납부와 홈택스 연계 납부의 지원 범위를 보여 줍니다. 로그인용 간편비밀번호 6자리와 납부용 계좌 비밀번호 4자리는 서로 다른 입력입니다. 이 명령들은 비밀번호를 받거나 납부를 실행하지 않습니다.
+
+`payment result`는 복호화된 납부 응답을 해석합니다. 홈택스 연계 응답은 `--type hometax`를 사용합니다. 성공 응답에 영수증 항목이 없어도 확인된 성공은 유지합니다. 파일 해석 결과가 현재 납부 상태를 다시 조회한 결과는 아닙니다.
+
 ## 웹앱
 
 CLI와 같은 데이터 디렉터리·인증서 금고를 쓰는 웹 서버입니다. 브라우저에는 CLI나 Python이 들어가지 않고, 기관 업무는 서버의 작업 프로세스가 실행합니다. 웹 서버와 같은 데이터 디렉터리를 쓰는 CLI·에이전트는 같은 버전으로 갱신하세요. 새 잠금에는 구버전 CLI가 참여하지 않습니다.

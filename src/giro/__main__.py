@@ -26,7 +26,7 @@ def parser():
     sub = root.add_subparsers(dest="command", required=True)
     runtime = sub.add_parser("runtime", help="서버 배포용 로컬 점검; 기기 보안 검사/통신 아님")
     runtime.add_subparsers(dest="action", required=True).add_parser("check", help="패키지 리소스·합성 암호·문자셋·시간대 점검")
-    api = sub.add_parser("api", help="인증/조회만 포함한 API 목록")
+    api = sub.add_parser("api", help="인증·조회·납부 요청 모델 목록; 통신 없음")
     api.add_subparsers(dest="action", required=True).add_parser("list")
     auth = sub.add_parser("auth", help="인증 순서 또는 로컬 PIN 코덱")
     auth_sub = auth.add_subparsers(dest="action", required=True)
@@ -78,6 +78,16 @@ def parser():
     pin.add_argument("--key-file", required=True, help="사용자가 제공한 16바이트 키의 32자리 hex 파일")
     request = sub.add_parser("request", help="오프라인 요청 스키마")
     request.add_argument("endpoint", choices=tuple(ENDPOINTS))
+    accounts = sub.add_parser('accounts', help='로컬 납부 가능 계좌 응답 해석; 조회 통신 없음')
+    accounts_sub = accounts.add_subparsers(dest='action', required=True)
+    account_list = accounts_sub.add_parser('list')
+    account_list.add_argument('--input', required=True, help='납부 가능 계좌 응답 JSON 파일 또는 -')
+    payment = sub.add_parser('payment', help='납부 준비 정보·로컬 결과 해석; 실제 납부 없음')
+    payment_sub = payment.add_subparsers(dest='action', required=True)
+    payment_sub.add_parser('plan', help='등록계좌·홈택스 연계 납부의 지원 범위')
+    payment_result = payment_sub.add_parser('result', help='복호화된 납부 응답의 판정; 추가 조회 없음')
+    payment_result.add_argument('--type', choices=('national', 'hometax'), required=True)
+    payment_result.add_argument('--input', required=True, help='납부 응답 JSON 파일 또는 -')
     bills = sub.add_parser("bills", help="복호화된 로컬 JSON에서 고지/기한 읽기")
     bill_sub = bills.add_subparsers(dest="action", required=True)
     for action in ("list", "due", "show"):
@@ -100,6 +110,24 @@ def run(args):
         return {"offline": True, "endpoints": [ep.describe() for ep in ENDPOINTS.values()]}, 0
     if args.command == "request":
         return request_plan(args.endpoint), 0
+    if args.command == 'accounts':
+        from .payment import account_options
+        result = account_options(_load(args.input))
+        return result, 0 if result['app_success'] else 2
+    if args.command == 'payment':
+        from .payment import payment_plan, payment_result
+        if args.action == 'plan':
+            return payment_plan(), 0
+        from .response import receive
+        # Keep duplicate JSON members intact for Gson-compatible decoding.
+        try:
+            body = sys.stdin.read() if args.input == '-' else Path(args.input).read_text(encoding='utf-8')
+        except (OSError, UnicodeError):
+            raise GiroError('UTF-8 JSON 입력을 읽을 수 없습니다.') from None
+        received = receive(args.type + '.payment', 200, (), body)
+        result = payment_result(received)
+        result.update(offline=True, network_used=False, source='local-decoded-response')
+        return result, 0 if received.app_success else 2
     if args.command == "auth":
         if args.action == "plan":
             return auth_plan(), 0
