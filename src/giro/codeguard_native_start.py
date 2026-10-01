@@ -9,7 +9,7 @@ from .codeguard_first import first_response_native_bytes
 from .codeguard_native_io import (native_process_check_steps, native_pid_bytes_stat_steps,
                                   package_digest_file_steps)
 from .codeguard_native_jni import (_jni, package_path_lookup_steps,
-                                   delete_path_references_steps, utf_chars_bytes)
+                                   delete_path_references_steps, utf_chars_bytes, native_return_text)
 from .codeguard_rule import AnalysisLimit, NativeRuleError
 
 
@@ -33,9 +33,11 @@ def _error_bytes(code, process_name, pid_bytes):
 
 
 def native_start_steps(service, challenge, rule, app_info, version, pid):
-    """Return the observed Java String/None from final NewStringUTF.
+    """Return resolved Java String/None from the final string operation.
 
-    JNI effects use opaque references except this final returned String value.
+    JNI effects use opaque environment references or explicit owned string
+    values. The final returned value is plain text; owned string conversion
+    does not supply missing context, package, process or file observations.
     Unknown native/JNI state must raise AnalysisLimit; it must not be supplied
     as a clean value or translated to JavaFault. Python owns arithmetic buffers;
     native malloc failure, memory corruption and stack-canary failure are not
@@ -87,9 +89,7 @@ def native_start_steps(service, challenge, rule, app_info, version, pid):
     if utf[4] is not None:
         yield _jni('ReleaseStringUTFChars', pid, acquisitions[4].handle)
     returned = yield _jni('NewStringUTF', result)
-    if returned is not None and type(returned) is not str:
-        raise AnalysisLimit('observed final Java String value required')
-    return returned
+    return native_return_text(returned)
 
 
 def project_native_start_steps(generator, *, service):

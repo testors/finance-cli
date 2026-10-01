@@ -9,7 +9,7 @@ import hashlib
 
 from .codeguard_effects import Effect, observed_bool
 from .codeguard_native_io import FailedCmdlineRead, native_process_name
-from .codeguard_native_jni import _jni, utf_chars_bytes
+from .codeguard_native_jni import _jni, utf_chars_bytes, native_return_text
 from .codeguard_nonce import cg_auth_code
 from .codeguard_rule import AnalysisLimit
 
@@ -208,11 +208,12 @@ def nonce_signer_steps(lookup, challenge_utf, *, is_mix):
 
 
 def native_nonce_steps(service, key, challenge, is_mix, is_split):
-    """Normal allocation path, returning final observed Java String/None.
+    """Normal allocation path, returning resolved Java String/None.
 
     No process status/path match check or JNI cleanup absent from this entry
     point is added. This does not assert that unresolved JNI calls can work
-    with null references or pending exceptions; the driver must observe each.
+    with null references or pending exceptions. Pure owned string conversion
+    may be projected separately; remaining platform results stay explicit.
     """
     observed_bool(is_mix)
     observed_bool(is_split)
@@ -237,9 +238,7 @@ def native_nonce_steps(service, key, challenge, is_mix, is_split):
     if code:
         result = b'E101_ENGINE_LOAD_ERROR0_' + str(code).encode('ascii') + b'_:lib2'
     returned = yield _jni('NewStringUTF', result)
-    if returned is not None and type(returned) is not str:
-        raise AnalysisLimit('observed final Java String value required')
-    return returned
+    return native_return_text(returned)
 
 
 def project_native_nonce_steps(generator, *, service):
