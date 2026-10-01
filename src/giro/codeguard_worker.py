@@ -143,18 +143,22 @@ class AgentCallState:
         return value
 
 
-def agent_call_steps(state, *, context, server_url, timeout):
+def agent_call_steps(state, *, context, server_url, timeout, shared_reads=False):
     yield Effect('set_agent_context', (context,))
     state.status_log = java_text(state.status_log) + ',60'
     additional = state.additional_data()
-    yield Effect('main_service_instance', (context,))
-    yield Effect('main_set_updater', (context,))
+    current = (yield Effect('agent_context')) if shared_reads else context
+    yield Effect('main_service_instance', (current,))
+    current = (yield Effect('agent_context')) if shared_reads else context
+    yield Effect('main_set_updater', (current,))
     yield Effect('main_set_server', (server_url,))
     pid = yield Effect('process_pid')
     yield Effect('main_set_app_info', (pid, state.app_info, state.version))
     yield Effect('main_set_encrypted_token', (observed_bool(state.encrypted_token),))
     if additional:
         yield Effect('main_set_etc_data', (additional,))  # otherwise old MainService p persists
+    if shared_reads:
+        timeout = yield Effect('task_max_timeout')  # static read immediately before generateToken
     value = yield Effect('main_generate_token', (server_url, timeout, observed_bool(state.root_check),
                                                 observed_bool(state.rooting_flag)))
     value = state.annotate_error(value)
