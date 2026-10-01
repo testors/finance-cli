@@ -4,11 +4,12 @@ import unittest
 from unittest.mock import patch
 
 from giro.codeguard_codec import RULE_IV, RULE_KEY, java_seed_encrypt
-from giro.codeguard_first import first_response_arithmetic, first_response_read_steps
+from giro.codeguard_first import first_response_arithmetic, first_response_file_steps, first_response_read_steps
 from giro.codeguard_native_io import (PACKAGE_CHUNK_SIZE, native_paths_match,
     native_pid_stat_steps, native_process_check_steps, native_process_name,
-    package_digest_read_steps)
-from giro.codeguard_rule import AnalysisLimit
+    package_digest_read_steps, package_digest_file_steps, native_cmdline_steps,
+    native_digest_probe_path, FailedCmdlineRead)
+from giro.codeguard_rule import AnalysisLimit, NativeRuleError
 
 
 def finish(generator, observations):
@@ -169,6 +170,128 @@ class NativeProcessTests(unittest.TestCase):
              patch('ctypes.CDLL', side_effect=AssertionError('no SDK')):
             self.assertEqual(self.check(['one', b'TracerPid:0\n', None,
                                         'two', b'TracerPid:0\n', None])[0], 0)
+
+
+class NativeFileSequenceTests(unittest.TestCase):
+    def file(self, observations, process=b'pkg'):
+        return finish(package_digest_file_steps(b'/installed/pkg/base\0ignored', process), observations)
+
+    def test_file_order_and_secondary_open_do_not_change_hash(self):
+        for probe in (None, 'secondary'):
+            result, effects = self.file(['package', 0, 3, None, b'abc', probe, -1]
+                                       + ([] if probe is None else [-1]))
+            self.assertEqual(result, hashlib.sha256(b'abc').digest())
+            self.assertEqual(effects, [
+                ('native_fopen', (b'/installed/pkg/base', b'rb')),
+                ('native_fseek', ('package', 0, 2)),
+                ('native_ftell', ('package',)), ('native_rewind', ('package',)),
+                ('native_fread', ('package', 1, 3)),
+                ('native_fopen', (b'/data/data/pkg/files/libCodeGuard.so', b'rb')),
+                ('native_fclose', ('package',))]
+                + ([] if probe is None else [('native_fclose', ('secondary',))]))
+
+    def test_seek_and_close_status_do_not_override_a_digest(self):
+        result, _ = self.file(['package', -1, 3, None, b'a', None, -1])
+        self.assertEqual(result, hashlib.sha256(b'a\0\0').digest())
+
+    def test_low_32_bits_of_ftell_drive_read_lengths(self):
+        for size in (3, 2**32 + 3):
+            result, effects = self.file(['package', 0, size, None, b'abc', None, None])
+            self.assertEqual(result, hashlib.sha256(b'abc').digest())
+            self.assertEqual(effects[4], ('native_fread', ('package', 1, 3)))
+
+    def test_unknown_or_negative_size_remains_unresolved_after_rewind(self):
+        for position in (-1, None, True, 2**63):
+            generator = package_digest_file_steps(b'/package', b'pkg')
+            self.assertEqual(next(generator).kind, 'native_fopen')
+            self.assertEqual(generator.send('stream').kind, 'native_fseek')
+            self.assertEqual(generator.send(0).kind, 'native_ftell')
+            self.assertEqual(generator.send(position).kind, 'native_rewind')
+            with self.assertRaises(AnalysisLimit): generator.send(None)
+
+    def test_actual_open_failure_does_not_become_safe_code11_return(self):
+        generator = package_digest_file_steps(b'/package', b'pkg')
+        next(generator)
+        with self.assertRaises(AnalysisLimit): generator.send(None)
+
+    def test_unknown_probe_does_not_become_null_or_trigger_cleanup_retry(self):
+        generator = package_digest_file_steps(b'/package', b'pkg')
+        values = [None, 'stream', 0, 0, None, b'']
+        for value in values: effect = generator.send(value)
+        self.assertEqual(effect.args[0], b'/data/data/pkg/files/libCodeGuard.so')
+        with self.assertRaises(AnalysisLimit): generator.throw(AnalysisLimit('no observation'))
+        with self.assertRaises(StopIteration): next(generator)
+
+    def test_probe_path_is_c_string_concatenation_not_data_dir_resolution(self):
+        self.assertEqual(native_digest_probe_path(b'pkg:worker\0ignored'),
+                         b'/data/data/pkg:worker/files/libCodeGuard.so')
+        self.assertIn(b'../pkg', native_digest_probe_path(b'../pkg'))
+        self.assertEqual(len(native_digest_probe_path(b'x'*222)), 255)
+        with self.assertRaises(AnalysisLimit): native_digest_probe_path(b'x'*223)
+        with self.assertRaises(AnalysisLimit): native_digest_probe_path(None)
+
+    def test_io_completes_before_even_invalid_challenge_is_examined(self):
+        generator = first_response_file_steps(b'/package', b'pkg', None, None, None, None)
+        kinds, value = [], None
+        replies = iter(['stream', 0, 0, None, b'', None, -1])
+        with self.assertRaises(NativeRuleError) as caught:
+            while True:
+                effect = generator.send(value)
+                kinds.append(effect.kind)
+                value = next(replies)
+        self.assertEqual(caught.exception.native_code, 20)
+        self.assertEqual(kinds[-2:], ['native_fopen', 'native_fclose'])
+
+    def test_file_stage_composes_into_arithmetic_after_close(self):
+        rule = base64.b64encode(java_seed_encrypt(b'HEADER00'+b'\x02'*40, RULE_KEY, RULE_IV)).decode()
+        result, _ = finish(first_response_file_steps(b'/package', b'pkg', 'TQ==', rule, 'a', 'v'),
+                          ['stream', 0, 4, None, b'ab', None, None])
+        self.assertEqual(result, first_response_arithmetic(b'ab\0\0', 'TQ==', rule, 'a', 'v'))
+
+    def test_cmdline_failures_differ_between_outer_and_inner(self):
+        for outer, open_code, read_code in ((True, 124, 126), (False, 15, 16)):
+            result, effects = finish(native_cmdline_steps(123, outer=outer), [None])
+            self.assertEqual(result, (open_code, b''))
+            self.assertEqual(effects, [('native_fopen', (b'/proc/123/cmdline', b'r'))])
+            result, effects = finish(native_cmdline_steps(123, outer=outer), ['s', FailedCmdlineRead(b'\0'), -1])
+            self.assertEqual(result, (read_code, b''))
+            self.assertEqual(effects[-1], ('native_fclose', ('s',)))
+
+    def test_failed_outer_fgets_does_not_assume_its_buffer_is_unchanged(self):
+        for read in (None, FailedCmdlineRead(None), FailedCmdlineRead(b''),
+                     FailedCmdlineRead(b'x'*256), FailedCmdlineRead(b'\0'*257)):
+            with self.assertRaises(AnalysisLimit):
+                finish(native_cmdline_steps(123, outer=True), ['s', read, 0])
+        self.assertEqual(finish(native_cmdline_steps(123, outer=False), ['s', None, 0])[0], (16, b''))
+
+    def test_failed_outer_fgets_uses_explicit_buffer_without_replacing_it(self):
+        read = FailedCmdlineRead(b'partial:engine\0')
+        self.assertEqual(finish(native_cmdline_steps(123, outer=True), ['s', read, 0])[0], (126, b'partial'))
+        self.assertNotIn('partial', repr(read))
+
+    def test_cmdline_success_retains_source_transform_and_single_read(self):
+        for outer in (True, False):
+            result, effects = finish(native_cmdline_steps(-2, outer=outer), ['s', b'pkg:engine\0arg', 0])
+            self.assertEqual(result, (0, b'pkg'))
+            self.assertEqual(effects[0][1][0], b'/proc/-2/cmdline')
+            self.assertEqual(len(effects), 3)
+
+    def test_cmdline_unknown_or_malformed_is_not_an_empty_name(self):
+        for pid in (None, True, '123', 2**31):
+            with self.assertRaises(AnalysisLimit): next(native_cmdline_steps(pid, outer=True))
+        for data in (b'', b'x'*256, 'pkg'):
+            with self.assertRaises(AnalysisLimit): finish(native_cmdline_steps(123, outer=True), ['s', data, None])
+        generator = native_cmdline_steps(123, outer=True)
+        next(generator)
+        with self.assertRaises(AnalysisLimit): generator.throw(AnalysisLimit('unavailable'))
+
+    def test_no_actual_files_host_identity_or_sdk_are_used(self):
+        with patch('builtins.open', side_effect=AssertionError('no files')), \
+             patch('socket.socket', side_effect=AssertionError('no network')), \
+             patch('os.getpid', side_effect=AssertionError('no host identity')), \
+             patch('ctypes.CDLL', side_effect=AssertionError('no SDK')):
+            self.file(['stream', 0, 0, None, b'', None, None])
+            finish(native_cmdline_steps(123, outer=True), [None])
 
 
 if __name__ == '__main__':

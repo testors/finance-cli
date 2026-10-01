@@ -10,7 +10,7 @@ from .codeguard_codec import (decode_rule, evaluate_rule, java_utf8,
                               jni_modified_utf8, native_base64_decode,
                               NativeBase64Error)
 from .codeguard_inputs import package_digest
-from .codeguard_native_io import package_digest_read_steps
+from .codeguard_native_io import package_digest_file_steps, package_digest_read_steps
 from .codeguard_rule import AnalysisLimit, NativeRuleError, parse_rule, parsing_positions
 
 
@@ -33,6 +33,16 @@ def first_response_read_steps(file_size, encoded_challenge, encoded_rule, app_in
     Only the digest/arithmetic stage is expanded; this is NOT native_start.
     """
     digest = yield from package_digest_read_steps(file_size)
+    return _first_response(digest, encoded_challenge, encoded_rule, app_info, version)
+
+
+def first_response_file_steps(source_dir, process_name, encoded_challenge, encoded_rule, app_info, version):
+    """Expand inner digest file IO; preceding JNI and final JNI return remain.
+
+    The secondary fopen and closes happen before challenge/rule evaluation,
+    even if that evaluation will fail. This is not native_start execution.
+    """
+    digest = yield from package_digest_file_steps(source_dir, process_name)
     return _first_response(digest, encoded_challenge, encoded_rule, app_info, version)
 
 

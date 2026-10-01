@@ -6,6 +6,7 @@ observation adapter; unavailable observations must not become fopen failures.
 """
 import hashlib
 import re
+from dataclasses import dataclass
 
 from .codeguard_codec import jni_modified_utf8
 from .codeguard_effects import Effect
@@ -13,6 +14,92 @@ from .codeguard_rule import AnalysisLimit
 
 
 PACKAGE_CHUNK_SIZE = 0x80000
+
+
+@dataclass(frozen=True, repr=False)
+class FailedCmdlineRead:
+    """NULL fgets return plus observed buffer bytes through a terminating NUL.
+
+    EOF before any byte leaves the zeroed buffer unchanged. A generic read
+    error alone does not establish that buffer; None is not a zero default.
+    """
+    buffer: bytes
+
+
+def native_cmdline_steps(pid, *, outer):
+    """One observed cmdline read: (helper/stage code, transformed bytes).
+
+    start ignores its helper's 124/126 return and continues with the buffer.
+    Open failure leaves zeros; NULL fgets needs explicit buffer observations.
+    The inner digest instead branches on 15/16 without consuming the buffer.
+    An unavailable observation must be raised, never sent as None (actual
+    fopen/fgets failure). No PID is obtained from the execution host.
+    """
+    if type(pid) is not int or not -2**31 <= pid < 2**31 or type(outer) is not bool:
+        raise AnalysisLimit('observed Android process integer and stage required')
+    stream = yield Effect('native_fopen', (b'/proc/' + str(pid).encode('ascii') + b'/cmdline', b'r'))
+    if stream is None:
+        return (124 if outer else 15), b''
+    line = yield Effect('native_fgets', (stream, 256))
+    yield Effect('native_fclose', (stream,))
+    if line is None or isinstance(line, FailedCmdlineRead):
+        if not outer:
+            return 16, b''
+        if (not isinstance(line, FailedCmdlineRead) or type(line.buffer) is not bytes
+                or not 1 <= len(line.buffer) <= 256 or b'\0' not in line.buffer):
+            raise AnalysisLimit('NULL cmdline fgets requires observed terminated buffer')
+        return 126, line.buffer.split(b'\0', 1)[0].split(b':engine', 1)[0]
+    return 0, native_process_name(line, nonce=False)
+
+
+def native_digest_probe_path(process_name):
+    """The path assembled after the package fread loop; no file is opened.
+
+    The final s of the directory name is taken from another string literal.
+    This is independent of ApplicationInfo.dataDir, and is not normalized.
+    """
+    if type(process_name) is not bytes:
+        raise AnalysisLimit('resolved native process bytes required')
+    path = (b'/data/data/' + process_name.split(b'\0', 1)[0]
+            + b'/files/libCodeGuard.so')
+    if len(path) >= 256:
+        raise AnalysisLimit('native digest probe path buffer overflow')
+    return path
+
+
+def package_digest_file_steps(source_dir, process_name):
+    """Normal digest IO after inner JNI/path checks and DeleteLocalRef calls.
+
+    Return bytes before rule evaluation/ReleaseStringUTFChars/NewStringUTF.
+    Allocation/stack/JNI failures remain outside this stage. Probe contents
+    and fopen success do not enter the hash or select a native error code.
+    """
+    if type(source_dir) is not bytes:
+        raise AnalysisLimit('resolved sourceDir UTF bytes required')
+    stream = yield Effect('native_fopen', (source_dir.split(b'\0', 1)[0], b'rb'))
+    if stream is None:
+        # w21 is set to 11, but fseek(NULL) follows before a safe return.
+        raise AnalysisLimit('native digest seeks null stream after code 11 assignment')
+    yield Effect('native_fseek', (stream, 0, 2))  # return value ignored
+    position = yield Effect('native_ftell', (stream,))
+    yield Effect('native_rewind', (stream,))
+    if type(position) is not int or not -2**63 <= position < 2**63:
+        raise AnalysisLimit('observed native long file position required')
+    # The loop consumes the low signed 32 bits of the LP64 ftell result.
+    size = (position + 2**31) % 2**32 - 2**31
+    reads, data = package_digest_read_steps(size), None
+    while True:
+        try:
+            request = reads.send(data)
+        except StopIteration as done:
+            digest = done.value
+            break
+        data = yield Effect('native_fread', (stream, 1, request.args[0]))
+    probe = yield Effect('native_fopen', (native_digest_probe_path(process_name), b'rb'))
+    yield Effect('native_fclose', (stream,))
+    if probe is not None:
+        yield Effect('native_fclose', (probe,))
+    return digest
 
 
 def package_digest_read_steps(file_size):
