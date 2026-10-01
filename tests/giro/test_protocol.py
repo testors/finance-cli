@@ -72,6 +72,7 @@ class ProtocolTests(unittest.TestCase):
         self.assertIn('agent_initial_update_and_worker_main_composition', cg['implemented_components'])
         self.assertIn('owned_jni_string_values_and_canonical_modified_utf8', cg['implemented_components'])
         self.assertIn('known_single_der_signer_value_backend', cg['implemented_components'])
+        self.assertIn('known_signed_data_fingerprint_value_backend', cg['implemented_components'])
         self.assertIn('task_manager_construction_and_queue_callback_composition', cg['remaining_components'])
         self.assertIn('actual_updater_preference_and_platform_io', cg['remaining_components'])
         self.assertIn('actual_device_manager_and_async_observations', cg['remaining_components'])

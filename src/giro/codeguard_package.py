@@ -443,7 +443,7 @@ def check_fingerprint_steps(context):
     return True
 
 
-def project_package_steps(generator):
+def _project_package_steps(generator):
     """Expand package checks without starting IO, JNI or a worker thread."""
     value, pending = None, None
     while True:
@@ -467,3 +467,16 @@ def project_package_steps(generator):
                 value = yield effect
         except Exception as fault:
             pending = fault
+
+
+def project_package_steps(generator, *, certificate_values=False):
+    """Expand package checks, optionally calculating known certificate bytes.
+
+    The value backend requires explicit KnownCertificateStream inputs from
+    the caller. Installed archive/file observations remain external.
+    """
+    body = _project_package_steps(generator)
+    if certificate_values:
+        from .codeguard_fingerprint_values import project_fingerprint_values_steps
+        return (yield from project_fingerprint_values_steps(body))
+    return (yield from body)
