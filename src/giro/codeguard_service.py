@@ -64,9 +64,11 @@ def _response_route(main, runtime, agent, generator):
 
 def generate_token_steps(main, runtime, agent, *, server_url, timeout,
                          root_check, rooting_info, encrypted_token, decode_certificate=None):
-    """Known post-constructor state: MainService and Updater share context.
+    """Explicitly prepared MainService and retained Updater state.
 
-    Missing constructor/JNI load state is not created or assumed clean here.
+    MainService's later static context may differ from Updater's context.
+    Construction/load observations can be composed by codeguard_main; this
+    function itself does not create them or assume successful library loads.
     getNonce effect must include its actual checks, not arithmetic alone.
     """
     runtime.url, runtime.timeout = server_url, timeout

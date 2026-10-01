@@ -18,7 +18,7 @@ from .codeguard_rule import AnalysisLimit
 
 @dataclass(repr=False)
 class ResponseState:
-    challenge: ChallengeState
+    challenge: ChallengeState | None  # null before the first setAppInfo
     app_info: str | None
     version: str | None
     pid: str | None
