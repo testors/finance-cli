@@ -41,6 +41,15 @@ class ProtectionRuntime(ABC):
     def initialize(self):
         raise NotImplementedError
 
+    def initialize_for_login(self):
+        """Complete the app's update notification before its registration query.
+
+        Synchronous providers complete that notification in initialize().
+        Asynchronous providers must override this without joining unrelated
+        ZIP work or interpreting the notification as protection success.
+        """
+        return self.initialize()
+
     @abstractmethod
     def token(self):
         raise NotImplementedError
@@ -180,7 +189,7 @@ class PinLogin:
                 attempt.stage = 'recipient.validate'
                 recipient_der = self.recipient.validate(attempt.response.query.get('serverCert'))
                 attempt.stage = 'protection.initialize'
-                self.protection.initialize()
+                self.protection.initialize_for_login()
                 for name, fields in (
                     ('auth.device-status', {'deviceUniqNo': self.device_id}),
                     ('auth.datetime', {}),

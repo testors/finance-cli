@@ -115,6 +115,17 @@ class PythonProtectionRuntime(ProtectionRuntime):
             self._ensure_open()
             return self._ui.submit(self.run, self.manager.init_steps()).result()
 
+    def initialize_for_login(self, *, timeout=None):
+        """IntroActivity queries registration from onCgUpdateListener only.
+
+        Keep initialize() asynchronous. This app-level entry waits for the
+        actual update notification, not ZIP completion or a success boolean.
+        """
+        callback = Future()
+        self.manager.update_listener = callback
+        self.initialize()
+        return callback.result(timeout)
+
     def wait_for_initialization(self, timeout=None):
         """Optional caller synchronization; never invoked by initialize/token."""
         deadline = None if timeout is None else monotonic() + timeout
@@ -142,6 +153,21 @@ class PythonProtectionRuntime(ProtectionRuntime):
                 callback.set_exception(error)
             raise
 
+    @staticmethod
+    def _initialization_error(callback, error):
+        if not callback.done():
+            callback.set_exception(error)
+
+    def _initialize_work(self, work, callback):
+        try:
+            return self.run(work.steps())
+        except BaseException as error:
+            if isinstance(callback, Future):
+                # Preserve an update message already queued before a later
+                # observation error. UI delivery order decides completion.
+                self._ui.submit(self._initialization_error, callback, error)
+            raise
+
     def resolve(self, effect):
         kind, args = effect.kind, effect.args
         self.events.append(kind)
@@ -157,7 +183,8 @@ class PythonProtectionRuntime(ProtectionRuntime):
             return args[0]
         if kind == 'agent_thread_start':
             work = args[1]
-            self._start(work.kind, work, lambda: self.run(work.steps()))
+            callback = self.manager.update_listener if work.kind == 'update' else None
+            self._start(work.kind, work, lambda: self._initialize_work(work, callback))
             return None
         if kind == 'task_executor_execute':
             work, = args
@@ -170,11 +197,15 @@ class PythonProtectionRuntime(ProtectionRuntime):
             return None
         if kind in ('task_send_message', 'update_send_empty_message'):
             handler = args[0]
-            self._ui.submit(self._deliver, handler.listener,
+            callback = self.manager.update_listener if handler.kind == 'update' else handler.listener
+            self._ui.submit(self._deliver, callback if isinstance(callback, Future) else None,
                             lambda: self.run(handler.message_steps(*args[1:])))
             return True
         if kind == 'manager_token_listener':
             args[0].set_result(args[1])
+            return None
+        if kind == 'manager_update_listener' and isinstance(args[0], Future):
+            args[0].set_result(None)
             return None
         if kind in ('manager_update_listener', 'update_listener', 'task_listener'):
             return args[0](*args[1:])

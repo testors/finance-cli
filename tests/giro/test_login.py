@@ -8,6 +8,7 @@ from pathlib import Path
 import ssl
 import tempfile
 from threading import Thread
+from types import SimpleNamespace
 import unittest
 from unittest.mock import Mock, patch
 from urllib.parse import parse_qs
@@ -125,11 +126,79 @@ class LoginTests(unittest.TestCase):
             self.assertEqual(context.verify_mode, ssl.CERT_REQUIRED)
             self.assertIsNone(context.keylog_filename)
             return http.client.HTTPConnection('127.0.0.1', self.server.server_port, timeout=timeout)
-        patch('giro.client.http.client.HTTPSConnection', side_effect=loopback).start()
+        # Do not patch the shared stdlib module: the protection peer uses real TLS.
+        patch('giro.client.http', SimpleNamespace(client=SimpleNamespace(
+            HTTPSConnection=loopback, HTTPException=http.client.HTTPException))).start()
         self.addCleanup(patch.stopall)
 
     def run_login(self):
         return self.login.login(pin_provider=self.pin, send=True)
+
+    def connect_python_protection(self):
+        import test_codeguard_runtime as runtime_support
+        # Each integration test owns a separate verified TLS CodeGuard peer.
+        # Business traffic stays on the existing loopback CMS/SEED fixture.
+        class Peer(runtime_support.RuntimeTests):
+            pass
+        Peer.setUpClass()
+        self.addCleanup(Peer.tearDownClass)
+        peer = Peer()
+        peer.setUp()
+        self.addCleanup(peer.tearDown)
+        peer.token_fields = lambda index: {'CODE_TOKEN': json.dumps({
+            'CODE_RESPONSE': 'SYNTHETIC-PYTHON-TOKEN-%d' % index})}
+        runtime = peer.runtime()
+        self.login.protection = runtime
+        return peer, runtime
+
+    def test_python_runtime_two_tokens_connect_to_pin_and_query(self):
+        peer, runtime = self.connect_python_protection()
+        result = self.run_login()
+        self.assertTrue(result.report()['session_ready'], result.report())
+        self.assertEqual([call[0] for call in peer.server.calls], [101, 200, 300, 200, 300])
+        self.assertEqual(self.server.steps, ['auth.server-cert', 'auth.device-status',
+            'auth.datetime', 'auth.pin'])
+        posts = [call for call in peer.server.calls if call[0] == 300]
+        self.assertEqual([dict(call[3])['Cookie'] for call in posts], ['exchange=1', 'exchange=2'])
+        self.assertEqual(len(peer.keys), 2)
+        self.assertNotEqual(*peer.keys)
+        _, fields, headers, form = self.server.calls[-1]
+        self.assertEqual(fields['CODE_RESPONSE'], ['SYNTHETIC-PYTHON-TOKEN-2'])
+        self.assertEqual(json.loads(form['CODE_RESPONSE_TOKEN'][0]),
+            {'CODE_RESPONSE': 'SYNTHETIC-PYTHON-TOKEN-2'})
+        self.assertEqual(headers['Cookie'], 'SESSION=BUSINESS-COOKIE')
+        self.assertEqual(result.session.key, self.server.keys[-1])
+        self.assertEqual(runtime.events.count('manager_token_listener'), 2)
+        self.assertNotIn('SYNTHETIC-PYTHON-TOKEN', repr(runtime.events) + repr(self.login.events))
+        client = AuthenticatedClient(result.session)
+        response = client.query('national.list', {'pageNo': '1'}, send=True)
+        self.assertTrue(response.app_success)
+        self.assertEqual([call[0] for call in peer.server.calls], [101, 200, 300, 200, 300])
+        self.assertEqual(self.server.steps.count('auth.pin'), 1)
+        with self.assertRaises(GiroError):
+            self.run_login()
+
+    def test_python_runtime_second_token_boundary_never_submits_pin(self):
+        peer, runtime = self.connect_python_protection()
+        challenge = peer.challenge_fields
+        def fields(index):
+            value = challenge(index)
+            if index == 2:
+                parts = value['CODE_CHALLENGE'].split('::')
+                parts[2] = 'YmFk'  # Explicitly malformed synthetic certificate.
+                value['CODE_CHALLENGE'] = '::'.join(parts)
+            return value
+        peer.challenge_fields = fields
+        result = self.run_login()
+        self.assertEqual(result.stage, 'codeguard.query')
+        self.assertEqual(result.report()['login_service_decision'], 'unobserved')
+        self.assertFalse(result.report()['session_ready'])
+        self.assertEqual(result.processing_issues, ['stage_processing_incomplete'])
+        self.assertEqual([call[0] for call in peer.server.calls], [101, 200, 300, 200])
+        self.assertEqual(runtime.events.count('manager_token_listener'), 1)
+        self.assertNotIn('auth.pin', self.server.steps)
+        with self.assertRaises(GiroError):
+            self.run_login()
 
     def test_login_query_and_payment_keep_last_key_and_business_cookies(self):
         attempt = self.run_login()

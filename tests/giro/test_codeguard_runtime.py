@@ -1,5 +1,6 @@
 """Threaded Python execution with declared memory inputs and loopback TLS."""
 import base64
+from concurrent.futures import ThreadPoolExecutor
 from dataclasses import replace
 from io import BytesIO
 import json
@@ -197,6 +198,76 @@ class RuntimeTests(unittest.TestCase):
         self.assertIs(runtime.process.agent.main.instance.updater, main_updater)
         self.assertEqual([call[0] for call in self.server.calls], [101, 200, 300, 101])
         self.assertEqual(runtime.token(timeout=3), 'loopback-callback-2')
+
+    def test_login_initialization_waits_for_update_notification(self):
+        runtime = self.runtime()
+        gate, entered = Event(), Event()
+        self.gates.append(gate)
+        resolve = runtime.platform.resolve
+        def delayed(effect):
+            if current_thread().name == 'cg-update' and effect.kind == 'preference_read':
+                entered.set()
+                if not gate.wait(5): raise AssertionError('update gate not released')
+            return resolve(effect)
+        runtime.platform.resolve = delayed
+        with ThreadPoolExecutor(max_workers=1) as pool:
+            ready = pool.submit(runtime.initialize_for_login, timeout=3)
+            try:
+                self.assertTrue(entered.wait(1))
+                self.assertTrue(runtime.process.is_init)
+                self.assertFalse(ready.done())
+            finally:
+                gate.set()
+            self.assertIsNone(ready.result(3))
+        self.assertEqual(runtime.events.count('manager_update_listener'), 1)
+        self.assertEqual([call[0] for call in self.server.calls], [101])
+
+    def test_login_initialization_does_not_join_zip_work(self):
+        runtime = self.runtime()
+        gate, entered = Event(), Event()
+        self.gates.append(gate)
+        resolve = runtime.resolve
+        def delayed(effect):
+            if current_thread().name == 'cg-zip' and effect.kind == 'package_java':
+                entered.set()
+                if not gate.wait(5): raise AssertionError('ZIP gate not released')
+            return resolve(effect)
+        runtime.resolve = delayed
+        try:
+            self.assertIsNone(runtime.initialize_for_login(timeout=3))
+            self.assertTrue(entered.wait(1))
+            self.assertFalse(next(j.future for j in runtime.jobs if j.kind == 'zip').done())
+            self.assertEqual(runtime.events.count('manager_update_listener'), 1)
+        finally:
+            gate.set()
+
+    def test_login_initialization_provider_failure_is_not_a_callback(self):
+        runtime = self.runtime()
+        resolve = runtime.platform.resolve
+        def broken(effect):
+            if current_thread().name == 'cg-update' and effect.kind == 'preference_read':
+                raise ValueError('synthetic update observation missing')
+            return resolve(effect)
+        runtime.platform.resolve = broken
+        with self.assertRaisesRegex(ValueError, 'synthetic update observation missing'):
+            runtime.initialize_for_login(timeout=3)
+        self.assertNotIn('manager_update_listener', runtime.events)
+        self.assertEqual(self.server.calls, [])
+
+    def test_login_initialization_preserves_notification_before_later_error(self):
+        runtime = self.runtime()
+        resolve = runtime.resolve
+        def late_error(effect):
+            value = resolve(effect)
+            if effect.kind == 'update_send_empty_message':
+                raise ValueError('synthetic late diagnostic failure')
+            return value
+        runtime.resolve = late_error
+        self.assertIsNone(runtime.initialize_for_login(timeout=3))
+        runtime.close()
+        self.assertEqual(runtime.events.count('manager_update_listener'), 1)
+        update = next(j for j in runtime.jobs if j.kind == 'update')
+        self.assertIsInstance(update.future.exception(), ValueError)
 
     def test_missing_token_uses_local_error_callback_without_retry(self):
         self.token_fields = lambda _: {}
