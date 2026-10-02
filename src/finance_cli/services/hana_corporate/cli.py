@@ -11,7 +11,7 @@ from . import idpw, keypad, login, store, protocol
 
 
 def add_parser(sub):
-    parser = sub.add_parser('corporate', help='기업뱅킹 로그인 (합성 검증; 실서버 검증 전)')
+    parser = sub.add_parser('corporate', help='기업뱅킹 로그인 (ID/PW 실사용 성공 확인; 인증서 경로는 합성 검증)')
     commands = parser.add_subparsers(dest='corporate_action', required=True)
     session = commands.add_parser('session', help='기업 채널 세션 준비·관측 결과').add_subparsers(dest='corporate_session_action', required=True)
     item = session.add_parser('new', help='사용자가 지정한 기업 앱 기기 정보로 새 세션 생성; 무통신')

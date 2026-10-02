@@ -9,7 +9,7 @@ from .transport import Client
 def plan():
     return {'channel': 'corporate', 'login_method': '1', 'network_used': False, 'accepted': None,
             'processing_status': 'planned', 'next': 'same_command_with_send', 'certificate_required': False,
-            'automatic_retry': False, 'live_tested': False}
+            'automatic_retry': False, 'live_tested': True, 'verification_source': 'user_reported_cli_output'}
 
 
 def follow_up(client, result):

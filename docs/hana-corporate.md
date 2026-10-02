@@ -1,6 +1,6 @@
 # 하나은행 기업 로그인
 
-`fin hana corporate`는 ID/PW·공동인증서·개인사업자용 하나인증서 로그인을 제공합니다. 합성 테스트를 통과한 구현이며 실제 은행 서버 수락은 아직 검증하지 않았습니다. 개인 채널의 기존 실사용 확인 결과가 기업 채널에도 적용되지는 않습니다.
+`fin hana corporate`는 ID/PW·공동인증서·개인사업자용 하나인증서 로그인을 제공합니다. 2026-10-03 사용자가 제공한 CLI 실행 결과에서 ID/PW 로그인, 출금계좌 정보·고객 확인 후속 응답, 세션 저장 성공을 확인했습니다. 공동인증서·하나인증서 기업 로그인은 합성 검증 단계입니다. 저장 세션의 재사용과 다른 인증·권한 분기는 이번 확인 범위에 포함되지 않습니다.
 
 공동인증서는 공통 금고의 기존 `--credential` 또는 하나은행용 `--profile`을 선택합니다. 하나인증서는 기존 `fin hana onesign`의 identity를 `--name`으로 선택합니다. 인증서·개인키를 기업용으로 복제하거나 다시 가져오지 않습니다. 하나인증서는 은행에 연결된 기업 ID를 사용하며 신규 연결·변경이 필요하면 `corporate_id_link_required`로 중단합니다.
 
@@ -14,7 +14,7 @@
 fin hana corporate login-idpw --user-id YOURID --send
 ```
 
-로그인 기록과 쿠키를 담는 로컬 세션은 자동 생성합니다. `session new`나 기기 JSON 작성, 휴대폰 연결이 필요하지 않습니다. CLI 전용 연결 정보를 최초 실행 시 만들고 이후에도 유지합니다. 실제 휴대폰의 식별자·개인뱅킹 쿠키·인증서를 복사하지 않습니다. CLI 연결 정보의 은행 서버 수락은 아직 검증하지 않았습니다.
+로그인 기록과 쿠키를 담는 로컬 세션은 자동 생성합니다. `session new`나 기기 JSON 작성, 휴대폰 연결이 필요하지 않습니다. CLI 전용 연결 정보를 최초 실행 시 만들고 이후에도 유지합니다. 실제 휴대폰의 식별자·개인뱅킹 쿠키·인증서를 복사하지 않습니다. 이 자동 준비 경로의 ID/PW 로그인 성공이 관측됐습니다.
 
 호환되는 공통 키패드 설정을 자동으로 사용합니다. 여러 설정의 키패드 재료가 같으면 같은 설정으로 취급합니다. 서로 다른 재료가 있다면 `--settings 이름`으로 선택할 수 있습니다. `--session 이름`은 로그인 기록 이름을 직접 정하고 싶을 때만 사용하며, 없는 이름이면 자동으로 준비합니다. 이미 로그인 요청을 시작한 이름은 덮어쓰거나 재사용하지 않습니다.
 
@@ -37,6 +37,8 @@ fin hana corporate login-idpw --user-id YOURID --send
 초기 연결 정보는 로그인 응답과 별도로 해석합니다. 선택적 앱 업데이트·안내 공지·판정에 쓰이지 않는 값의 차이는 단계별 `warnings`에 기록하고 진행합니다. 실제 긴급 중단이나 필수 최소 버전 미달은 해당 상태에서 멈춥니다. 경고는 로그인 실패를 뜻하지 않습니다.
 
 ID/PW 후속 고객 확인 결과의 `follow_up.customer_guidance`는 `none`, `visit_branch_notice`, `customer_verification_choice_required`, `certificate_login_required`, `unconfirmed`로 구분합니다. 고객확인 등록은 자동 실행하지 않습니다. 은행 내부 조직의 인증서 로그인 제한에 해당하면 로그아웃을 요청하고 최초 로그인 수락과 별도로 결과를 기록합니다. `session_usage=certificate_login_required`인 세션은 계속 사용하지 않습니다. `session_current_validity=logged_out`은 로그아웃 수락까지 관측한 경우입니다.
+
+`visit_branch_notice`는 고객확인 이행주기 경과에 따른 영업점 방문 안내입니다. 앱은 안내 확인 뒤 계속 진행하며, 이 상태가 로그인 성공을 취소하지 않습니다. `follow_up.app_fds=not_implemented`는 앱 설치 정보 수집의 구현 상태이며 로그인 실패 판정이 아닙니다.
 
 로그인 이후 개별 업무가 요구하는 권한·인증서는 별개입니다. ID/PW로 인증서 서명을 대신하지 않으며, 공동인증서가 필요한 기능은 공통 저장소를 사용합니다.
 
@@ -111,7 +113,7 @@ fin hana corporate login-onesign --session company-one --name existing-identity 
 fin --format json-v1 hana corporate session show --session company-one
 ```
 
-- `accepted: true`, `user_login_verified: true`는 기업 로그인 성공을 관측했다는 뜻입니다. 현재 서버 세션의 유효성은 별도이며 자동 확인·갱신하지 않습니다.
+- `accepted: true`, `user_login_verified: true`는 기업 로그인 성공을 관측했다는 뜻입니다. `session_current_validity: unverified`는 저장 세션의 이후 유효성을 별도 확인하지 않았다는 뜻이며, 로그인 성공을 미확인으로 바꾸지 않습니다. 세션을 자동 확인·갱신하지 않습니다.
 - `accepted: false`는 기업 로그인 요청의 명시적 업무 오류입니다. `accepted: null`은 로그인 성공·실패가 확정되지 않은 상태입니다.
 - `external_auth_status`는 하나인증서 외부 인증 단계의 판정입니다. 외부 인증 성공만으로 기업 로그인 성공이 되지 않습니다.
 - `processing_status: stopped`나 `session_saved: false`가 로그인 성공과 함께 반환될 수 있습니다. 후속 처리·저장 실패가 확인된 은행 성공을 지우지 않습니다. 중단의 종료코드는 `2`이며 업무 판정을 대신하지 않습니다.
