@@ -528,6 +528,8 @@ CLI에 기기 등록·PIN 로그인·세금 조회·등록계좌 국세 단건 �
 
 먼저 준비된 개인 자료를 설치합니다. 보호 입력 자료는 저장된 기기 상태를 재사용하므로 현재 휴대폰의 새로운 관측을 뜻하지 않습니다. 설치본은 Android 실행 환경 없이 Python으로 계산합니다. 자료와 세션은 공통 데이터 디렉터리의 `giro` 아래에 두며, 기존 자료를 자동 덮어쓰지 않습니다.
 
+업무 HTTP 헤더에는 자료에 저장된 기기 모델·Android 버전과 명시적인 `http_os_name`을 사용합니다. `http_os_name_source`는 직접 관측한 값(`observed`)과 정적 분석으로 추정한 값(`static-inference`)을 구별합니다. 실행 서버의 OS를 자동 대입하지 않습니다. 이 항목이 없는 기존 자료는 업무 인증 전에 다시 준비해야 합니다.
+
 ```sh
 fin giro auth install-profile --input /path/to/private-protection.json
 fin giro auth register                         # 무통신 계획

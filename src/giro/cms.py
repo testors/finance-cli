@@ -1,9 +1,9 @@
 """Offline RSA-recipient CMS envelope for the query-string protocol.
 
 GeneralSyntax=TRUE, GenerationIV=FALSE. Encoding stage ONLY, not the complete
-putRecipientCert initialization. The vdRecipient=TRUE path validates
-certificate purpose, chain and CRL BEFORE this stage; that gate is not yet
-implemented. Not usable as a substitute for that gate in a live client.
+putRecipientCert initialization. RecipientContext validates certificate
+purpose, chain and CRL BEFORE this stage. This encoder cannot substitute for
+that mandatory validation in a live client.
 Does not implement signed-data envelopes / payment signatures.
 """
 from dataclasses import dataclass, field

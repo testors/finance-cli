@@ -100,6 +100,8 @@ class ProtectionProfile:
     locale_language: str
     map_profile: str
     provenance: dict
+    http_os_name: str | None = None
+    http_os_name_source: str | None = None
 
     @classmethod
     def from_prepared(cls, platform, *, read_frames, app_info, version, locale_language,
@@ -117,6 +119,7 @@ class ProtectionProfile:
         return dict(schema=SCHEMA, schema_version=1, mode=MODE,
             app_info=self.app_info, version=self.version, locale_language=self.locale_language,
             map_profile=self.map_profile, provenance=self.provenance,
+            http_os_name=self.http_os_name, http_os_name_source=self.http_os_name_source,
             environment=_encode({name: getattr(self.platform.environment, name) for name in _ENV}),
             platform=_encode({name: getattr(self.platform, name) for name in _PLATFORM}),
             read_frames=_encode(self.platform.environment.read_frames))
@@ -155,7 +158,21 @@ class ProtectionProfile:
         environment = RecordedEnvironment(read_frames=_decode(document['read_frames']), **env_values)
         def no_write_time(): raise AnalysisLimit('immutable preparation cannot write files')
         platform = PreparedPlatform(environment=environment, write_time=no_write_time, **platform_values)
-        return cls(platform, *(document[k] for k in ('app_info', 'version', 'locale_language', 'map_profile', 'provenance')))
+        os_name, source = document.get('http_os_name'), document.get('http_os_name_source')
+        if ((os_name is None) != (source is None) or (os_name is not None and
+                (type(os_name) is not str or not os_name or source not in ('observed', 'static-inference')))):
+            raise AnalysisLimit('explicit business OS property provenance required')
+        return cls(platform, *(document[k] for k in ('app_info', 'version', 'locale_language', 'map_profile', 'provenance')),
+                   http_os_name=os_name, http_os_name_source=source)
+
+    def business_user_agent(self):
+        from .protocol import APP_VERSION
+        from .user_agent import business_user_agent
+        if self.http_os_name is None or self.http_os_name_source not in ('observed', 'static-inference'):
+            raise AnalysisLimit('explicit business OS property required')
+        build = self.platform.environment.build
+        return business_user_agent(APP_VERSION, os_name=self.http_os_name,
+                                   model=build.get('MODEL'), release=build.get('RELEASE'))
 
     def report(self):
         return dict(schema=SCHEMA, schema_version=1, mode=MODE, network_used=False,

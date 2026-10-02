@@ -130,3 +130,25 @@ class PreparedTests(unittest.TestCase):
             document = profile(support.memory_platform(self.der)).document()
             document.update(change)
             with self.assertRaises(AnalysisLimit): ProtectionProfile.from_document(document)
+
+    def test_business_header_requires_explicit_os_provenance_and_recorded_build(self):
+        prepared = profile(support.memory_platform(self.der))
+        # Old profiles still load for protection-only use; they cannot silently
+        # borrow this Python host's OS/model for a business request.
+        old = prepared.document()
+        del old['http_os_name'], old['http_os_name_source']
+        restored = ProtectionProfile.from_document(old)
+        with self.assertRaises(AnalysisLimit): restored.business_user_agent()
+        prepared.http_os_name, prepared.http_os_name_source = 'SyntheticOS', 'observed'
+        prepared.platform.environment.build.update(MODEL='SYNTHETIC-MODEL', RELEASE='17')
+        restored = ProtectionProfile.from_document(prepared.document())
+        self.assertEqual(restored.http_os_name_source, 'observed')
+        self.assertEqual(restored.business_user_agent(),
+            'AndroidGiro/4.9.5 (SyntheticOS; SYNTHETIC-MODEL AndroidGiro4.9.5; Android 17; ko-kr)')
+        for change in ({'http_os_name': None}, {'http_os_name_source': None},
+                       {'http_os_name_source': 'host-default'}, {'http_os_name': ''}):
+            with self.subTest(change=change), self.assertRaises(AnalysisLimit):
+                ProtectionProfile.from_document(prepared.document() | change)
+        prepared.http_os_name_source = 'static-inference'
+        self.assertEqual(ProtectionProfile.from_document(prepared.document()).http_os_name_source,
+                         'static-inference')

@@ -6,12 +6,31 @@ from types import SimpleNamespace
 import unittest
 from unittest.mock import Mock, patch
 
-from giro.auth_flow import authenticate
+from giro.auth_flow import authenticate, login_dependencies, CODEGUARD_USER_AGENT
 from giro.client import AuthenticatedClient
 from giro.registration_flow import EnrollmentStore
 from giro.session_store import SessionStore
 import test_registration as registration_support
 import test_login as login_support
+
+
+class DependencyHeaderTests(unittest.TestCase):
+    def test_business_and_protection_headers_are_separate_before_any_requests(self):
+        from giro.codeguard_app import giro_task_settings
+        settings = giro_task_settings(etc_data=None)
+        profile = SimpleNamespace(app_info=settings.app_info, version=settings.version,
+            platform=SimpleNamespace(abi='arm64-v8a', service=object()),
+            locale_language='ko', map_profile='aosp-8',
+            business_user_agent=Mock(return_value='SYNTHETIC-BUSINESS-AGENT'))
+        with patch('giro.auth_flow.ProtectionProfile.load', return_value=profile), \
+             patch('giro.auth_flow.PublicCache'), patch('giro.auth_flow.RecipientContext'), \
+             patch('giro.auth_flow.CodeGuardHTTP') as transport, \
+             patch('giro.auth_flow.PythonProtectionRuntime') as runtime:
+            with login_dependencies() as dependencies:
+                self.assertEqual(dependencies.user_agent, 'SYNTHETIC-BUSINESS-AGENT')
+                self.assertEqual(transport.call_args.kwargs['default_user_agent'], CODEGUARD_USER_AGENT)
+                runtime.return_value.initialize.assert_not_called()
+            profile.business_user_agent.assert_called_once_with()
 
 
 class AuthFlowTests(unittest.TestCase):
@@ -23,7 +42,7 @@ class AuthFlowTests(unittest.TestCase):
     @contextmanager
     def dependencies(self, **kwargs):
         yield SimpleNamespace(profile=object(), recipient=self.context,
-                              runtime=self.protection, processing_issues=[])
+                              runtime=self.protection, user_agent='SYNTHETIC-BUSINESS-AGENT', processing_issues=[])
 
     def providers(self, profile):
         return dict(consent_provider=lambda: True, identity_provider=lambda: self.person,
@@ -57,6 +76,8 @@ class AuthFlowTests(unittest.TestCase):
         self.assertEqual(result['registration_service_decision'], 'success', result)
         self.assertEqual(result['login_service_decision'], 'success', result)
         self.assertTrue(result['session_saved'], result)
+        self.assertTrue(all({k.lower(): v for k, v in call[2].items()}['user-agent'] == 'SYNTHETIC-BUSINESS-AGENT'
+                            for call in self.server.calls))
         before = list(self.server.steps)
         with self.sessions.use() as (session, _):
             self.assertTrue(AuthenticatedClient(session).query('national.list', {'page':'1'}, send=True).app_success)

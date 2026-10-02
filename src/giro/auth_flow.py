@@ -20,7 +20,7 @@ from .session_store import SessionStore
 
 
 BASE = 'https://m.giro.or.kr/CodeGuard/'
-USER_AGENT = 'FinanceCLI/0.1'
+CODEGUARD_USER_AGENT = 'FinanceCLI/0.1'
 
 
 def auth_execution_plan(*, register=False):
@@ -41,6 +41,7 @@ class Dependencies:
     profile: ProtectionProfile
     recipient: RecipientContext
     runtime: PythonProtectionRuntime
+    user_agent: str
     processing_issues: list = field(default_factory=list)
 
 
@@ -52,16 +53,17 @@ def login_dependencies(*, register=False, profile_path=None, public_cache=None):
     if ((profile.app_info, profile.version) != (settings.app_info, settings.version)
             or profile.platform.abi != 'arm64-v8a'):
         raise GiroError('현재 지로 버전에 맞는 보호 입력 자료가 필요합니다.')
+    user_agent = profile.business_user_agent()
     sequence = ((101, 'GET'),) + ((200, 'GET'), (300, 'POST')) * (3 if register else 2)
     with PublicCache(Path(public_cache or root/'public-trust').absolute(), max_bytes=16*1024*1024) as cache:
         recipient = RecipientContext.from_public_cache(cache, locale_language=profile.locale_language)
         transport = CodeGuardHTTP(endpoint=BASE+'CodeGuard/check.jsp', send=True,
-            default_user_agent=USER_AGENT, max_requests=len(sequence), request_sequence=sequence)
+            default_user_agent=CODEGUARD_USER_AGENT, max_requests=len(sequence), request_sequence=sequence)
         runtime = PythonProtectionRuntime(config=ManagerConfig(profile.platform.service,
             profile.app_info, profile.version, BASE, BASE), platform=profile.platform,
             transport=transport, crypto=CodeGuardCrypto(), locale_language=profile.locale_language,
             map_profile=profile.map_profile)
-        dependencies = Dependencies(profile, recipient, runtime)
+        dependencies = Dependencies(profile, recipient, runtime, user_agent)
         try:
             yield dependencies
         finally:
@@ -87,7 +89,8 @@ def authenticate(*, pin_provider, register=False, enrollment_providers=None, sen
     session_store = session_store if session_store is not None else SessionStore()
     try:
         with login_dependencies(register=register, profile_path=profile_path, public_cache=public_cache) as dependencies:
-            options = dict(recipient=dependencies.recipient, protection=dependencies.runtime, user_agent=USER_AGENT)
+            options = dict(recipient=dependencies.recipient, protection=dependencies.runtime,
+                           user_agent=dependencies.user_agent)
             if register:
                 if enrollment_providers is None: raise GiroError('기기 등록 입력 제공자가 필요합니다.')
                 # Identity/phone input can use the explicit profile's observed
