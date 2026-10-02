@@ -10,6 +10,7 @@ backends. JNI tokens here model the selected normal API path only, not a VM's
 class loading, pending exceptions, allocation failures or reference table.
 """
 from dataclasses import dataclass
+from itertools import count
 
 from .codeguard_certificate_values import NativeByteArrayValue
 from .codeguard_effects import JavaFault
@@ -284,9 +285,14 @@ class EnvironmentSimulation:
 
 
 def run_simulation_steps(generator, resolve, *, max_effects=10000):
-    """Drive a bounded offline scenario; unknowns never become Java failures."""
+    """Drive effects; None explicitly removes the experimental step budget.
+
+    The default bounds experiments. A full runtime can select None so file
+    size does not cause an artificial processing failure. Unknowns still never
+    become Java failures, and a finite exhausted budget never creates a token.
+    """
     value, pending = None, None
-    for _ in range(max_effects):
+    for _ in count() if max_effects is None else range(max_effects):
         try:
             effect = generator.throw(pending) if pending is not None else generator.send(value)
         except StopIteration as done:

@@ -32,7 +32,8 @@ class ProtectionRuntime(ABC):
     """Persistent normal app protection initialization and CodeGuard callbacks.
 
     No SDK-success boolean, imported token file, host-ID fallback or clean
-    observation substitute. An independent implementation is still required.
+    observation substitute. PythonProtectionRuntime composes explicit inputs;
+    its declared memory platform does not establish real-device compatibility.
     A token return corresponds to CgManager's callback, including its null/error
     forms; the coordinator does not invent a token-format acceptance gate.
     """

@@ -36,7 +36,8 @@ class _Cipher:
 
 CRYPTO_EFFECTS = frozenset(('clock_ms', 'new_java_random', 'java_random_seed_and_bytes',
     'android_parse_x509', 'certificate_public_key', 'rsa_cipher_instance',
-    'rsa_cipher_init', 'rsa_cipher_final'))
+    'rsa_cipher_init', 'rsa_cipher_final', 'x509_certificate_factory',
+    'x509_generate_certificate', 'cast_x509_certificate', 'log_codeguard_certificate'))
 
 
 class CodeGuardCrypto:
@@ -81,6 +82,24 @@ parsing does not add expiry/signature/trust checks absent from this stage.
                 data, = args
                 der = single_der_certificate(data)
                 return _Value(self._owner, 'certificate', x509.load_der_x509_certificate(der))
+            if kind == 'x509_certificate_factory' and args == ('X.509',):
+                return _Value(self._owner, 'factory')
+            if kind == 'x509_generate_certificate':
+                factory, data = args
+                self._value(factory, 'factory')
+                der = single_der_certificate(data)
+                return _Value(self._owner, 'certificate', x509.load_der_x509_certificate(der))
+            if kind == 'cast_x509_certificate':
+                self._value(args[0], 'certificate')
+                return args[0]
+            if kind == 'log_codeguard_certificate':
+                certificate = self._value(args[0], 'certificate')
+                # Evaluate normal certificate fields but emit no certificate
+                # data. Java DN/date log rendering/failures remain out of scope.
+                certificate.subject
+                certificate.serial_number
+                certificate.not_valid_after_utc
+                return None
             if kind == 'certificate_public_key':
                 certificate, = args
                 return _Value(self._owner, 'public_key', self._value(certificate, 'certificate').public_key())
