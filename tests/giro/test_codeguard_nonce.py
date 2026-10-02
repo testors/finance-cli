@@ -78,7 +78,26 @@ class NonceTests(unittest.TestCase):
         key = bytes(range(32))
         self.assertNotEqual(cg.native_schedule(key), prim.aria256_schedule(key))
         old = bytes((i % 256 for i in range(272)))
-        self.assertNotEqual(cg.native_schedule(key, old), prim.xor_bytes(cg.native_schedule(key), old))
+        self.assertEqual(cg.native_schedule(key, old), prim.xor_bytes(cg.native_schedule(key), old))
+
+    def test_modified_schedule_independent_instruction_vectors(self):
+        # Synthetic vectors obtained independently from arithmetic instructions.
+        # Catch missing D/Q alias writes as well as dependence on prior output.
+        vectors = (
+            (bytes(32), (
+                '03aed1fadc9151692e336d3dabf5ddb9f72f212642b9d81261c85b0fd4abcfee',
+                'bf004bf70ee13723cf4608afbb74bc4b52e4f14cf62eca064386c2bfb867b5f3')),
+            (bytes([255]) * 32, (
+                '85c0c5dde6567c72bc792f8b9b2d3c50e2528651e7c4f986c5567340e18bc195',
+                '8c00820a3c69a1124b545eb2a00d606f1570d3fba83cdd78b7169fb15ef774f9')),
+            (bytes(range(32)), (
+                '6fc6a45a28f9de256fa23ec5873d78c3e919afa15ff0d4039aad0e07a34ff852',
+                '5b99b40659440a6d732e7fd3c1c2dd6c0794fa6987bae632d33e6b8539637e7c')),
+        )
+        for key, expected in vectors:
+            for old, digest in zip((bytes(272), bytes(i % 256 for i in range(272))), expected):
+                with self.subTest(key=key.hex(), old_nonzero=any(old)):
+                    self.assertEqual(hashlib.sha256(cg.native_schedule(key, old)).hexdigest(), digest)
 
     def test_six_selectors_use_cumulative_cursor(self):
         self.assertEqual(cg.selected_functions(bytes(range(32))), (2, 3, 5, 6, 8, 9))
@@ -123,7 +142,7 @@ class NonceTests(unittest.TestCase):
             expected = prim.xor_bytes(expected, cg.transform(indices[i], work, codes[i], bytes(32)))
         result = cg.cg_auth_code(key, [x.hex().encode() for x in codes])
         self.assertEqual(result, expected.hex().upper())
-        self.assertEqual(result, '5223183D3B4B4B733742A465610E92E71B9633E0B8D1EA8B5C9F9F4C15155BB5')
+        self.assertEqual(result, 'F8A5FE289232BC07333BA4EA63A3444CE4432CEA0ECE16F128C9BB8D79B08C4F')
 
     def test_extra_array_entries_ignored_short_array_unmodeled(self):
         key = b'0' * 64

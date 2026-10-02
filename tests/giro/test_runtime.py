@@ -80,5 +80,5 @@ class RuntimeTests(unittest.TestCase):
         output = io.StringIO()
         with contextlib.redirect_stdout(output):
             main(['runtime', 'check'])
-        for text in ('012345', 'SYNTHETIC DEPLOYMENT CHECK', '5223183D3B4B', 'session_key', 'ciphertext', 'com.termux', 'hostname'):
+        for text in ('012345', 'SYNTHETIC DEPLOYMENT CHECK', 'F8A5FE289232', 'session_key', 'ciphertext', 'com.termux', 'hostname'):
             self.assertNotIn(text, output.getvalue())

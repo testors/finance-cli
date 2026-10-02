@@ -42,11 +42,11 @@ def _models():
 
 def _nonce():
     from .codeguard_nonce import cg_auth_code, load_programs
-    # Existing offline vector. Inputs are synthetic, NOT device observations.
+    # Independently checked arithmetic vector; synthetic, not device observations.
     key = bytes(range(32)).hex().encode('ascii')
     codes = [bytes([i] * 32).hex().encode('ascii') for i in range(6)]
     return (len(load_programs()['functions']) == 100 and cg_auth_code(key, codes)
-            == '5223183D3B4B4B733742A465610E92E71B9633E0B8D1EA8B5C9F9F4C15155BB5')
+            == 'F8A5FE289232BC07333BA4EA63A3444CE4432CEA0ECE16F128C9BB8D79B08C4F')
 
 
 def _seed_pin():
