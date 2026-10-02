@@ -257,10 +257,11 @@ class CorporateTests(unittest.TestCase):
         with patch.object(store, 'record', side_effect=fail):
             result = self.run_login(bank)
         self.assertIs(result['accepted'], True)
-        self.assertIs(result['session_saved'], False)
-        self.assertEqual(result['error'], 'response_storage_failed')
+        self.assertIs(result['session_saved'], True)
+        self.assertEqual(result['processing_status'], 'completed')
+        self.assertIn('response_storage_failed', result['stages'][3]['warnings'])
         self.assertNotIn('SYNTHETIC-PRIVATE', json.dumps(result))
-        self.assertEqual(len(bank.calls), 4)
+        self.assertEqual(len(bank.calls), 6)
 
     def test_success_survives_later_business_error(self):
         bank = self.joint()

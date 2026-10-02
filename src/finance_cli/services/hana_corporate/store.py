@@ -109,3 +109,25 @@ def inspect(session):
     if (path / 'outcome.json').exists():
         result['last_login'] = storage.read_json(path / 'outcome.json')
     return result
+
+
+def select(session=None):
+    """Reuse the latest successful corporate login; never log in implicitly."""
+    if session is not None:
+        path = session_path(session)
+    else:
+        candidates = []
+        for item in root().glob('*/session.json'):
+            try:
+                value = storage.read_json(item)
+                if value.get('channel') == 'corporate' and value.get('login_verified') is True:
+                    # Login reservation is stable across later queries and cookie saves.
+                    stamp = (item.parent / 'login-attempt.json').stat().st_mtime_ns
+                    candidates.append((stamp, item.parent.name))
+            except (OSError, ValueError, TypeError, AttributeError):
+                continue
+        require(candidates, 'corporate_login_required')
+        path = session_path(max(candidates)[1])
+    saved = storage.read_json(path / 'session.json')
+    require(saved.get('channel') == 'corporate' and saved.get('login_verified') is True, 'corporate_login_required')
+    return path

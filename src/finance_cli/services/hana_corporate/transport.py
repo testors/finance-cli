@@ -10,12 +10,13 @@ from . import protocol, store
 
 
 class Client:
-    def __init__(self, directory, profile, result, *, exchange=send_http):
+    def __init__(self, directory, profile, result, *, exchange=send_http, state_directory=None, saved=None):
         self.directory, self.profile, self.result, self.exchange = directory, profile, result, exchange
-        self.cookies = []
-        self.saved = {'channel': 'corporate', 'cookies': [], 'login_verified': False}
+        self.state_directory = state_directory or directory
+        self.saved = saved if saved is not None else {'channel': 'corporate', 'cookies': [], 'login_verified': False}
+        self.cookies = self.saved.get('cookies', [])
 
-    def request(self, stage, body=None, *, native=False, observe=None, assessor=protocol.assess, redact=()):
+    def request(self, stage, body=None, *, native=False, observe=None, assessor=protocol.assess, redact=(), attempt_name=None):
         protocol.require(stage in protocol.PATHS, 'corporate_endpoint_not_allowed')
         raw = (b'' if body is None else protocol.native_form(body)) if native else protocol.form(
             {**(body or {}), 'COMM_HEAD': (body or {}).get('COMM_HEAD', {})})
@@ -27,14 +28,23 @@ class Client:
                    'User-Agent': 'okhttp/5.0.0-alpha.10' if native else agent['userAgent'], 'Accept-Encoding': 'gzip'}
         if native:
             headers.update({'charset': 'UTF-8', 'Cache-Control': 'no-cache'})
-        attempt = self.directory / stage
+        attempt = self.directory / store.name(attempt_name or stage)
         attempt.mkdir(mode=0o700)  # Exclusive durable reservation, before any request.
-        recorded = protocol.native_form({k: '[redacted]' if k in redact else v for k, v in body.items()}) if redact else raw
-        store.record(attempt / 'request.json', {'method': method, 'path': protocol.PATHS[stage], 'headers': headers,
-                                               'body': base64.b64encode(recorded).decode()})
+        def scrub(value):
+            if isinstance(value, dict):
+                return {k: '[redacted]' if k in redact else scrub(v) for k, v in value.items()}
+            if isinstance(value, list):
+                return [scrub(v) for v in value]
+            return value
+        recorded = (protocol.native_form if native else protocol.form)(scrub(body or {})) if redact else raw
         store.record(attempt / 'attempt.json', {'automatic_retry': False})
         receipt = {'stage': stage, 'service_status': 'unconfirmed', 'processing_status': 'prepared'}
         self.result['stages'].append(receipt)
+        try:
+            store.record(attempt / 'request.json', {'method': method, 'path': protocol.PATHS[stage], 'headers': headers,
+                                                   'body': base64.b64encode(recorded).decode()})
+        except (OSError, ValueError):
+            receipt.setdefault('warnings', []).append('request_log_storage_failed')
         request_activity.before_request('bank')
         self.result['network_used'] = True
         receipt['processing_status'] = 'sent'
@@ -56,13 +66,18 @@ class Client:
             observe(receipt, payload)  # Preserve login success before saving anything.
         self.cookies = cookies
         self.saved['cookies'] = cookies
-        try:
-            store.record(attempt / 'response.json', {'status': status, 'headers': head, 'body': value})
-            storage.atomic_json(self.directory / 'session.json', self.saved)
-        except (OSError, ValueError):
-            receipt['processing_status'] = 'storage_failed'
-            raise protocol.Stop('response_storage_failed') from None
         receipt['processing_status'] = 'stored'
+        for path, content, writer in (
+            (attempt / 'response.json', {'status': status, 'headers': head, 'body': value}, store.record),
+            (self.state_directory / 'session.json', self.saved, storage.atomic_json),
+        ):
+            try:
+                writer(path, content)
+            except (OSError, ValueError):
+                receipt['processing_status'] = 'storage_failed'
+                receipt.setdefault('warnings', []).append('response_storage_failed' if path.name == 'response.json' else 'session_storage_failed')
+                if path.name == 'session.json':
+                    self.result['session_saved'] = False
         protocol.require(receipt['service_status'] == 'accepted', receipt['reason'])
         protocol.require(isinstance(payload, dict), 'response_data_unavailable')
         return payload

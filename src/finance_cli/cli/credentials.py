@@ -1,8 +1,8 @@
 """Certificate selection shared by institution CLI parsers."""
 
 
-def add_selection(parser):
-    group = parser.add_mutually_exclusive_group(required=True)
+def add_selection(parser, *, required=True):
+    group = parser.add_mutually_exclusive_group(required=required)
     group.add_argument('--credential', help='공통 금고의 인증서 별칭')
     group.add_argument('--profile', help='fin profile set의 기관별 인증서 선택 설정')
     parser.add_argument('--password-stdin', action='store_true',

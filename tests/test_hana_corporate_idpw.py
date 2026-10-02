@@ -396,8 +396,10 @@ class IdPasswordTests(unittest.TestCase):
         with patch.object(store, 'record', side_effect=fail):
             result = self.execute(bank)
         self.assertIs(result['accepted'], True)
-        self.assertFalse(result['session_saved'])
-        self.assertEqual(result['error'], 'response_storage_failed')
+        self.assertTrue(result['session_saved'])
+        self.assertEqual(result['processing_status'], 'completed')
+        self.assertIn('response_storage_failed', result['stages'][3]['warnings'])
+        self.assertEqual(bank.calls[-2:], ['withdrawal-info', 'customer-check'])
         self.assertNotIn('SYNTHETIC-PRIVATE', json.dumps(result))
 
     def test_followup_errors_allow_customer_check_and_preserve_login(self):
