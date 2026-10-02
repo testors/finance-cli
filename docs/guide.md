@@ -533,7 +533,7 @@ CLI에 기기 등록·PIN 로그인·세금 조회·등록계좌 국세 단건 �
 ```sh
 fin giro auth install-profile --input /path/to/private-protection.json
 fin giro auth register                         # 무통신 계획
-fin giro auth register --carrier SKT --send     # 약관·SMS·PIN을 터미널에서 입력
+fin giro auth register --send                   # 통신사 선택·약관·SMS·PIN을 터미널에서 입력
 fin giro auth login --send                     # 이미 CLI를 등록했다면 PIN 로그인만
 fin giro bills list --type national --send
 fin giro bills due --type local --within-days 7 --send
@@ -542,7 +542,7 @@ fin giro payment pay --send                    # 국세 선택·계좌/금액 �
 fin giro receipts list --start-date 2026-10-01 --end-date 2026-10-03 --send
 ```
 
-기본 공개 자료 캐시는 `giro/public-trust`입니다. 다른 캐시는 인증 명령의 `--public-cache`로 지정합니다. `--send`를 생략한 인증·조회·납부 명령은 입력·세션 접근 없이 계획만 반환합니다. 개인정보·SMS·로그인 PIN 6자리와 계좌 비밀번호 4자리는 대화형 터미널에서 숨겨 입력하며 인자나 환경변수로 받지 않습니다.
+기본 공개 자료 캐시는 `giro/public-trust`입니다. 다른 캐시는 인증 명령의 `--public-cache`로 지정합니다. `--send`를 생략한 인증·조회·납부 명령은 입력·세션 접근 없이 계획만 반환합니다. 이름은 대화형 터미널에서 화면에 보이게 입력합니다. 통신사는 1(SKT)·2(SKT 알뜰폰)·3(LG U+)·4(LG U+ 알뜰폰) 중 숫자로 선택하며, `--carrier SKT`처럼 미리 지정할 수도 있습니다. 나머지 개인정보·SMS·로그인 PIN 6자리와 계좌 비밀번호 4자리는 숨겨 입력하며 인자나 환경변수로 받지 않습니다.
 
 CLI 식별자는 첫 요청 전에 생성해 `giro/enrollment`에 보관합니다. 같은 등록 시도 기록에서 자동 재전송하지 않습니다. 등록 성공 뒤 로그인 실패나 저장 오류가 발생해도 등록 성공은 유지합니다. 로그인 세션의 키·쿠키는 AES-GCM으로 암호화하고, 저장용 키와 세션 파일 모두 0600 권한으로 보관합니다. 저장용 키도 같은 사용자 계정에서 접근할 수 있으므로 계정 자체가 탈취된 경우까지 보호하지는 않습니다. PIN과 보호 토큰은 저장하지 않습니다.
 

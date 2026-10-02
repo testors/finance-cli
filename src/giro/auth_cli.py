@@ -79,14 +79,19 @@ def enrollment_inputs(profile, carrier):
             return False
         return review_terms()
     def identity():
-        selected = carrier or answer('통신사: SKT / SKM(SKT 알뜰폰) / LGT(LG U+) / LGM(LG U+ 알뜰폰):').strip()
+        selected = carrier
+        while not selected:
+            choice = answer('통신사를 선택하세요:\n1. SKT\n2. SKT 알뜰폰\n3. LG U+\n4. LG U+ 알뜰폰\n번호 (1~4):').strip()
+            selected = {'1': 'SKT', '2': 'SKM', '3': 'LGT', '4': 'LGM'}.get(choice)
+            if selected is None:
+                print('1~4 중 하나의 번호를 입력하세요.', file=sys.stderr)
         phone = profile.platform.phone
         if isinstance(phone, str) and phone:
             phone = phone.replace('+82', '0')
             print('준비된 기기 자료의 본인 휴대전화번호를 사용합니다.', file=sys.stderr)
         else:
             phone = secret('본인 명의 휴대전화번호: ')
-        return IdentityInput(secret('이름: '), secret('생년월일 8자리: '),
+        return IdentityInput(answer('이름: '), secret('생년월일 8자리: '),
             secret('내국인 0 / 외국인 1: '), secret('남성 0 / 여성 1: '), selected, phone)
     return dict(consent_provider=consent, identity_provider=identity,
         sms_provider=lambda: secret('SMS 인증번호 6자리: '),
