@@ -345,5 +345,41 @@ class HTTPTests(unittest.TestCase):
         self.assertEqual(transport.events[-1]['phase'], 'cleanup_error')
         self.assertNotIn('sensitive', json.dumps(transport.events))
 
+    def test_explicit_command_sequence_rejects_refresh_before_connect(self):
+        transport = self.transport(request_sequence=((101, 'GET'), (200, 'GET'), (300, 'POST')))
+        def request(command, method='GET'):
+            connection = transport.resolve(Effect('http_open', (self.endpoint+'?CODEGUARD_CMD='+str(command),)))
+            transport.resolve(Effect('http_call', (connection, 'setRequestMethod', (method,))))
+            return transport.resolve(Effect('http_call', (connection, 'getResponseCode', ())))
+        self.assertEqual(request(101), 200)
+        self.assertEqual(request(200), 200)
+        with self.assertRaises(HTTPBoundary) as error: request(200)
+        self.assertEqual(error.exception.stage, 'request_sequence')
+        self.assertEqual(transport.attempts, 2)
+        self.assertEqual([row[0] for row in self.server.calls], [101, 200])
+
+    def test_explicit_sequence_requires_post_and_allows_only_one_token_exchange(self):
+        transport = self.transport(request_sequence=((200, 'GET'), (300, 'POST')))
+        self.run_steps(challenge_steps(self.obs.runtime, self.obs.agent, self.obs.main, 'APP'), transport)
+        self.obs.preferences['GETMODE'] = True
+        with self.assertRaises(HTTPBoundary) as error: self.token(transport)
+        self.assertEqual(error.exception.stage, 'request_sequence')
+        self.assertEqual(transport.attempts, 1)
+        self.obs.preferences['GETMODE'] = False
+        self.assertEqual(self.token(transport), 'SYNTHETIC TOKEN')
+        with self.assertRaises(HTTPBoundary) as error: self.token(transport)
+        self.assertEqual(error.exception.stage, 'request_sequence')
+        self.assertEqual([row[:2] for row in self.server.calls], [(200, 'GET'), (300, 'POST')])
+
+    def test_sequence_configuration_is_explicit_and_does_not_enable_send(self):
+        for sequence in ((), [ (101, 'GET') ], ((101, 'POST'),), ((999, 'GET'),), ((True, 'GET'),)):
+            with self.subTest(sequence=sequence), self.assertRaises(HTTPBoundary):
+                self.transport(request_sequence=sequence)
+        transport = self.transport(send=False, request_sequence=((300, 'POST'),))
+        with self.assertRaises(HTTPBoundary) as error: self.token(transport)
+        self.assertEqual(error.exception.stage, 'send_not_enabled')
+        self.assertEqual(transport.attempts, 0)
+        self.assertEqual(self.server.calls, [])
+
 
 if __name__ == '__main__': unittest.main()

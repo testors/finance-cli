@@ -116,11 +116,13 @@ class CodeGuardHTTP:
 
     endpoint is one exact HTTPS endpoint; loopback test endpoints also use TLS.
     default_user_agent is explicit protocol metadata, never read from the host.
-    max_requests/max_body_bytes are processing budgets, not service conditions.
+    max_requests/max_body_bytes and an optional command/method sequence are
+    caller processing budgets, not service conditions.
     Context must verify chain and hostname. No custom TLS verifier is installed.
     """
     def __init__(self, *, endpoint, send=False, default_user_agent,
-                 max_requests, max_body_bytes=1024*1024, tls_context=None):
+                 max_requests, max_body_bytes=1024*1024, tls_context=None,
+                 request_sequence=None):
         try:
             if type(endpoint) is not str or not endpoint.isascii(): raise ValueError
             parsed = urlsplit(endpoint)
@@ -134,6 +136,13 @@ class CodeGuardHTTP:
             raise HTTPBoundary('scope_configuration')
         if type(max_body_bytes) is not int or max_body_bytes < 1:
             raise HTTPBoundary('scope_configuration')
+        if request_sequence is not None:
+            if (type(request_sequence) is not tuple or not request_sequence
+                    or any(type(item) is not tuple or len(item) != 2
+                           or type(item[0]) is not int
+                           or item not in ((101, 'GET'), (200, 'GET'), (300, 'GET'), (300, 'POST'))
+                           for item in request_sequence)):
+                raise HTTPBoundary('sequence_configuration')
         if (type(default_user_agent) is not str or not default_user_agent
                 or not default_user_agent.isascii() or '\r' in default_user_agent or '\n' in default_user_agent):
             raise HTTPBoundary('user_agent_configuration')
@@ -145,6 +154,7 @@ class CodeGuardHTTP:
         self.endpoint, self.address, self.context = endpoint, parsed, context
         self.send, self.default_user_agent = send, default_user_agent
         self.max_requests, self.max_body_bytes = max_requests, max_body_bytes
+        self.request_sequence = request_sequence
         self.attempts, self.connections, self.events = 0, [], []
         self.closed = False
 
@@ -162,6 +172,10 @@ class CodeGuardHTTP:
         if self.attempts >= self.max_requests: raise HTTPBoundary('request_budget')
         if connection.method not in ('GET', 'POST') or (connection.method == 'POST' and connection.command != 300):
             raise HTTPBoundary('request_method')
+        if self.request_sequence is not None:
+            if (self.attempts >= len(self.request_sequence)
+                    or (connection.command, connection.method) != self.request_sequence[self.attempts]):
+                raise HTTPBoundary('request_sequence')
         self.attempts += 1  # reserve before attempting TLS; failure never retries
         self.events.append({'command':connection.command, 'phase':'connect_attempt'})
         connection.client = http.client.HTTPSConnection(self.address.hostname, self.address.port or 443,
