@@ -40,6 +40,8 @@ def build():
         '하나은행 로그인·조회·하나인증서 발급·원화 이체. '
         '은행에 연결하는 명령은 --send가 있어야 전송합니다. 실서버 검증 전입니다.'))
     sub = parser.add_subparsers(dest='operation', required=True)
+    from finance_cli.services.hana_corporate.cli import add_parser as add_corporate
+    add_corporate(sub)
     sub.add_parser('plan', help='로그인 계약과 공개 패키지 이전 범위; 접속 없음')
     for command in ('encode-header', 'decode-header', 'joint-cert-tbs', 'joint-cert-body', 'login-body'):
         sub.add_parser(command, help='표준입력으로 받은 로컬 자료 변환; 접속 없음')
@@ -147,6 +149,9 @@ def list_sessions():
 
 
 def dispatch(args):
+    if args.operation == 'corporate':
+        from finance_cli.services.hana_corporate.cli import dispatch as corporate
+        return corporate(args)
     if args.operation in ('setup','transfer') or (args.operation=='onesign' and args.action not in ('import','export','show','list')):
         from .onesign_cli import dispatch as run
         return run(args)
@@ -228,7 +233,9 @@ def main(argv=None):
         # Never echo values from saved records or bank responses.
         raise ValueError('inspect_saved_records_and_inputs: ' + type(error).__name__) from None
     # A sent request the service did not accept is a refusal, not a local error.
-    if isinstance(result,dict) and result.get('processing_status')=='stopped':
+    if args.operation == 'corporate' and isinstance(result, dict) and result.get('error') == 'interrupted':
+        code = 130
+    elif isinstance(result,dict) and result.get('processing_status')=='stopped':
         code = 2
     else:
         code = 1 if isinstance(result, dict) and result.get('network_used') and result.get('accepted') is False else 0

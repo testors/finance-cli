@@ -34,6 +34,8 @@ for args, source in (
     (['capabilities'], ''),
     (['hana','encode-header'], '{"CHNL_SYS_HDPT":{"synthetic":true}}'),
     (['hana','session','list'], ''),
+    (['hana','corporate','login','--session','synthetic','--credential','synthetic'], ''),
+    (['--format','json-v1','hana','corporate','login-onesign','--session','synthetic','--name','synthetic'], ''),
     (['hana','onesign','enroll','--name','synthetic','--run','plan'], ''),
     (['hana','transfer','execute','--name','synthetic','--session','s','--transaction','p','--run','plan'], ''),
     (['giro','request','national.list'], ''),
@@ -111,7 +113,8 @@ def main():
     for required in ('giro/model_schema.json', 'hometax_cli/InvoiceSigner.java', 'hometax_cli/runtime/package-lock.json',
                      'hometax_cli/runtime_require.cjs', 'finance_cli/credentials/registry.py',
                      'finance_cli/server/static/index.html', 'finance_cli/server/static/app.js',
-                     'finance_cli/server/static/app.css', 'finance_cli/server/Caddyfile.example'):
+                     'finance_cli/server/static/app.css', 'finance_cli/server/Caddyfile.example',
+                     'finance_cli/services/hana_corporate/cli.py'):
         if required not in names:
             raise RuntimeError('missing package asset: ' + required)
     with tempfile.TemporaryDirectory(prefix='finance-distribution-') as temp:
