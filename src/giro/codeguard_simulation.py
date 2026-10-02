@@ -97,11 +97,13 @@ class EnvironmentSimulation:
     files uses byte paths and byte contents; None explicitly means fopen
     failed. An open stream retains its input bytes; in-place changes to an
     already open file are outside this experiment model.
+    pid=None preserves an unknown process identity until the first PID read;
+    package preparation can still run without inventing a process identifier.
     """
     def __init__(self, *, pid, sdk, manager_class, packages, files, stat_results,
                  build, commands, file_existence):
-        if type(pid) is not int or type(sdk) is not int:
-            raise AnalysisLimit('explicit simulation PID and SDK integers required')
+        if (pid is not None and type(pid) is not int) or type(sdk) is not int:
+            raise AnalysisLimit('explicit simulation PID or unknown, and SDK integer required')
         self.pid, self.sdk, self.manager_class = pid, sdk, manager_class
         self.packages, self.files, self.stat_results = dict(packages), dict(files), dict(stat_results)
         self.build, self.commands = dict(build), dict(commands)
@@ -110,6 +112,11 @@ class EnvironmentSimulation:
         self.service, self.manager, self.runtime = object(), object(), object()
         self.events = []  # kinds only; no values, paths, commands or identifiers
         self._service_class = _Class('simulation.Service')
+
+    def process_id(self):
+        if self.pid is None:
+            raise AnalysisLimit('environment process PID not supplied')
+        return self.pid
 
     @staticmethod
     def _read(mapping, key):
@@ -253,7 +260,7 @@ class EnvironmentSimulation:
         if operation == 'CallStaticIntMethod':
             receiver, member = args
             if receiver == _Class('android/os/Process') and member.name == 'myPid':
-                return self.pid
+                return self.process_id()
         if operation == 'CallObjectMethod':
             receiver, member, *params = args
             if isinstance(member, _Member):

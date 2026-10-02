@@ -149,6 +149,14 @@ class EnvironmentSimulationTests(unittest.TestCase):
             with self.subTest(scenario=row['scenario']):
                 self.assertEqual(row['changed'], row['expected'])
 
+    def test_unknown_pid_stops_native_lookup_instead_of_becoming_a_value(self):
+        env = environment(self.der, pid=None)
+        with self.assertRaisesRegex(AnalysisLimit, 'process PID not supplied'):
+            env.process_id()
+        with self.assertRaisesRegex(AnalysisLimit, 'process PID not supplied'):
+            native(env, 'native_get_nonce', ('AB'*32, 'TQ==', False, False))
+        self.assertNotIn('native_fopen', env.events)
+
     def test_native_outputs_match_independent_arithmetic_with_declared_files(self):
         env = environment(self.der)
         result = calculate(env)

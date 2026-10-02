@@ -69,7 +69,7 @@ class MemoryPlatform:
         self.events.append(kind if kind != 'package_java' else kind + ':' + args[0])
         if kind == 'package_java':
             return self._package(*args)
-        if kind == 'process_pid': return self.environment.pid
+        if kind == 'process_pid': return self.environment.process_id()
         if kind == 'telephony_service': return self
         if kind == 'telephony_line1_number': return self.phone
         if kind == 'cpu_abi': return self.abi

@@ -121,6 +121,16 @@ class RuntimeTests(unittest.TestCase):
         self.assertEqual(runtime.platform.environment.files[b'/data/sample.app/files/classes.dex'], dex)
         self.assertGreater(runtime.platform.events.count('package_java:input.read'), 6000)
 
+    def test_unknown_pid_preserves_initialization_but_stops_before_challenge(self):
+        runtime = self.runtime()
+        runtime.platform.environment.pid = None
+        runtime.initialize()
+        runtime.wait_for_initialization(timeout=3)
+        self.assertTrue(runtime.process.is_init)
+        with self.assertRaisesRegex(AnalysisLimit, 'process PID not supplied'):
+            runtime.token(timeout=3)
+        self.assertEqual([call[0] for call in self.server.calls], [101])
+
     def test_initialize_then_two_callbacks_reuse_state_and_calculate_both_responses(self):
         runtime = self.ready()
         self.assertIsInstance(runtime, ProtectionRuntime)
