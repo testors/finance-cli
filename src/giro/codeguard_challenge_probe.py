@@ -12,7 +12,7 @@ from .android_json import parse_object, string_field
 from .codeguard_codec import java_base64_decode
 from .codeguard_effects import JavaFault
 from .codeguard_exchange import (UpdaterState, ExchangeStageError, read_line_join,
-                                 rsa_wrap_key, challenge_parts)
+                                 rsa_wrap_key, challenge_parts, rcl_after_challenge)
 from .codeguard_flow import challenge_should_continue
 from .codeguard_http_values import decode_default_utf8
 from .codeguard_platform import key_bytes_from_seed
@@ -63,7 +63,7 @@ class _StringFields:
     def __repr__(self): return '<CodeGuard JSONObject fields (private)>'
 
 
-def inspect_challenge_body(data, state, *, inspect_material=False):
+def inspect_challenge_body(data, state, *, inspect_material=False, policy_consumer=None):
     """Body stage only; not full Updater success or cookie/HTTP equivalence.
 
     HASH_KEY helper failures may return empty while challenge succeeds; do not
@@ -95,6 +95,19 @@ def inspect_challenge_body(data, state, *, inspect_material=False):
             # Optional local diagnostics must not change the original body
             # outcome or leak provider error/input text in a traceback.
             report['initial_material']={'analysis_status':'local_material_inspection_boundary'}
+    if policy_consumer is not None and report['cmd200_body_processed']:
+        # Explicit private consumer receives only the policy suffix, never the
+        # challenge prefix, rule, key, certificate, cookie or whole response.
+        # Its failure is diagnostic and cannot overwrite the decoded body.
+        report['policy_capture']={'status':'unavailable'}
+        try:
+            parts=challenge_parts(challenge)
+            if challenge_should_continue(challenge) and len(parts)>=2:
+                suffix=rcl_after_challenge(state.rcl,parts[0]) if state.rcl else ''
+                policy_consumer(suffix)
+                report['policy_capture']={'status':'delivered','rcl_present':bool(suffix)}
+        except Exception:
+            report['policy_capture']={'status':'processing_error'}
     # Don't return original challenge/error string, RCL, hash/key or parser text.
     return report
 
@@ -114,12 +127,14 @@ def _wrap_new_key(certificate_text, state):
     return rsa_wrap_key(certificate.public_key(),state.key)
 
 
-def probe_challenge(abi, *, inspect_material=False,locale_language=None):
+def probe_challenge(abi, *, inspect_material=False,locale_language=None,policy_consumer=None):
     """At most one 101 and one 200. Requires its OWN user-approved test scope.
 
     Both TLS connections are verified. Never retry to refresh a failed
     exchange, use cached app prefs, follow an endpoint embedded in a response,
-    submit environment data or obtain/use any token. No raw result escapes.
+    submit environment data or obtain/use any token. Reports contain metadata only.
+    An explicitly supplied policy_consumer may receive the RCL policy suffix
+    in memory; it is not given any other exchange material or execution rights.
     """
     result=plan(abi,inspect_material=inspect_material,locale_language=locale_language)
     result.update(offline=False,analysis_status='incomplete',observed_at_utc=
@@ -162,7 +177,8 @@ def probe_challenge(abi, *, inspect_material=False,locale_language=None):
         if body is None:
             result['analysis_status']='cmd200_transport_incomplete'
             return result
-        second.update(inspect_challenge_body(body,state,inspect_material=inspect_material))
+        second.update(inspect_challenge_body(body,state,inspect_material=inspect_material,
+                                            policy_consumer=policy_consumer))
         result['analysis_status']=second['analysis_status']
         return result
     finally:

@@ -62,6 +62,45 @@ class PlanTests(unittest.TestCase):
 
 class BodyTests(unittest.TestCase):
 
+    def test_policy_consumer_receives_only_suffix_and_report_keeps_it_private(self):
+        suffix='[{description:"PRIVATE-POLICY",policy:11,osType:1,enabled:true}]'
+        seen=[]
+        body=json.dumps({'CODE_CHALLENGE':'PRIVATE-CHALLENGE::PRIVATE-RULE',
+            'CODE_RCL':base64.b64encode(('PRIVATE-CHALLENGE'+suffix).encode()).decode()}).encode()
+        result=probe.inspect_challenge_body(body,UpdaterState(),policy_consumer=seen.append)
+        self.assertEqual(seen,[suffix])
+        self.assertTrue(result['cmd200_body_processed'])
+        self.assertEqual(result['policy_capture'],{'status':'delivered','rcl_present':True})
+        self.assertNotIn('PRIVATE',json.dumps(result))
+
+    def test_policy_storage_error_does_not_erase_body_success_or_retry_consumer(self):
+        consumer=MagicMock(side_effect=OSError('PRIVATE-PATH'))
+        result=probe.inspect_challenge_body(b'{CODE_CHALLENGE:"c::r"}',UpdaterState(),policy_consumer=consumer)
+        consumer.assert_called_once_with('')
+        self.assertTrue(result['cmd200_body_processed'])
+        self.assertEqual(result['analysis_status'],'cmd200_body_processed')
+        self.assertEqual(result['policy_capture'],{'status':'processing_error'})
+        self.assertNotIn('PRIVATE',json.dumps(result))
+
+    def test_policy_consumer_is_not_called_for_unassigned_or_failed_challenge(self):
+        for body in (b'{}',b'PRIVATE',b'{CODE_CHALLENGE:"E101_NET_ERROR_PRIVATE::r"}'):
+            consumer=MagicMock()
+            result=probe.inspect_challenge_body(body,UpdaterState(),policy_consumer=consumer)
+            consumer.assert_not_called()
+            self.assertNotIn('PRIVATE',json.dumps(result))
+
+    def test_policy_short_prefix_is_diagnostic_not_body_failure(self):
+        consumer=MagicMock()
+        body=json.dumps({'CODE_CHALLENGE':'long::r','CODE_RCL':base64.b64encode(b'x').decode()}).encode()
+        result=probe.inspect_challenge_body(body,UpdaterState(),policy_consumer=consumer)
+        self.assertTrue(result['cmd200_body_processed'])
+        self.assertEqual(result['policy_capture']['status'],'processing_error')
+        consumer.assert_not_called()
+
+    def test_existing_inspection_without_consumer_keeps_output_contract(self):
+        result=probe.inspect_challenge_body(b'{CODE_CHALLENGE:"c::r"}',UpdaterState())
+        self.assertNotIn('policy_capture',result)
+
     def test_empty_fields_do_not_reject_original_challenge(self):
         result = probe.inspect_challenge_body(b'{}', UpdaterState())
         self.assertTrue(result['cmd200_body_processed'])
@@ -157,11 +196,23 @@ class ExchangeTests(unittest.TestCase):
         self.first.read.return_value = json.dumps({'CERT': self.cert, 'ENGINE_VERSION': 'PRIVATE-VERSION'}).encode()
         self.second.read.return_value = b'{CODE_CHALLENGE:"PRIVATE-CHALLENGE::PRIVATE-RULE"}'
 
-    def run_probe(self):
+    def run_probe(self, **options):
         with patch.object(transport.http.client, 'HTTPSConnection', side_effect=self.connections) as factory, patch.object(probe.time, 'time_ns', return_value=1234567890123):
-            result = probe.probe_challenge('arm64-v8a')
+            result = probe.probe_challenge('arm64-v8a', **options)
         self.factory = factory
         return result
+
+    def test_explicit_policy_consumer_is_connected_without_additional_requests(self):
+        suffix='[{description:"PRIVATE-PACKAGE",policy:11,osType:1,enabled:true}]'
+        self.second.read.return_value=json.dumps({'CODE_CHALLENGE':'c::r',
+            'CODE_RCL':base64.b64encode(('c'+suffix).encode()).decode()}).encode()
+        captured=[]
+        result=self.run_probe(policy_consumer=captured.append)
+        self.assertEqual(captured,[suffix])
+        self.assertEqual(self.factory.call_count,2)
+        self.assertEqual([r['command'] for r in result['requests']],[101,200])
+        self.assertTrue(result['requests'][1]['cmd200_body_processed'])
+        self.assertNotIn('PRIVATE',json.dumps(result))
 
     def test_exact_two_requests_rsa_unwrap_and_hash_key_response(self):
         from cryptography.hazmat.primitives.asymmetric import padding
