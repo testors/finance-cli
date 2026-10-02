@@ -91,6 +91,26 @@ class AuthFlowTests(unittest.TestCase):
         self.assertEqual(result['registration_service_decision'], 'unobserved')
         self.assertFalse(any(name.startswith('registration.') for name in self.server.steps))
 
+    def test_explicit_retry_after_consent_exit_archives_record_before_registering(self):
+        providers = self.providers
+        with patch.object(self, 'providers', side_effect=lambda p: providers(p) | {'consent_provider': lambda: False}):
+            first = self.invoke()
+        self.assertEqual(first['next_action'], 'consent_not_given')
+        self.assertEqual([c[0] for c in self.server.calls],
+                         ['auth.server-cert', 'auth.device-status', 'auth.datetime'])
+        root = Path(self.temp.name).resolve() / 'enrollment'
+        identity, receipt = (root / 'identity.json').read_bytes(), (root / 'attempt.json').read_bytes()
+        self.protection.values.extend(['DISCARDED', '{"CODE_RESPONSE":"SYNTHETIC-LOGIN"}'])
+        with patch('giro.auth_flow.login_dependencies', self.dependencies):
+            result = authenticate(register=True, retry=True, send=True,
+                pin_provider=lambda: '234567', enrollment_providers=self.providers,
+                enrollment_store=EnrollmentStore(root), session_store=self.sessions)
+        self.assertEqual(result['registration_service_decision'], 'success', result)
+        self.assertEqual(result['login_service_decision'], 'success', result)
+        self.assertTrue(result['session_saved'])
+        self.assertEqual((root / 'identity.json').read_bytes(), identity)
+        self.assertEqual([p.read_bytes() for p in (root / 'attempts').glob('*.json')], [receipt])
+
     def test_explicit_retry_archives_initial_rejection_and_reuses_identity_through_login(self):
         accepted = self.server.responses['auth.device-status']
         self.server.responses['auth.device-status'] = (200, {'errorInfo': {'errorCode': '999'}})

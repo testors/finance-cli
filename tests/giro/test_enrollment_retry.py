@@ -49,6 +49,18 @@ class EnrollmentRetryTests(unittest.TestCase):
             with self.assertRaises(EnrollmentRetryUnavailable): store.reserve(retry=True)
             self.assertEqual(path.read_bytes(), b'not-json')
 
+    def test_completed_exit_at_consent_is_retryable_but_later_or_ambiguous_steps_are_not(self):
+        document = rejected()
+        document['next_action'] = 'consent_not_given'
+        document['steps'][0].update(stage='auth.datetime', response_endpoint='auth.datetime',
+            service_decision='success', next_action='identity_and_consent')
+        self.assertTrue(retryable_start_report(document))
+        for change in ({'stage': 'registration.sms-send', 'response_endpoint': 'registration.sms-send'},
+                       {'response_origin': 'transport'}, {'service_decision': 'unobserved'},
+                       {'next_action': 'sms_code'}):
+            changed = document | {'steps': [document['steps'][0] | change]}
+            self.assertFalse(retryable_start_report(changed))
+
     def test_archive_write_failure_keeps_old_record_and_does_not_reserve_retry(self):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory).resolve()

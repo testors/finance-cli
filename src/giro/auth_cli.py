@@ -65,7 +65,7 @@ def review_terms():
             parser.feed(data.decode(response.headers.get_content_charset() or 'utf-8'))
             text = ''.join(parser.parts).strip()
             if not text: raise GiroError('등록 약관의 본문을 확인하지 못했습니다.')
-            if answer(term['name']+'\n'+text+'\n이 약관에 동의하면 "동의"를 입력하세요:') != '동의':
+            if ''.join(answer(term['name']+'\n'+text+'\n이 약관에 동의하면 "동의"를 입력하세요:').split()) != '동의':
                 return False
         finally:
             connection.close()
@@ -74,7 +74,8 @@ def review_terms():
 
 def enrollment_inputs(profile, carrier):
     def consent():
-        if answer('CLI 기기를 등록하면 기존 휴대폰 등록이 바뀔 수 있습니다. 계속하려면 "기기 등록"을 입력하세요:') != '기기 등록':
+        value = answer('CLI 기기를 등록하면 기존 휴대폰 등록이 바뀔 수 있습니다. 계속하려면 "기기등록"을 입력하세요:')
+        if ''.join(value.split()) != '기기등록':
             return False
         return review_terms()
     def identity():
