@@ -443,6 +443,45 @@ def check_fingerprint_steps(context):
     return True
 
 
+def invalidate_engine_steps(context):
+    """Describe the two-level cleanup; no host deletion or recursive walk.
+
+    Delete booleans are used only to select a log-path read. A Java Exception
+    ends the whole scan, retaining earlier mutations; unknown effects and
+    LinkFault remain unresolved. Preferences and installed files are untouched.
+    """
+    def files(value):
+        if value is not None and type(value) not in (list, tuple):
+            raise AnalysisLimit('observed File array or null required')
+        return value
+
+    def remove(file):
+        if observed_bool((yield _call('file.delete', file))):
+            yield _call('file.getAbsolutePath', file)  # evaluated even with logging disabled
+
+    try:
+        directory = yield _call('context.getFilesDir', context)
+        roots = files((yield _call('file.listFiles', directory)))
+        if roots is None: return
+        for file in roots:
+            if file is None: continue
+            yield _call('file.getAbsolutePath', file)
+            if observed_bool((yield _call('file.isDirectory', file))):
+                children = files((yield _call('file.listFiles', file)))
+                if children is None: continue
+                for child in children:
+                    if child is None: continue
+                    path = yield from _nonnull((yield _call('file.getPath', child)), 'cleanup.child.path')
+                    if any(part in path for part in ('.MF', '.SF', 'libCodeGuard.so', 'libImageDecoder.so')):
+                        yield from remove(child)
+            else:
+                path = yield from _nonnull((yield _call('file.getPath', file)), 'cleanup.root.path')
+                if '.dex' in path:
+                    yield from remove(file)
+    except JavaFault:
+        pass  # source catches Exception, not Error or a missing provider input
+
+
 def _project_package_steps(generator):
     """Expand package checks without starting IO, JNI or a worker thread."""
     value, pending = None, None
@@ -459,6 +498,8 @@ def _project_package_steps(generator):
             elif effect.kind == 'check_fingerprint':
                 context = yield _call('main.staticContext')
                 value = yield from check_fingerprint_steps(context)
+            elif effect.kind == 'invalidate_engine_artifacts':
+                value = yield from invalidate_engine_steps(*effect.args)
             elif effect.kind in ('zip_error_message', 'fingerprint_error_message'):
                 agent = yield _call('agent.getInstance')
                 kind = 'UnZip' if effect.kind == 'zip_error_message' else 'FingerPrint'

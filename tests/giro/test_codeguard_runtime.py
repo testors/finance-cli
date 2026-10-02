@@ -285,6 +285,25 @@ class RuntimeTests(unittest.TestCase):
         self.assertIsNone(challenge.certificate)
         self.assertIsNone(challenge.fourth)
 
+    def test_verification_failure_clears_prepared_memory_files_and_delivers_unchanged_callback(self):
+        token = 'SYNTHETIC-CODEGUARD_VERIFICATION_TOKEN_FAIL'
+        self.token_fields = lambda _: {'CODE_TOKEN':token}
+        runtime = self.ready()
+        platform = runtime.platform
+        original = platform.environment.files[platform.application.source_dir.encode()]
+        preferences = dict(platform.preferences)
+        self.assertIn(b'/data/sample.app/files/classes.dex', platform.environment.files)
+        self.assertEqual(runtime.token(timeout=3), token)
+        self.assertEqual([call[0] for call in self.server.calls], [101,200,300])
+        self.assertEqual(platform.environment.files[platform.application.source_dir.encode()], original)
+        self.assertEqual(platform.preferences, preferences)
+        for suffix in ('classes.dex', 'META-INF/MANIFEST.MF', 'META-INF/CERT.SF',
+                       'lib/libCodeGuard.so', 'lib/libImageDecoder.so'):
+            self.assertNotIn(('/data/sample.app/files/'+suffix).encode(), platform.environment.files)
+        self.assertEqual(platform.events.count('package_java:file.delete'), 5)
+        self.assertEqual(runtime.events.count('manager_token_listener'), 1)
+        self.assertEqual(next(j.work.phase for j in runtime.jobs if j.kind == 'task'), 'returned')
+
     def test_unknown_environment_failure_is_processing_error_without_callback_or_post(self):
         runtime = self.ready()
         del runtime.platform.environment.file_existence['TAGS']

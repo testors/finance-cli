@@ -59,6 +59,30 @@ class MemoryPlatform:
         path = self.path(path)
         return path in self.directories or self.environment.files.get(path.encode()) is not None
 
+    def _list_files(self, path):
+        if path not in self.directories: return None
+        children = [self.path(path+'/'+name) for name in self.directories[path]]
+        # Preparation creates files/directories in this complete memory
+        # namespace. Include those children without consulting host paths.
+        candidates = [*self.directories, *(p.decode() for p,v in self.environment.files.items() if v is not None)]
+        for child in candidates:
+            if child != path and child.rsplit('/', 1)[0] == path and child not in children:
+                children.append(child)
+        return children
+
+    def _delete(self, path):
+        if not self._exists(path): return False
+        if path in self.directories:
+            if self._list_files(path): return False  # File.delete is not recursive
+            del self.directories[path]
+        else:
+            del self.environment.files[path.encode()]
+        self.modified.pop(path, None)
+        parent, _, name = path.rpartition('/')
+        if name in self.directories.get(parent, ()):
+            self.directories[parent].remove(name)
+        return True
+
     @staticmethod
     def _read(stream, count):
         data = stream.read(count)
@@ -121,6 +145,12 @@ class MemoryPlatform:
         if name == 'file.separator': return '/'
         if name == 'file.new': return self.path(args[0])
         if name == 'file.getPath': return args[0]
+        if name == 'file.getAbsolutePath':
+            if not args[0].startswith('/'):
+                raise AnalysisLimit('memory working directory unavailable')
+            return args[0]
+        if name == 'file.listFiles': return self._list_files(args[0])
+        if name == 'file.delete': return self._delete(args[0])
         if name == 'file.exists': return self._exists(args[0])
         if name == 'file.isDirectory': return args[0] in self.directories
         if name == 'file.mkdirs':
