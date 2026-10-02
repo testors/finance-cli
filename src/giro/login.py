@@ -126,10 +126,12 @@ class LoginAttempt:
 
     def report(self):
         login = self.response if self.stage == 'auth.pin' else None
-        decision = ('unobserved' if login is None or login.origin != 'response' else
-                    'success' if login.app_success else 'failure')
+        def decision(response):
+            return ('unobserved' if response is None or response.origin != 'response' else
+                    'success' if response.app_success else 'failure')
         return {'stage': self.stage, 'login_app_success': None if login is None else login.app_success,
-                'login_service_decision': decision,
+                'login_service_decision': decision(login),
+                'last_response_service_decision': decision(self.response),
                 'session_ready': self.session is not None and self.session.active,
                 'automatic_retry': False, 'processing_issues': list(self.processing_issues),
                 'next_action': self.next_action}

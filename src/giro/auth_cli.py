@@ -108,6 +108,10 @@ def run_auth(args):
         pin_provider=lambda: secret('로그인 PIN 6자리: '),
         enrollment_providers=lambda profile: enrollment_inputs(profile, getattr(args, 'carrier', None)),
         profile_path=args.protection_profile, public_cache=args.public_cache)
+    rejected = any(report.get(field) == 'failure'
+        for report in [result, *result.get('steps', []), result.get('login') or {}]
+        for field in ('service_decision', 'last_response_service_decision',
+                      'registration_service_decision', 'login_service_decision'))
     status = (0 if result.get('plan_only') or result.get('login_service_decision') == 'success' else
-              2 if result.get('processing_issues') or result.get('login_service_decision') == 'failure' else 4)
+              2 if result.get('processing_issues') or rejected else 4)
     return result, status

@@ -43,6 +43,29 @@ class CliTests(unittest.TestCase):
         self.assertEqual(code, 2)
         self.assertEqual(result['error'], 'validation_error')
 
+    def test_auth_exit_distinguishes_rejection_preparation_and_saved_success(self):
+        cases = (
+            ('register', {'steps': [{'service_decision': 'failure'}]}, 2),
+            ('register', {'registration_service_decision': 'failure'}, 2),
+            ('register', {'registration_service_decision': 'success',
+                          'login': {'last_response_service_decision': 'failure'}}, 2),
+            ('login', {'last_response_service_decision': 'failure'}, 2),
+            ('login', {'last_response_service_decision': 'success',
+                       'next_action': 'sms_identity_verification'}, 4),
+            ('register', {'steps': [{'service_decision': 'success'}],
+                          'next_action': 'member_join'}, 4),
+            ('register', {'registration_service_decision': 'success',
+                          'login_service_decision': 'success',
+                          'processing_issues': ['session_save_incomplete']}, 0),
+        )
+        for action, observed, expected in cases:
+            with self.subTest(action=action, observed=observed), \
+                 patch('giro.auth_cli.private_terminal'), \
+                 patch('giro.auth_cli.authenticate', return_value=observed):
+                code, result = self.call(['auth', action, '--send'])
+                self.assertEqual(code, expected)
+                self.assertEqual(result, observed)
+
     def test_bootstrap_offline_unless_live_explicit(self):
         (code, result) = self.call(['auth', 'bootstrap'])
         self.assertEqual(code, 0)

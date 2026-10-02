@@ -1,4 +1,5 @@
 from contextlib import contextmanager
+import json
 from pathlib import Path
 import tempfile
 from types import SimpleNamespace
@@ -77,6 +78,35 @@ class AuthFlowTests(unittest.TestCase):
         self.assertEqual(result['login_service_decision'], 'failure')
         self.assertFalse(result['session_saved'])
         self.assertEqual(self.server.steps.count('auth.pin'), 1)
+
+    def test_explicit_login_after_registered_attempt_reuses_identity_without_enrolling(self):
+        self.protection.values.extend(['DISCARDED', '{"CODE_RESPONSE":"SYNTHETIC-LOGIN"}'])
+        accepted_login = self.server.responses['auth.pin']
+        self.server.responses['auth.pin'] = (200, {'responseCode': '999'})
+        first = self.invoke()
+        self.assertEqual(first['registration_service_decision'], 'success')
+        self.assertEqual(first['login_service_decision'], 'failure')
+        enrollment_root = Path(self.temp.name).resolve()/'enrollment'
+        receipt = (enrollment_root/'attempt.json').read_bytes()
+        self.assertEqual(json.loads(receipt)['registration_service_decision'], 'success')
+        device_id = EnrollmentStore(enrollment_root).identity()
+        old_calls = len(self.server.calls)
+        self.server.responses['auth.device-status'] = (200, {'responseCode': '000', 'deviceRegYn': 'Y'})
+        self.server.responses['auth.pin'] = accepted_login
+        self.protection.values.extend(['DISCARDED', '{"CODE_RESPONSE":"SYNTHETIC-LOGIN"}'])
+        with patch('giro.auth_flow.login_dependencies', self.dependencies):
+            second = authenticate(register=False, send=True, pin_provider=lambda: '234567',
+                enrollment_providers=Mock(side_effect=AssertionError('no enrollment')),
+                enrollment_store=EnrollmentStore(enrollment_root), session_store=self.sessions)
+        self.assertEqual(second['login_service_decision'], 'success', second)
+        self.assertTrue(second['session_saved'], second)
+        self.assertEqual((enrollment_root/'attempt.json').read_bytes(), receipt)
+        calls = self.server.calls[old_calls:]
+        self.assertEqual([call[0] for call in calls],
+                         ['auth.server-cert', 'auth.device-status', 'auth.datetime', 'auth.pin'])
+        self.assertTrue(all(call[1]['deviceId'] == [device_id] for call in calls))
+        with self.sessions.use() as (session, _):
+            self.assertEqual(session.device_id, device_id)
 
     def test_storage_failure_does_not_turn_registration_or_login_into_failure(self):
         self.protection.values.extend(['DISCARDED', '{"CODE_RESPONSE":"SYNTHETIC-LOGIN"}'])

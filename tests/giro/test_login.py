@@ -322,6 +322,8 @@ class LoginTests(unittest.TestCase):
         result = self.run_login()
         self.assertEqual(result.stage, 'auth.device-status')
         self.assertFalse(result.response.app_success)
+        self.assertEqual(result.report()['last_response_service_decision'], 'failure')
+        self.assertEqual(result.report()['login_service_decision'], 'unobserved')
         self.assertIsNone(result.report()['next_action'])
         self.pin.assert_not_called()
 
@@ -351,6 +353,7 @@ class LoginTests(unittest.TestCase):
         result = self.run_login()
         self.assertFalse(result.report()['login_app_success'])
         self.assertEqual(result.report()['login_service_decision'], 'unobserved')
+        self.assertEqual(result.report()['last_response_service_decision'], 'unobserved')
         with self.assertRaises(GiroError):
             self.run_login()
         self.assertEqual(self.server.steps.count('auth.pin'), 1)
