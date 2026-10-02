@@ -36,6 +36,8 @@ for args, source in (
     (['hana','session','list'], ''),
     (['hana','corporate','login','--session','synthetic','--credential','synthetic'], ''),
     (['--format','json-v1','hana','corporate','login-onesign','--session','synthetic','--name','synthetic'], ''),
+    (['hana','corporate','login-idpw','--session','synthetic','--user-id','SyntheticId','--settings','synthetic'], ''),
+    (['--format','json-v1','hana','corporate','login-idpw','--session','synthetic','--user-id','SyntheticId','--settings','synthetic'], ''),
     (['hana','onesign','enroll','--name','synthetic','--run','plan'], ''),
     (['hana','transfer','execute','--name','synthetic','--session','s','--transaction','p','--run','plan'], ''),
     (['giro','request','national.list'], ''),

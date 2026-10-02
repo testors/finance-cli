@@ -1,6 +1,7 @@
-"""Corporate certificate-login wire contracts. Pure functions, no I/O."""
+"""Corporate login wire contracts. Pure functions, no I/O."""
 import json
-from urllib.parse import quote, quote_from_bytes
+import re
+from urllib.parse import quote, quote_from_bytes, quote_plus
 
 ORIGIN = 'https://cmb.hanabank.com'
 VERSION = '6.2.2'
@@ -9,6 +10,9 @@ PATHS = {
     'app-info': '/CCOM/COM01/APP_INFO.do',
     'nonce': '/CCOM/COM01/DELFINO_NONCE.do',
     'login': '/CLGN/LGN01/CLGN010100102.do',
+    'keypad-key': '/CCOM/COM01/NFILTER_KEY.do',
+    'login-idpw': '/CLGN/LGN01/CLGN010100101.do',
+    'logout': '/CLGN/LGN02/CLGN020100101.do',
     'onesign-request': '/CCOM/COM01/HANA_ONESIGN_REQUEST.do',
     'onesign-confirm': '/CCOM/COM01/HANA_ONESIGN_CONFIRM.do',
     'withdrawal-info': '/CCOM/COM03/WDRW_ACCT_INFO_PTCL.do',
@@ -16,6 +20,9 @@ PATHS = {
 }
 KNOWN_ERRORS = {'FRU0001': 'session_required', 'FRU00031': 'service_stopped',
                 'FORCE_PW_REG': 'password_change_required', 'AUTH_58': 'permission_required'}
+PASSWORD_ERRORS = dict(zip(('OCOM16209', 'OCOM16210', 'OCOM16211', 'OCOM16212', 'BCOM16069'), range(1, 6)))
+ID_ERRORS = {**dict.fromkeys(PASSWORD_ERRORS, 'login_password_mismatch'),
+             'UNFY_AGREE_URL': 'agreement_required', 'BCBI10114': 'corporate_notice_required'}
 
 
 class Stop(ValueError):
@@ -46,6 +53,67 @@ def form(value):
     for key, item in value.items():
         add(key, item)
     return '&'.join(pairs).encode('utf-8')
+
+
+def native_form(value):
+    """Flat UTF-8 FormBody: null omitted, spaces '+', '~' escaped, '*' retained."""
+    def encode(text):
+        require(isinstance(text, str), 'invalid_native_form')
+        return quote_plus(text, safe='*').replace('~', '%7E')
+    return '&'.join(encode(k) + '=' + encode(v) for k, v in value.items() if v is not None).encode('utf-8')
+
+
+def user_id(value):
+    require(isinstance(value, str) and re.fullmatch(r'[A-Za-z0-9]{4,20}', value) is not None, 'invalid_corporate_user_id')
+    return value.upper()
+
+
+def id_password(value):
+    require(isinstance(value, str) and 6 <= len(value) <= 16 and all(32 <= ord(c) <= 126 for c in value),
+            'invalid_login_password')
+    return value
+
+
+def idpw_body(identity, encrypted, push):
+    require(isinstance(encrypted, str) and bool(encrypted), 'encrypted_password_unavailable')
+    is_push = 'Y' if push['management_number'] else 'N'
+    require(push['is_push'] == is_push, 'inconsistent_push_profile')
+    return {'LGIN_CERT_METH_CD': '1', 'VRTL_LGIN_YN': 'N', 'USER_ID': user_id(identity),
+            'LOGIN_PW': encrypted, 'IS_PUSH': is_push, 'C2DM_IDNM': push['token']}
+
+
+def assess_native(status, value):
+    """Only the native String status '200' selects the success branch."""
+    result = {'http_status': status, 'service_status': 'unconfirmed', 'reason': 'response_unconfirmed'}
+    if not 200 <= status < 300 or not isinstance(value, dict):
+        return result
+    header = value.get('headerData')
+    if not isinstance(header, dict):
+        return result
+    code = header.get('status')
+    # Gson String fields accept scalar numbers and booleans, but not containers.
+    if code is None or code == '' or not isinstance(code, (str, int, float, bool)):
+        return result
+    code = ('true' if code else 'false') if isinstance(code, bool) else str(code)
+    if code == '200':
+        result.update(service_status='accepted', reason='native_login_callback', business_status='200')
+    else:
+        error = header.get('errorCode')
+        error = error if isinstance(error, str) else ''
+        result.update(service_status='rejected', reason=ID_ERRORS.get(error, KNOWN_ERRORS.get(error, 'business_error')))
+        if error in ID_ERRORS or error in KNOWN_ERRORS:
+            result['business_error_code'] = error
+        if error in PASSWORD_ERRORS:
+            result['password_failures_reported'] = PASSWORD_ERRORS[error]
+    return result
+
+
+def customer_guidance(value):
+    if value.get('CRPN_REG_NO') in ('1101110672538', 1101110672538) and value.get('LGIN_CERT_METH_CD') in ('1', 1):
+        return 'certificate_login_required'
+    if value.get('eddCddPopUpYn') in ('Y', 'Y1', 'Y2'):
+        return 'customer_verification_choice_required' if value.get('CUST_QUAL_CD') in ('014', 14) else 'visit_branch_notice'
+    return 'none'
 
 
 def joint_tbs(nonce):

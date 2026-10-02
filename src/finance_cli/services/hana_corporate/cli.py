@@ -7,11 +7,11 @@ import sys
 import warnings
 
 from finance_cli.cli.credentials import add_selection, resolve
-from . import login, store, protocol
+from . import idpw, keypad, login, store, protocol
 
 
 def add_parser(sub):
-    parser = sub.add_parser('corporate', help='기업뱅킹 인증서 로그인 (합성 검증; 실서버 검증 전)')
+    parser = sub.add_parser('corporate', help='기업뱅킹 로그인 (합성 검증; 실서버 검증 전)')
     commands = parser.add_subparsers(dest='corporate_action', required=True)
     session = commands.add_parser('session', help='기업 채널 세션 준비·관측 결과').add_subparsers(dest='corporate_session_action', required=True)
     item = session.add_parser('new', help='사용자가 지정한 기업 앱 기기 정보로 새 세션 생성; 무통신')
@@ -23,6 +23,16 @@ def add_parser(sub):
     item.add_argument('--session', required=True)
     add_selection(item)
     item.add_argument('--send', action='store_true')
+    item = commands.add_parser('login-idpw', help='기업 ID·로그인 비밀번호로 로그인')
+    item.add_argument('--session', required=True)
+    item.add_argument('--user-id', required=True)
+    item.add_argument('--settings', required=True, help='공통 서비스 설정 또는 기업 키패드 설정 이름')
+    item.add_argument('--password-stdin', action='store_true', help='기업 로그인 비밀번호 한 줄만 읽음')
+    item.add_argument('--send', action='store_true')
+    setup = commands.add_parser('setup', help='기업 키패드 설정 준비; 무통신').add_subparsers(dest='corporate_setup_action', required=True)
+    item = setup.add_parser('extract', help='사용자 설치 패키지에서 기업 6.2.2 키패드 설정만 추출')
+    item.add_argument('--package', required=True, type=Path)
+    item.add_argument('--settings', required=True)
     item = commands.add_parser('login-onesign', help='공통 하나인증서로 개인사업자 기업 로그인; 기존 연결 ID 사용')
     item.add_argument('--session', required=True)
     item.add_argument('--name', required=True, help='기존 하나인증서 identity 이름')
@@ -57,10 +67,20 @@ def pin_provider():
 
 def dispatch(args):
     try:
+        if args.corporate_action == 'setup':
+            return keypad.install(args.package, args.settings)
         if args.corporate_action == 'session':
             if args.corporate_session_action == 'show':
                 return store.inspect(args.session)
             return store.create(args.session, json.loads(args.device_file.read_text(encoding='utf-8')))
+        if args.corporate_action == 'login-idpw':
+            if not args.send:
+                return idpw.plan()
+            def login_password():
+                if args.password_stdin:
+                    return sys.stdin.buffer.readline().removesuffix(b'\n').removesuffix(b'\r').decode('utf-8')
+                return hidden('기업 로그인 비밀번호: ')
+            return idpw.login(args.session, args.user_id, args.settings, send=True, inputs={'password': login_password})
         joint = args.corporate_action == 'login'
         method = '2' if joint else 'S'
         if not args.send:

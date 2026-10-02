@@ -15,21 +15,23 @@ class Client:
         self.cookies = []
         self.saved = {'channel': 'corporate', 'cookies': [], 'login_verified': False}
 
-    def request(self, stage, body=None, *, native=False, observe=None):
+    def request(self, stage, body=None, *, native=False, observe=None, assessor=protocol.assess, redact=()):
         protocol.require(stage in protocol.PATHS, 'corporate_endpoint_not_allowed')
-        raw = b'' if native else protocol.form({**(body or {}), 'COMM_HEAD': (body or {}).get('COMM_HEAD', {})})
+        raw = (b'' if body is None else protocol.native_form(body)) if native else protocol.form(
+            {**(body or {}), 'COMM_HEAD': (body or {}).get('COMM_HEAD', {})})
         method = 'POST' if native or raw else 'GET'
         agent = self.profile['custom_user_agent']
-        headers = {'Accept': 'application/json', 'Content-Type': 'application/json' if native else
-                   'application/x-www-form-urlencoded; charset=UTF-8',
+        content_type = ('application/json' if body is None else 'application/x-www-form-urlencoded') if native else 'application/x-www-form-urlencoded; charset=UTF-8'
+        headers = {'Accept': 'application/json', 'Content-Type': content_type,
                    'CUSTOM_USER_AGENT': json.dumps(agent, ensure_ascii=True, separators=(',', ':')),
                    'User-Agent': 'okhttp/5.0.0-alpha.10' if native else agent['userAgent'], 'Accept-Encoding': 'gzip'}
         if native:
             headers.update({'charset': 'UTF-8', 'Cache-Control': 'no-cache'})
         attempt = self.directory / stage
         attempt.mkdir(mode=0o700)  # Exclusive durable reservation, before any request.
+        recorded = protocol.native_form({k: '[redacted]' if k in redact else v for k, v in body.items()}) if redact else raw
         store.record(attempt / 'request.json', {'method': method, 'path': protocol.PATHS[stage], 'headers': headers,
-                                               'body': base64.b64encode(raw).decode()})
+                                               'body': base64.b64encode(recorded).decode()})
         store.record(attempt / 'attempt.json', {'automatic_retry': False})
         receipt = {'stage': stage, 'service_status': 'unconfirmed', 'processing_status': 'prepared'}
         self.result['stages'].append(receipt)
@@ -48,7 +50,7 @@ class Client:
             value = json.loads(decoded)
         except (ValueError, OSError, EOFError):
             raise protocol.Stop('response_decode_failed') from None
-        receipt.update(protocol.assess(status, value))
+        receipt.update(assessor(status, value))
         payload = value.get('data') if isinstance(value, dict) else None
         if observe is not None:
             observe(receipt, payload)  # Preserve login success before saving anything.
