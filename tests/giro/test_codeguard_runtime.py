@@ -98,9 +98,10 @@ class RuntimeTests(unittest.TestCase):
             document = self.token_fields(count)
         return 200, headers, json.dumps(document).encode()
 
-    def runtime(self, **inputs):
+    def runtime(self, *, platform_transform=None, **inputs):
         platform = memory_platform(self.der, **inputs)
         platform.environment.file_existence['TAGS'] = False
+        if platform_transform is not None: platform = platform_transform(platform)
         runtime = PythonProtectionRuntime(config=ManagerConfig(platform.service, 'SAMPLE', '1', self.base, self.base),
             platform=platform, transport=self.transport(max_requests=12), crypto=CodeGuardCrypto(clock=count(1000).__next__),
             locale_language='ko', map_profile='aosp-8')

@@ -1,4 +1,4 @@
-"""JSON CLI, offline by default; fixed PIN-free probes only with --live."""
+"""JSON CLI; explicit --send/--live for institution operations."""
 from datetime import date, datetime
 import getpass
 from pathlib import Path
@@ -22,7 +22,7 @@ def _load(path):
 
 
 def parser():
-    root = ArgumentParser(prog='fin giro', description="모바일지로 분석 CLI (기본 오프라인; 명시적 --live 초기 프로브만 통신)")
+    root = ArgumentParser(prog='fin giro', description="모바일지로 CLI (기본 무통신; 실제 업무는 명시적 --send/--live)")
     sub = root.add_subparsers(dest="command", required=True)
     runtime = sub.add_parser("runtime", help="서버 배포용 로컬 점검; 기기 보안 검사/통신 아님")
     runtime.add_subparsers(dest="action", required=True).add_parser("check", help="패키지 리소스·합성 암호·문자셋·시간대 점검")
@@ -32,7 +32,14 @@ def parser():
     auth_sub = auth.add_subparsers(dest="action", required=True)
     auth_sub.add_parser("plan", help="확인된 인증 흐름과 미해결 항목")
     auth_sub.add_parser('registration-plan', help='기존 개인 회원 신규 기기 등록 순서·입력·검증 범위; 무통신')
-    auth_sub.add_parser("login", help="미구현: 네트워크 요청 없이 오류 반환")
+    for action in ('login', 'register'):
+        item = auth_sub.add_parser(action, help='PIN 로그인' if action == 'login' else '기존 개인 회원의 CLI 기기 등록 후 로그인')
+        item.add_argument('--live', '--send', dest='live', action='store_true', help='명시한 인증 요청 실행; 기본은 무통신 계획')
+        item.add_argument('--protection-profile', help='설치된 기본 자료 대신 사용할 보호 입력 자료')
+        item.add_argument('--public-cache', help='수신자 인증서·CRL의 공개 자료 캐시')
+        if action == 'register': item.add_argument('--carrier', choices=('SKT', 'SKM', 'LGT', 'LGM'))
+    install = auth_sub.add_parser('install-profile', help='개인 보호 입력 자료 설치; 기관 통신 없음')
+    install.add_argument('--input', required=True)
     trust = auth_sub.add_parser('prepare-trust', help='고정 해시의 공개 루트 2개 준비; 기본은 무통신 계획')
     trust.add_argument('--cache', help='명시적인 기존 절대경로 디렉터리; 공개 인증서·폐지목록 전용')
     trust.add_argument('--live', '--send', dest='live', action='store_true',
@@ -87,9 +94,18 @@ def parser():
     accounts_sub = accounts.add_subparsers(dest='action', required=True)
     account_list = accounts_sub.add_parser('list')
     account_list.add_argument('--input', required=True, help='납부 가능 계좌 응답 JSON 파일 또는 -')
-    payment = sub.add_parser('payment', help='납부 준비 정보·로컬 결과 해석; 실제 납부 없음')
+    receipts = sub.add_parser('receipts', help='저장된 세션으로 납부내역 조회; 재납부·취소 없음')
+    receipt_list = receipts.add_subparsers(dest='action', required=True).add_parser('list')
+    receipt_list.add_argument('--start-date', type=date.fromisoformat, required=True)
+    receipt_list.add_argument('--end-date', type=date.fromisoformat, required=True)
+    receipt_list.add_argument('--page', type=int, default=1)
+    receipt_list.add_argument('--live', '--send', dest='live', action='store_true')
+    payment = sub.add_parser('payment', help='납부 계획·등록계좌 국세 납부·결과 해석')
     payment_sub = payment.add_subparsers(dest='action', required=True)
     payment_sub.add_parser('plan', help='등록계좌·홈택스 연계 납부의 지원 범위')
+    pay = payment_sub.add_parser('pay', help='저장된 로그인으로 국세 조회 후 계좌·금액 확인 및 단건 납부')
+    pay.add_argument('--live', '--send', dest='live', action='store_true')
+    pay.add_argument('--amount', help='금액 변경이 가능한 고지에만 적용할 납부액')
     payment_result = payment_sub.add_parser('result', help='복호화된 납부 응답의 판정; 추가 조회 없음')
     payment_result.add_argument('--type', choices=('national', 'hometax'), required=True)
     payment_result.add_argument('--input', required=True, help='납부 응답 JSON 파일 또는 -')
@@ -98,7 +114,9 @@ def parser():
     for action in ("list", "due", "show"):
         item = bill_sub.add_parser(action)
         item.add_argument("--type", choices=TAX_TYPES, required=True)
-        item.add_argument("--input", required=True, help="로컬 JSON 파일 또는 표준입력(-)")
+        item.add_argument("--input", required=action == 'show', help="로컬 JSON 파일 또는 표준입력(-)")
+        if action != 'show':
+            item.add_argument('--live', '--send', dest='live', action='store_true', help='저장된 로그인으로 본인 고지 조회')
         if action == "due":
             item.add_argument("--within-days", type=int, default=7)
             item.add_argument("--today", type=date.fromisoformat, help="기준일 YYYY-MM-DD; 기본 Asia/Seoul")
@@ -119,7 +137,14 @@ def run(args):
         from .payment import account_options
         result = account_options(_load(args.input))
         return result, 0 if result['app_success'] else 2
+    if args.command == 'receipts':
+        from .query_flow import list_receipts
+        result = list_receipts(args.start_date, args.end_date, page=args.page, send=args.live)
+        return result, 0 if result.get('plan_only') or result.get('app_success') else 2
     if args.command == 'payment':
+        if args.action == 'pay':
+            from .payment_cli import run_payment
+            return run_payment(args)
         from .payment import payment_plan, payment_result
         if args.action == 'plan':
             return payment_plan(), 0
@@ -139,8 +164,9 @@ def run(args):
         if args.action == 'registration-plan':
             from .registration_flow import registration_plan
             return registration_plan(), 0
-        if args.action == "login":
-            return {"error": "live_auth_unavailable", **auth_plan()}, 4
+        if args.action in ('login', 'register', 'install-profile'):
+            from .auth_cli import run_auth
+            return run_auth(args)
         if args.action == 'prepare-trust':
             from .recipient_trust import prepare_trust
             result = prepare_trust(args.cache, send=args.live)
@@ -259,10 +285,16 @@ def run(args):
                 raise GiroError("안전한 PIN 입력 터미널을 열 수 없습니다.") from None
         cipher = encode_pin(pin, key)
         return {"offline": True, "live_login_verified": False, "pin_ciphertext": cipher}, 0
-    document = _load(args.input)
-    if args.action == "show":
-        return normalize_detail(document, args.type), 0
-    result = normalize_pages(document, args.type)
+    if args.input is not None:
+        if getattr(args, 'live', False): raise GiroError('--input과 --send는 함께 사용할 수 없습니다.')
+        document = _load(args.input)
+        if args.action == 'show': return normalize_detail(document, args.type), 0
+        result = normalize_pages(document, args.type)
+    else:
+        from .query_flow import list_bills
+        result = list_bills(args.type, send=args.live)
+        if result.get('plan_only'): return result, 0
+        if not result.get('app_success'): return result, 2 if result.get('app_success') is False else 4
     if args.action == "due":
         try:
             today = args.today or datetime.now(ZoneInfo("Asia/Seoul")).date()

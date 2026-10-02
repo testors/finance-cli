@@ -8,6 +8,7 @@ import hashlib
 
 from .codeguard_codec import java_base64_decode
 from .codeguard_effects import Effect, JavaFault, observed_bool
+from .codeguard_artifacts import DigestRead
 from .codeguard_rule import AnalysisLimit
 
 
@@ -38,6 +39,10 @@ class ReadOnce:
 def _digest_after_one_read(available, observation, md5):
     if type(available) is not int or not 0 <= available < 2**31:
         raise AnalysisLimit('actual FileInputStream.available nonnegative int required')
+    if isinstance(observation, DigestRead):
+        if available != observation.content.size:
+            raise AnalysisLimit('complete immutable read size mismatch')
+        return observation.content.md5 if observed_bool(md5) else observation.content.sha256
     if not isinstance(observation,ReadOnce) or type(observation.count) is not int:
         raise AnalysisLimit('actual single read observation required')
     if not -1 <= observation.count <= available or type(observation.data) is not bytes:

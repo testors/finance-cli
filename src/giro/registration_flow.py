@@ -26,22 +26,23 @@ TERMS_URL = 'https://m.giro.or.kr/girohelp/guide/mobileProvision.m'
 
 def registration_plan():
     return dict(offline=True, network_used=False, live_registration_tested=False,
-        implementation='explicit-dependency Python enrollment workflow',
+        implementation='standalone Python CLI enrollment and login with prepared inputs',
         scope='existing personal member, SKT/SKM/LGT/LGM, existing PIN if deviceChgYn=Y',
         identity_source='persistent CLI-generated identifier; not an observed Android ID',
         terms={'url': TERMS_URL, 'method': 'POST', 'items': list(TERMS)},
         sequence=['auth.server-cert', 'recipient.validate', 'protection.initialize',
             'auth.device-status', 'auth.datetime', 'codeguard.token', 'registration.user-info',
             'registration.sms-send', 'registration.sms-verify',
-            'registration.check-user if deviceChgYn=Y', 'registration.pin'],
-        max_business_requests=8, max_codeguard_requests=3,
-        retries=0, login=False, payment=False, automatic_alert_number_change=False,
-        required_inputs=['current recipient trust/CRLs', 'explicit protection runtime and observations',
+            'registration.check-user if deviceChgYn=Y', 'registration.pin',
+            'auth.datetime', 'codeguard.token twice', 'auth.pin', 'encrypted session save'],
+        max_business_requests=10, max_codeguard_requests=7,
+        retries=0, login=True, payment=False, automatic_alert_number_change=False,
+        required_inputs=['current recipient trust/CRLs', 'private prepared protection profile',
             'three reviewed consent terms', 'personal identity and own phone',
             'SMS code', 'existing six-digit login PIN when required', 'new six-digit PIN twice'],
         remaining_live_questions=['CLI ID acceptance', 'existing phone registration effect',
             'SMS/identity acceptance', 'PIN registration acceptance'],
-        default_runtime_available=False)
+        default_runtime_available=True)
 
 
 class EnrollmentStore:
@@ -86,6 +87,11 @@ class EnrollmentAttempt:
     processing_issues: list = field(default_factory=list)
     next_action: str = 'not_started'
     registration_service_decision: str = 'unobserved'
+    login_attempt: object = None
+
+    @property
+    def session(self):
+        return None if self.login_attempt is None else self.login_attempt.session
 
     def report(self):
         return dict(steps=[step.report() for step in self.steps],
@@ -93,16 +99,18 @@ class EnrollmentAttempt:
             processing_issues=list(self.processing_issues), next_action=self.next_action,
             registration_service_decision=self.registration_service_decision,
             identity_source='cli-generated', automatic_retry=False,
-            authenticated_session_created=False)
+            authenticated_session_created=self.session is not None,
+            login=None if self.login_attempt is None else self.login_attempt.report())
 
 
 def enroll_once(*, client_factory, consent_provider, identity_provider, sms_provider,
                 existing_pin_provider, new_pin_provider, confirmation_provider,
-                store=None, send=False):
+                store=None, login_pin_provider=None, send=False):
     """Factory(device_id) -> DeviceRegistration; providers are called once at most.
 
 The caller displays the original terms before consent_provider returns True.
-No automatic certificate fallback, member join, restart, login or payment.
+An explicit login_pin_provider continues from completion to the PIN screen.
+No automatic certificate fallback, member join, restart or payment.
 """
     if not send:
         raise GiroError('기관 통신에는 명시적인 전송 승인이 필요합니다.')
@@ -129,6 +137,15 @@ No automatic certificate fallback, member join, restart, login or payment.
         if result.next_action == 'new_pin':
             record(client.register_pin(pin_provider=new_pin_provider,
                                        confirmation_provider=confirmation_provider, send=True))
+        if login_pin_provider is not None and result.next_action in ('registered', 'login_existing_registration'):
+            # Preserve the enrollment verdict before a later login can fail,
+            # time out or be interrupted. A diagnostic write never changes it.
+            try:
+                store.finish(reservation, result.report())
+            except Exception:
+                result.processing_issues.append('enrollment_receipt_save_incomplete')
+            result.login_attempt = client.login(pin_provider=login_pin_provider, send=True)
+            result.next_action = client.next_action
     except (Exception, KeyboardInterrupt):
         result.processing_issues.append('enrollment_processing_incomplete')
     if client is not None:
@@ -140,5 +157,6 @@ No automatic certificate fallback, member join, restart, login or payment.
         try:
             store.finish(reservation, result.report())
         except Exception:
-            result.processing_issues.append('enrollment_receipt_save_incomplete')
+            if 'enrollment_receipt_save_incomplete' not in result.processing_issues:
+                result.processing_issues.append('enrollment_receipt_save_incomplete')
     return result

@@ -9,6 +9,7 @@ import re
 from dataclasses import dataclass
 
 from .codeguard_codec import jni_modified_utf8
+from .codeguard_artifacts import DigestStream
 from .codeguard_effects import Effect
 from .codeguard_rule import AnalysisLimit
 
@@ -87,14 +88,19 @@ def package_digest_file_steps(source_dir, process_name):
         raise AnalysisLimit('observed native long file position required')
     # The loop consumes the low signed 32 bits of the LP64 ftell result.
     size = (position + 2**31) % 2**32 - 2**31
-    reads, data = package_digest_read_steps(size), None
-    while True:
-        try:
-            request = reads.send(data)
-        except StopIteration as done:
-            digest = done.value
-            break
-        data = yield Effect('native_fread', (stream, 1, request.args[0]))
+    if isinstance(stream, DigestStream):
+        # The explicit immutable backend can compile the pure full-read hash;
+        # preceding process/path/position checks and later probe are unchanged.
+        digest = yield Effect('immutable_file_sha256', (stream, size))
+    else:
+        reads, data = package_digest_read_steps(size), None
+        while True:
+            try:
+                request = reads.send(data)
+            except StopIteration as done:
+                digest = done.value
+                break
+            data = yield Effect('native_fread', (stream, 1, request.args[0]))
     probe = yield Effect('native_fopen', (native_digest_probe_path(process_name), b'rb'))
     yield Effect('native_fclose', (stream,))
     if probe is not None:

@@ -8,6 +8,7 @@ from dataclasses import dataclass
 import hashlib
 
 from .codeguard_effects import Effect, observed_bool
+from .codeguard_artifacts import DigestStream
 from .codeguard_native_io import FailedCmdlineRead, native_process_name
 from .codeguard_native_jni import _jni, utf_chars_bytes, native_return_text
 from .codeguard_nonce import cg_auth_code
@@ -42,6 +43,10 @@ def nonce_file_digest_steps(stream, *, null_code=None):
     """
     if stream is None:
         raise NativeNonceBoundary(null_code)  # native feof(NULL)
+    if isinstance(stream, DigestStream):
+        result = yield Effect('immutable_file_sha256', (stream, stream.data.size))
+        yield Effect('native_fclose', (stream,))
+        return result
     digest = hashlib.sha256()
     while _int((yield Effect('native_feof', (stream,)))) == 0:
         data = yield Effect('native_fread', (stream, 1, 1024))

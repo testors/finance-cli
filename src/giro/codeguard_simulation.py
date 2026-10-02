@@ -13,6 +13,7 @@ from dataclasses import dataclass
 from itertools import count
 
 from .codeguard_certificate_values import NativeByteArrayValue
+from .codeguard_artifacts import FileDigests, DigestStream
 from .codeguard_effects import JavaFault
 from .codeguard_native_jni import NativeStringValue
 from .codeguard_rule import AnalysisLimit
@@ -139,7 +140,7 @@ class EnvironmentSimulation:
         return value
 
     def _stream(self, stream):
-        if not isinstance(stream, _Stream) or stream.owner is not self or stream.closed:
+        if not isinstance(stream, (_Stream, DigestStream)) or stream.owner is not self or stream.closed:
             raise AnalysisLimit('simulation stream lifetime mismatch')
         return stream
 
@@ -155,14 +156,26 @@ class EnvironmentSimulation:
             data = self._read(self.files, path)
             if data is None:
                 return None
+            if isinstance(data, FileDigests):
+                return DigestStream(self, data)
             if type(data) is not bytes:
                 raise AnalysisLimit('explicit simulation file bytes required')
             return _Stream(self, data)
+        if kind == 'immutable_file_sha256':
+            stream, size = args
+            self._stream(stream)
+            if (not isinstance(stream, DigestStream) or stream.position != 0 or stream.eof
+                    or size != stream.data.size):
+                raise AnalysisLimit('complete immutable file digest scope mismatch')
+            stream.position, stream.eof = size, True
+            return stream.data.sha256
         if kind == 'native_stat':
             return self._read(self.stat_results, args[0])
         if kind in ('native_fgets', 'native_fread', 'native_fclose', 'native_fseek',
                     'native_ftell', 'native_rewind', 'native_feof'):
             stream = self._stream(args[0])
+            if isinstance(stream, DigestStream) and kind in ('native_fread', 'native_fgets'):
+                raise AnalysisLimit('immutable digest metadata cannot supply arbitrary bytes')
             if kind == 'native_fgets':
                 if args[1] <= 1:
                     raise AnalysisLimit('unsupported simulation fgets size')
@@ -200,7 +213,7 @@ class EnvironmentSimulation:
             _, offset, whence = args
             if (offset, whence) != (0, 2):
                 raise AnalysisLimit('unsupported simulation seek')
-            stream.position, stream.eof = len(stream.data), False
+            stream.position, stream.eof = (stream.data.size if isinstance(stream, DigestStream) else len(stream.data)), False
             return 0
         if kind in ('build_string_field', 'device_build_field'):
             return self._read(self.build, args[0])

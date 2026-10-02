@@ -12,6 +12,8 @@ from io import BytesIO
 from zipfile import ZipFile
 
 from .codeguard_fingerprint_values import KnownCertificateStream
+from .codeguard_artifacts import FileDigests, DigestStream, DigestRead
+from .codeguard_effects import JavaFault
 from .codeguard_platform import ReadOnce
 from .codeguard_rule import AnalysisLimit
 
@@ -95,7 +97,9 @@ class MemoryPlatform:
             return self._package(*args)
         if kind == 'process_pid': return self.environment.process_id()
         if kind == 'telephony_service': return self
-        if kind == 'telephony_line1_number': return self.phone
+        if kind == 'telephony_line1_number':
+            if isinstance(self.phone, JavaFault): raise self.phone
+            return self.phone
         if kind == 'cpu_abi': return self.abi
         if kind == 'native_library_dir': return self.application.library_dir
         if kind == 'application_info': return self.application
@@ -105,7 +109,21 @@ class MemoryPlatform:
             self.preferences[args[1]] = args[2]
             return True if args[3] == 'commit' else None
         if kind == 'file_exists': return self._exists(args[0])
-        if kind == 'open_file_input': return BytesIO(self._bytes(args[0]))
+        if kind == 'open_file_input':
+            content = self.environment._read(self.environment.files, self.path(args[0]).encode())
+            return DigestStream(self, content) if isinstance(content, FileDigests) else BytesIO(self._bytes(args[0]))
+        if kind in ('file_available', 'file_read_once', 'close_file_input') and isinstance(args[0], DigestStream):
+            stream = args[0]
+            if stream.owner is not self or stream.closed:
+                raise AnalysisLimit('immutable Java stream lifetime mismatch')
+            if kind == 'close_file_input':
+                stream.closed = True
+                return None
+            if kind == 'file_available': return stream.data.size - stream.position
+            if stream.position != 0 or args[1] != stream.data.size:
+                raise AnalysisLimit('immutable digest metadata requires one complete read')
+            stream.position = stream.data.size
+            return DigestRead(stream.data)
         if kind == 'file_available': return len(args[0].getbuffer()) - args[0].tell()
         if kind == 'file_read_once': return self._read(*args)
         if kind == 'close_file_input': return args[0].close()

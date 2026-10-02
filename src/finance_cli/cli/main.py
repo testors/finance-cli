@@ -52,8 +52,15 @@ def capabilities():
                     'migration_live_tested': False},
         'giro': {'offline': ['auth-plan', 'registration-plan', 'request-plan', 'bills', 'payment-accounts', 'payment-plan',
                             'payment-result', 'certificate-validation', 'codeguard'],
-                 'live': ['explicit PIN-free bootstrap probes', 'pinned-public-root-preparation'],
-                 'live_login': False}},
+                 'live': ['explicit PIN-free bootstrap probes', 'pinned-public-root-preparation',
+                          'device-registration', 'pin-login', 'own-tax-queries', 'single-national-account-payment',
+                          'receipt-list'],
+                 'live_login': True, 'live_tested': False, 'verification': 'synthetic',
+                 'requirements': ['private prepared protection profile', 'current recipient trust and CRLs',
+                                  'existing personal member; SKT/SKM/LGT/LGM for registration',
+                                  'own UID already registered for tax lists', 'explicit --send'],
+                 'not_included': ['KT registration', 'new membership', 'UID registration',
+                                  'certificate/FIDO payment authentication', 'web authentication and payment']}},
         'credentials': {'joint': ['import-npki', 'import-pfx', 'list', 'show', 'export', 'remove', 'rename', 'hometax-selection', 'hana-signing'],
                         'id_cards': ['add', 'list', 'show', 'export', 'rename', 'remove', 'hana-onesign-issuance-selection'],
                         'financial': {'scope': 'offline crypto library', 'remote_management': False}},
@@ -226,7 +233,7 @@ def dispatch(argv):
   profile     프로필·기관별 인증서 선택
   hana        하나은행 로그인·조회·하나인증서 발급·원화 이체 (통신 시 --send)
   hometax     홈택스 로그인·조회·보고서·세금계산서 (통신 시 --send)
-  giro        지로 오프라인 도구·명시적 초기 프로브 (--send/--live)
+  giro        지로 기기 등록·인증·조회·납부 (--send/--live)
   runtime     홈택스 Node 런타임 status/install
   server      웹앱 서버 설정·시작·브라우저 등록 (선택 설치 finance-cli[web])
   capabilities  구현 범위와 기관별 경계 (JSON)

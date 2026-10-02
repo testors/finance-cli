@@ -112,7 +112,7 @@ def auth_plan():
             {"endpoint": "auth.datetime", "mode": "ENVELOP", "method": "POST",
              "effect": "비로그인 경로에서 키 재생성; 이미 로그인한 경우 ENCRYPT"},
             {"operation": "mTransKey PIN codec", "effect": "직전 세션 키로 6개 독립 블록 암호화"},
-            {"operation": "CodeGuard token", "implemented": False,
+            {"operation": "CodeGuard token", "implemented": True,
              "implemented_components": ["native_rule_decode", "rule_selection_and_evaluation",
                                         "java_native_base64_and_seed", "jni_modified_utf8", "response_envelope",
                                         "cg_get_auth_code_arithmetic", "nonce_100_dispatch_functions",
@@ -156,7 +156,8 @@ def auth_plan():
                                         "own_exchange_clock_random_and_rsa_executor",
                                         "declared_offline_environment_variation_simulator",
                                         "python_threaded_protection_runtime_and_callbacks",
-                                        "declared_memory_zip_preferences_and_shared_files"],
+                                        "declared_memory_zip_preferences_and_shared_files",
+                                        "immutable_content_profile_and_recorded_state_replay"],
              "remaining_components": ["native_start_checks_and_input_collection", "getNonce_checks_and_six_input_collection",
                                       "actual_device_manager_and_async_observations",
                                       "actual_mainservice_context_and_jni_observations",
@@ -165,7 +166,7 @@ def auth_plan():
                                       "certificate_provider_failures_and_local_error_runtime_boundaries",
                                       "android_value_numeric_date_locale_charset_boundaries",
                                       "actual_urlconnection_tls_stream_and_header_order",
-                                      "live_exchange_and_server_token"]},
+                                      "new_policy_inputs_and_server_compatibility"]},
             {"endpoint": "auth.pin", "mode": "ENCRYPT", "method": "POST",
              "implemented_components": ["single_attempt_pin_login_coordinator",
                                         "device_identity_selection_from_explicit_observations",
@@ -175,18 +176,18 @@ def auth_plan():
                                         "prelogin_envelope_key_rotation",
                                         "two_stateful_codeguard_callbacks",
                                         "login_verdict_and_session_readiness_separation",
-                                        "authenticated_query_and_payment_session_handoff"],
-             "remaining_components": ["normal_protection_runtime", "current_trust_configuration",
-                                      "registered_device_identity", "live_login_acceptance"],
+                                        "authenticated_query_and_payment_session_handoff",
+                                        "cli_new_device_enrollment_and_login", "encrypted_session_storage"],
+             "remaining_components": ["current_trust_configuration", "prepared_profile_installation",
+                                      "live_registration_and_login_acceptance"],
              "effect": "내부 CODE_RESPONSE / 외부 CODE_RESPONSE_TOKEN; 쿠키·키 유지"},
         ],
         "blockers": [
-            "CodeGuard 원문 JSON/쿠키→generateToken·CMD101/200/300까지 오프라인 연결; JNI/OS 실제 입력·값 변환 경계·실제 통신/발급 미완성",
-            "공개 루트 준비·cache/LDAP·필수 경로/CRL 연결 구현; 일반 selector/provider·CTL trust 상태와 수신자 구성의 추가 검증 필요",
-            "등록 기기 ID와 본인정보 등록 상태 필요; 기기 정보를 자동 수집하지 않음",
-            "PIN 로그인→조회·납부의 쿠키/키 연결은 합성 검증; 정상 보호 모듈·현재 신뢰 자료·등록 기기 입력과 실서버 수락 검증 필요",
-            "비Android 서버가 목표; Android 프로세스/패키지 결합의 독립 구현 가능 범위는 미확정이며 호스트 정보나 검사 통과 상수로 대체하지 않음",
-            "실제 서버 로그인·조회 및 오류/만료 처리 검증 안 됨",
+            "준비된 개인 보호 입력 자료와 현재 유효한 수신자 인증서·CRL 필요",
+            "저장된 기기 관측 상태를 재사용하며 새 서버 정책의 미관측 입력은 추정하지 않음",
+            "CLI 기기 등록은 기존 휴대폰 등록을 바꿀 수 있음; 등록·로그인 실서버 수락 미확인",
+            "본인 세금 목록에는 계정에 등록된 본인정보가 필요; 신규 본인정보 등록 미지원",
+            "등록→로그인→조회→국세 단건 납부 연결은 합성 검증; 실서버 업무 수락 미확인",
         ],
     }
 
@@ -208,7 +209,7 @@ def request_plan(name):
         result['known_defaults'] = {'isReserve': 'N'}
         result['notes'].append('serviceCode는 선택한 납부 대상에서 가져옵니다. 계좌 목록을 자동 등록하지 않습니다.')
     if name.endswith('.payment'):
-        result['notes'].append('요청·응답 모델만 지원합니다. 납부 전송·인증·출금은 실행하지 않습니다.')
+        result['notes'].append('이 명령은 요청 모델만 보여 주며 납부 전송·인증·출금을 실행하지 않습니다.')
     return result
 
 

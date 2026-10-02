@@ -86,6 +86,7 @@ class DeviceRegistration(PreloginClient):
         self.nonce = None
         self.phone_corp = None
         self.registration_response = None
+        self._recipient_der = None
         self._clock, self._sms_available_at = clock, None
 
     def _run(self, allowed, send, operation):
@@ -136,6 +137,7 @@ class DeviceRegistration(PreloginClient):
             if not self._call(result, 'auth.server-cert', {}): return
             result.stage = 'recipient.validate'
             recipient = self.recipient.validate(result.response.query.get('serverCert'))
+            self._recipient_der = recipient
             result.stage = 'protection.initialize'
             self.protection.initialize_for_login()
             if not self._call(result, 'auth.device-status',
@@ -237,3 +239,19 @@ class DeviceRegistration(PreloginClient):
                 return
             self.next_action = 'registered'
         return self._run({'new_pin'}, send, operation)
+
+    def login(self, *, pin_provider, send=False):
+        """Completion -> PIN screen: retain protection/cookies, renew only key.
+
+        Registration success survives any later login failure. Input is a
+        separate user action; no stored/new PIN is silently reused here.
+        """
+        if not send:
+            raise GiroError('기관 통신에는 명시적인 전송 승인이 필요합니다.')
+        with self._lock:
+            if self.next_action not in ('registered', 'login_existing_registration'):
+                raise GiroError('등록이 확인된 단계에서만 로그인할 수 있습니다.')
+            self.next_action = 'login_started'
+            attempt = self._login_pin(self._recipient_der, pin_provider=pin_provider)
+            self.next_action = 'authenticated' if attempt.session is not None else 'login_stopped'
+            return attempt

@@ -9,6 +9,8 @@ from giro.crypto import PIN_IV, _cbc
 from giro.errors import GiroError
 from giro.registration import DeviceRegistration, IdentityInput
 from giro.registration_flow import EnrollmentStore, enroll_once
+from giro.client import AuthenticatedClient
+from giro.payment_flow import PaymentJournal, PaymentWorkflow
 import test_login as support
 
 
@@ -104,6 +106,93 @@ class RegistrationTests(TestCase):
             if name != 'registration.user-info':
                 self.assertNotIn('CODE_RESPONSE', fields)
                 self.assertNotIn('CODE_RESPONSE_TOKEN', form)
+
+    def test_enrollment_login_query_and_payment_share_three_token_runtime(self):
+        from test_codeguard_prepared import roundtrip
+        peer, runtime = support.LoginTests.connect_python_protection(self, platform_transform=roundtrip)
+        self.registration.protection = runtime
+        with tempfile.TemporaryDirectory() as directory:
+            store = EnrollmentStore(Path(directory).resolve()/'enrollment')
+            result = self.workflow(store, login_pin_provider=lambda: '234567', send=True)
+            self.assertEqual(result.registration_service_decision, 'success', result.report())
+            self.assertTrue(result.report()['login']['session_ready'], result.report())
+            self.assertEqual(result.next_action, 'authenticated')
+            self.assertEqual([call[0] for call in peer.server.calls], [101, 200, 300, 200, 300, 200, 300])
+            self.assertEqual(runtime.events.count('manager_update_listener'), 1)
+            self.assertEqual(runtime.events.count('manager_token_listener'), 3)
+            self.assertEqual(self.server.steps.count('auth.server-cert'), 1)
+            self.assertEqual(self.server.steps.count('auth.device-status'), 1)
+            self.assertEqual(len(self.server.keys), 3)
+            self.assertEqual(len(set(self.server.keys)), 3)
+            self.assertIs(result.session.cookies, self.registration.cookies)
+            self.assertEqual(self.fields('auth.pin')['CODE_RESPONSE'], ['SYNTHETIC-PYTHON-TOKEN-3'])
+            self.assertEqual(self.fields('auth.pin')['deviceUniqNo'], [store.identity()])
+            from giro.session_store import SessionStore
+            sessions = SessionStore(Path(directory).resolve()/'session')
+            sessions.save(result.session)
+            with sessions.use() as (restored, issues):
+                self.assertEqual(restored.device_id, result.session.device_id)
+                self.assertEqual(restored.key, result.session.key)
+                self.assertEqual([(c.name, c.value) for c in restored.cookies],
+                                 [(c.name, c.value) for c in result.session.cookies])
+                self.assertTrue(AuthenticatedClient(restored).query('national.list', {'page': '1'}, send=True).app_success)
+            self.assertEqual(issues, [])
+            client = AuthenticatedClient(restored)
+            self.assertTrue(client.query('national.list', {'page': '1'}, send=True).app_success)
+            workflow = PaymentWorkflow(client, journal=PaymentJournal(Path(directory).resolve()/'payments'))
+            review = workflow.prepare(support.BILL, account_selector=lambda _: 1, send=True)
+            self.assertEqual(review['amount'], 900000)
+            self.assertNotIn('national.payment', self.server.steps)
+            paid = workflow.pay(review['draft_id'], account_password_provider=lambda: '1234', send=True)
+            self.assertEqual(paid['service_decision'], 'success', paid)
+            self.assertEqual(self.server.steps.count('national.payment'), 1)
+            with self.assertRaises(GiroError):
+                workflow.pay(review['draft_id'], account_password_provider=lambda: '1234', send=True)
+            self.assertEqual(len(self.server.keys), 3)  # authenticated datetime is ENCRYPT
+            self.assertEqual(runtime.events.count('manager_token_listener'), 3)
+            receipt = json.loads((store.root/'attempt.json').read_text())
+            self.assertEqual(receipt['registration_service_decision'], 'success')
+            self.assertTrue(receipt['authenticated_session_created'])
+
+    def test_login_failure_cannot_erase_completed_registration_or_retry(self):
+        self.protection.values.extend(['SYNTHETIC-DISCARDED', '{"CODE_RESPONSE":"SYNTHETIC-LOGIN"}'])
+        self.server.responses['auth.pin'] = (200, {'responseCode': '999'})
+        with tempfile.TemporaryDirectory() as directory:
+            store = EnrollmentStore(Path(directory).resolve())
+            saved = store.finish
+            snapshots = []
+            def finish(path, report):
+                snapshots.append(json.loads(json.dumps(report)))
+                saved(path, report)
+            store.finish = finish
+            result = self.workflow(store, login_pin_provider=lambda: '234567', send=True)
+        self.assertEqual(result.registration_service_decision, 'success')
+        self.assertEqual(result.report()['login']['login_service_decision'], 'failure')
+        self.assertIsNone(result.session)
+        self.assertEqual(snapshots[0]['registration_service_decision'], 'success')
+        self.assertIsNone(snapshots[0]['login'])
+        self.assertEqual(self.registration.registration_response.code, '000')
+        with self.assertRaises(GiroError): self.registration.login(pin_provider=lambda: '234567', send=True)
+        self.assertEqual(self.server.steps.count('auth.pin'), 1)
+
+    def test_existing_registration_continues_without_sms_or_second_initialization(self):
+        self.server.responses['auth.device-status'][1]['deviceRegYn'] = 'Y'
+        self.protection.values = ['SYNTHETIC-DISCARDED', '{"CODE_RESPONSE":"SYNTHETIC-LOGIN"}']
+        with tempfile.TemporaryDirectory() as directory:
+            result = self.workflow(EnrollmentStore(Path(directory).resolve()),
+                                   login_pin_provider=lambda: '234567', send=True)
+        self.assertTrue(result.report()['login']['session_ready'])
+        self.assertEqual(result.registration_service_decision, 'unobserved')
+        self.assertEqual(self.server.steps, ['auth.server-cert', 'protection.initialize', 'auth.device-status',
+            'auth.datetime', 'codeguard.token', 'codeguard.token', 'auth.pin'])
+
+    def test_login_is_explicit_and_only_available_after_registration(self):
+        provider = Mock(return_value='234567')
+        with self.assertRaises(GiroError): self.registration.login(pin_provider=provider, send=True)
+        self.check_pin(); self.register()
+        with self.assertRaises(GiroError): self.registration.login(pin_provider=provider)
+        provider.assert_not_called()
+        self.assertNotIn('auth.pin', self.server.steps)
 
     def test_registration_already_exists_does_not_reset_or_send_sms(self):
         self.server.responses['auth.device-status'][1]['deviceRegYn'] = 'Y'

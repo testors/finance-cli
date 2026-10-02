@@ -134,7 +134,8 @@ class AuthenticatedClient:
 
     def query(self, name, fields, *, send=False):
         """Read on the existing session; datetime also uses ENCRYPT after login."""
-        allowed = {'national.list', 'national.detail', 'accounts.payable',
+        allowed = {'national.list', 'national.detail', 'local.list', 'local.detail',
+                   'customs.list', 'customs.detail', 'accounts.payable',
                    'accounts.registered', 'auth.datetime', 'receipts.list', 'receipts.detail'}
         if name not in allowed:
             raise GiroError('인증된 조회 경로에서 지원하지 않는 요청입니다.')

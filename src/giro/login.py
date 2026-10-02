@@ -1,8 +1,7 @@
 """PIN login coordinator with explicit recipient and protection dependencies.
 
-No default protection runtime or device identity exists. CLI/web must keep live
-login unavailable until those dependencies are implemented. This coordinator
-connects real service transport, mandatory recipient rules, key rotation and
+The CLI supplies a prepared protection platform and its persisted device ID.
+This coordinator connects service transport, mandatory recipient rules, key rotation and
 login state to the existing authenticated query/payment client. Secrets remain
 in memory; a coordinator performs at most one attempt and never retries.
 """
@@ -175,6 +174,47 @@ class PreloginClient:
         received = client.record(self.events, name, started, status, received)
         return received
 
+    def _login_pin(self, recipient_der, *, pin_provider):
+        """Enter the PIN screen on an initialized, registered application."""
+        attempt = LoginAttempt('auth.datetime')
+        try:
+            attempt.response = self._request('auth.datetime', {}, recipient_der=recipient_der)
+            if not self._continue(attempt):
+                return attempt
+            self.state = replay('auth.datetime', attempt.response, self.state).state
+            attempt.stage = 'pin.input'
+            cipher = encode_pin(pin_provider(), self.key)
+            # The first callback is discarded by LoginPinPresenter, but
+            # its runtime/cookie state must survive the second token call.
+            attempt.stage = 'codeguard.presenter'
+            self.protection.token()
+            attempt.stage = 'codeguard.query'
+            token = self.protection.token()
+            attempt.stage = 'auth.pin'
+            attempt.response = None
+            attempt.response = self._request('auth.pin',
+                {'deviceUniqNo': self.device_id, 'pin': cipher}, token=token)
+            observed = replay('auth.pin', attempt.response, self.state)
+            self.state = observed.state
+            if not self._continue(attempt):
+                return attempt
+            if not self.state.is_login:
+                attempt.processing_issues.append('login_state_incomplete')
+                return attempt
+            attempt.session = client.AuthenticatedSession.from_login(attempt.response,
+                device_id=self.device_id, key=self.key, cookies=self.cookies,
+                user_agent=self.user_agent, login_type='PIN')
+            return attempt
+        except Exception:
+            attempt.processing_issues.append('stage_processing_incomplete')
+            return attempt
+
+    @staticmethod
+    def _continue(attempt):
+        attempt.processing_issues.extend(attempt.response.issues)
+        return attempt.response.app_success and 'cookie_update_failed' not in attempt.response.issues
+
+
 class PinLogin(PreloginClient):
     def login(self, *, pin_provider, send=False):
         if not send:
@@ -192,46 +232,19 @@ class PinLogin(PreloginClient):
                 recipient_der = self.recipient.validate(attempt.response.query.get('serverCert'))
                 attempt.stage = 'protection.initialize'
                 self.protection.initialize_for_login()
-                for name, fields in (
-                    ('auth.device-status', {'deviceUniqNo': self.device_id}),
-                    ('auth.datetime', {}),
-                ):
-                    attempt.stage = name
-                    attempt.response = self._request(name, fields, recipient_der=recipient_der)
-                    if not self._continue(attempt):
-                        return attempt
-                    observed = replay(name, attempt.response, self.state)
-                    self.state = observed.state
-                    if name == 'auth.device-status' and not self.state.values['isDeviceReg']:
-                        # Normal app entry routes to SMS identity verification
-                        # before a login screen. This is not a service failure,
-                        # nor permission to register/change a device here.
-                        attempt.stage = 'device.registration'
-                        attempt.next_action = 'sms_identity_verification'
-                        return attempt
-                attempt.stage = 'pin.input'
-                cipher = encode_pin(pin_provider(), self.key)
-                # The first callback is discarded by LoginPinPresenter, but
-                # its runtime/cookie state must survive the second token call.
-                attempt.stage = 'codeguard.presenter'
-                self.protection.token()
-                attempt.stage = 'codeguard.query'
-                token = self.protection.token()
-                attempt.stage = 'auth.pin'
-                attempt.response = None
-                attempt.response = self._request('auth.pin',
-                    {'deviceUniqNo': self.device_id, 'pin': cipher}, token=token)
-                observed = replay('auth.pin', attempt.response, self.state)
-                self.state = observed.state
+                attempt.stage = 'auth.device-status'
+                attempt.response = self._request(attempt.stage, {'deviceUniqNo': self.device_id},
+                                                 recipient_der=recipient_der)
                 if not self._continue(attempt):
                     return attempt
-                if not self.state.is_login:
-                    attempt.processing_issues.append('login_state_incomplete')
+                self.state = replay(attempt.stage, attempt.response, self.state).state
+                if not self.state.values['isDeviceReg']:
+                    # Normal app entry routes to SMS identity verification.
+                    # This is not a service failure or registration permission.
+                    attempt.stage = 'device.registration'
+                    attempt.next_action = 'sms_identity_verification'
                     return attempt
-                attempt.session = client.AuthenticatedSession.from_login(attempt.response,
-                    device_id=self.device_id, key=self.key, cookies=self.cookies,
-                    user_agent=self.user_agent, login_type='PIN')
-                return attempt
+                return self._login_pin(recipient_der, pin_provider=pin_provider)
             except CertificateRuleError:
                 attempt.processing_issues.append('recipient_validation_failed')
                 return attempt
@@ -243,8 +256,3 @@ class PinLogin(PreloginClient):
                 # exception, credential, token or response is emitted here.
                 attempt.processing_issues.append('stage_processing_incomplete')
                 return attempt
-
-    @staticmethod
-    def _continue(attempt):
-        attempt.processing_issues.extend(attempt.response.issues)
-        return attempt.response.app_success and 'cookie_update_failed' not in attempt.response.issues

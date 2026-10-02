@@ -25,13 +25,23 @@ class CliTests(unittest.TestCase):
         self.assertEqual(code, 0)
         self.assertFalse(result['network_used'])
         self.assertFalse(result['live_registration_tested'])
-        self.assertFalse(result['default_runtime_available'])
-        self.assertEqual(result['max_business_requests'], 8)
+        self.assertTrue(result['default_runtime_available'])
+        self.assertEqual(result['max_business_requests'], 10)
 
-    def test_live_login_explicitly_unavailable(self):
-        (code, result) = self.call(['auth', 'login'])
-        self.assertEqual(code, 4)
-        self.assertFalse(result['live_login_ready'])
+    def test_login_registration_query_and_payment_default_to_no_io_plans(self):
+        for command in (['auth', 'login'], ['auth', 'register'], ['bills', 'list', '--type', 'national'], ['payment', 'pay']):
+            with patch('giro.auth_flow.login_dependencies', side_effect=AssertionError('no dependencies')), \
+                 patch('giro.session_store.SessionStore.use', side_effect=AssertionError('no session')):
+                code, result = self.call(command)
+            self.assertEqual(code, 0)
+            self.assertFalse(result['network_used'])
+            self.assertTrue(result['plan_only'])
+
+    def test_explicit_auth_requires_private_terminal_before_dependencies(self):
+        with patch('giro.auth_flow.login_dependencies', side_effect=AssertionError('no dependencies')):
+            code, result = self.call(['auth', 'login', '--send'])
+        self.assertEqual(code, 2)
+        self.assertEqual(result['error'], 'validation_error')
 
     def test_bootstrap_offline_unless_live_explicit(self):
         (code, result) = self.call(['auth', 'bootstrap'])

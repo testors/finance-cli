@@ -66,7 +66,7 @@ fin --format json-v1 giro bills list --type national --input /path/to/bills.json
 | 하나은행 | `accepted`, `service_status`, `execution_result`; `processing_status`는 별도 처리 상태 | 명시적 서비스 거절은 보통 `1`; 로컬 중단은 `2`이며 이미 받은 기관 성공과 함께 나타날 수 있음 |
 | 홈택스 서비스 연결 | `branch`, `reason`; 문서·세션 저장 상태는 별도 | 성공 `0`, 실패 `1`, 입력·처리 오류 `2`, 판정 미관측 `3` |
 | 홈택스 오프라인 응답 해석 | `branch`, `reason` 등 | `no_action`도 `0`일 수 있으므로 종료코드만으로 성공 판단 금지 |
-| 지로 | `app_success`, `response_code`, `callback_code`, `origin`; 자료 완전성은 별도 | 응답 거절·입력 오류 `2`; 미구현 로그인 `4`; `0`은 실서버 로그인 성공을 뜻하지 않음 |
+| 지로 | `app_success`, `response_code`, `callback_code`, `origin`; 등록·로그인·저장 상태는 별도 | 응답 거절·입력 오류 `2`; 추가 준비 필요 `4`; 무통신 계획도 `0`을 반환하므로 업무 판정을 함께 확인 |
 
 하나은행의 `accepted: true`와 `processing_status: stopped`를 모순으로 처리하지 않습니다. 이체 재조회에서 `candidate_complete: true`이더라도 `transfer_confirmed: false`이면 거래 연결은 미확인입니다. 기존 실행 판정은 재조회와 따로 보존합니다.
 
@@ -75,7 +75,7 @@ fin --format json-v1 giro bills list --type national --input /path/to/bills.json
 ### 기관별 입력 차이
 
 - 하나은행·홈택스의 `--credential`과 `--profile`은 하나만 지정합니다. 동시에 지정하면 인증서를 읽거나 암호를 묻기 전에 거절합니다. `--profile=personal` 형식도 지원합니다.
-- 하나은행 `--session`은 저장소의 세션 이름이고 홈택스 `--session`은 사용자 세션 JSON 파일 경로입니다. 서로 바꿔 사용할 수 없습니다. 지로에는 아직 실제 로그인 세션이 없습니다.
+- 하나은행 `--session`은 저장소의 세션 이름이고 홈택스 `--session`은 사용자 세션 JSON 파일 경로입니다. 서로 바꿔 사용할 수 없습니다. 지로는 마지막으로 저장한 자체 로그인 세션을 사용하며 만료 시 자동 재로그인하지 않습니다.
 - `--send` 생략 시 홈택스는 `send_required`로 중단하고, 하나은행·지로의 일부 명령은 계획·준비 결과를 반환합니다. 지로의 기존 `--live`도 유지합니다. 새 출력 형식이 준비나 업무 단계를 자동으로 실행하지 않습니다.
 
 ## 인증서 관리
@@ -522,11 +522,31 @@ fin hometax invoice issue --prepared /path/to/new-prepared.json --profile tax --
 
 ## 모바일지로
 
-`fin giro auth registration-plan`은 기존 개인 회원의 신규 기기 등록 순서와 필요한 입력을 무통신으로 보여 줍니다. 일반 CLI·웹앱에서 실제 기기 등록을 실행하는 기능은 아직 지원하지 않습니다.
+CLI에 기기 등록·PIN 로그인·세금 조회·등록계좌 국세 단건 납부를 연결했습니다. **실서버 업무 수락은 아직 검증하지 않았습니다.** 준비된 개인 보호 입력 자료와 현재 유효한 수신자 인증서·CRL 캐시가 필요합니다. 웹앱의 지로 인증·납부는 아직 지원하지 않습니다.
 
-개발용 `giro.registration.DeviceRegistration`과 `giro.registration_flow.enroll_once`는 SKT·LG U+ 계열 기존 개인 회원의 SMS 본인확인, 필요한 경우 기존 로그인 PIN 확인, 새 PIN 등록을 연결합니다. 현재 유효한 수신자 검증 자료와 명시적 보호 실행기를 호출자가 제공해야 합니다. 기본 실행기와 실서버 등록 수락은 미확인입니다. KT 계열 인증서 추가 확인·신규 회원가입은 다음 단계로 구별해 중단합니다.
+등록은 SKT·LG U+ 계열(알뜰폰 포함)의 기존 개인 회원을 지원합니다. SMS 본인확인, 필요한 경우 기존 로그인 PIN 확인, 새 PIN 등록을 거친 뒤 로그인 PIN을 입력받아 같은 연결에서 로그인합니다. KT 계열 인증서 추가 확인·신규 회원가입은 지원하지 않습니다. CLI 기기를 등록하면 기존 휴대폰 등록이 바뀔 수 있습니다.
 
-단발 흐름은 CLI 자체 식별자를 요청 전에 저장하고 재사용합니다. 기존 휴대폰의 식별자를 추출하지 않으며 CLI ID 수락과 기존 휴대폰 등록에 미치는 영향은 아직 확인하지 못했습니다. 공통 데이터 디렉터리의 `giro/enrollment`에 0600 identity와 시도 기록을 남기고, 같은 시도 기록에서 자동 재전송하지 않습니다. 개인정보·SMS·PIN은 입력 제공자에서 받아 메모리에서만 쓰며 PIN은 6자리입니다. 등록 성공은 로그인 세션 생성과 별도로 반환하고, 성공 뒤 기록 저장 실패도 구별합니다. 등록 완료 후 로그인·조회·납부를 자동으로 이어 실행하지 않습니다.
+먼저 준비된 개인 자료를 설치합니다. 보호 입력 자료는 저장된 기기 상태를 재사용하므로 현재 휴대폰의 새로운 관측을 뜻하지 않습니다. 설치본은 Android 실행 환경 없이 Python으로 계산합니다. 자료와 세션은 공통 데이터 디렉터리의 `giro` 아래에 두며, 기존 자료를 자동 덮어쓰지 않습니다.
+
+```sh
+fin giro auth install-profile --input /path/to/private-protection.json
+fin giro auth register                         # 무통신 계획
+fin giro auth register --carrier SKT --send     # 약관·SMS·PIN을 터미널에서 입력
+fin giro auth login --send                     # 이미 CLI를 등록했다면 PIN 로그인만
+fin giro bills list --type national --send
+fin giro bills due --type local --within-days 7 --send
+fin giro bills list --type customs --send
+fin giro payment pay --send                    # 국세 선택·계좌/금액 확인 후 단건 납부
+fin giro receipts list --start-date 2026-10-01 --end-date 2026-10-03 --send
+```
+
+기본 공개 자료 캐시는 `giro/public-trust`입니다. 다른 캐시는 인증 명령의 `--public-cache`로 지정합니다. `--send`를 생략한 인증·조회·납부 명령은 입력·세션 접근 없이 계획만 반환합니다. 개인정보·SMS·로그인 PIN 6자리와 계좌 비밀번호 4자리는 대화형 터미널에서 숨겨 입력하며 인자나 환경변수로 받지 않습니다.
+
+CLI 식별자는 첫 요청 전에 생성해 `giro/enrollment`에 보관합니다. 같은 등록 시도 기록에서 자동 재전송하지 않습니다. 등록 성공 뒤 로그인 실패나 저장 오류가 발생해도 등록 성공은 유지합니다. 로그인 세션의 키·쿠키는 AES-GCM으로 암호화하고, 저장용 키와 세션 파일 모두 0600 권한으로 보관합니다. 저장용 키도 같은 사용자 계정에서 접근할 수 있으므로 계정 자체가 탈취된 경우까지 보호하지는 않습니다. PIN과 보호 토큰은 저장하지 않습니다.
+
+본인 세금 목록은 계정의 본인정보 등록 상태가 확인된 경우에 조회합니다. 등록이 필요하면 `identity_registration_required`로 중단하며 주민등록번호 등록을 자동 실행하지 않습니다. 페이지 오류·건수 불일치·누락은 이미 받은 성공 자료와 구별합니다. 세션 만료 시 다시 로그인해야 하며 조회 과정에서 보호 초기화·로그인을 반복하지 않습니다.
+
+`receipts list`는 지정한 기간의 납부내역 한 페이지를 조회합니다. 다음 페이지는 `--page 2`처럼 지정합니다. 빈 목록이나 조회 실패로 기존 납부 예약을 해제하거나 납부 실패를 추정하지 않습니다.
 
 수신자 검증에 사용할 공개 루트 자료는 다음 명령으로 준비합니다. 기본 실행은 통신·파일 접근 없이 계획만 보여 줍니다. 실제 준비에는 공개 자료 전용 디렉터리를 먼저 만들고 절대경로와 `--send`를 지정합니다.
 
@@ -535,9 +555,9 @@ fin giro auth prepare-trust
 fin giro auth prepare-trust --cache /absolute/public-material-cache --send
 ```
 
-고정된 공개 LDAP 서버에서 캐시에 없는 루트 인증서를 최대 2회 조회하고, 미리 지정된 SHA-256과 일치하는 자료만 저장합니다. 이미 일치하는 자료가 있으면 다시 조회하지 않습니다. 사용자 인증서·비밀번호·PIN은 사용하지 않습니다. 루트 준비 성공은 로그인 성공이나 서버 인증서의 폐지 검사 완료를 뜻하지 않으며, 실제 로그인·납부는 아직 미지원입니다.
+고정된 공개 LDAP 서버에서 캐시에 없는 루트 인증서를 최대 2회 조회하고, 미리 지정된 SHA-256과 일치하는 자료만 저장합니다. 이미 일치하는 자료가 있으면 다시 조회하지 않습니다. 사용자 인증서·비밀번호·PIN은 사용하지 않습니다. 루트 외에 현재 발급자 인증서와 CRL도 필요하며 루트 준비 성공만으로 수신자 검증이나 로그인이 완료되지는 않습니다.
 
-실제 로그인·계좌 조회·납부 전송은 아직 지원하지 않습니다. 아래 명령은 로컬 JSON 자료를 읽으며 서비스에 접속하지 않습니다.
+아래 명령은 로컬 JSON 자료를 읽으며 서비스에 접속하지 않습니다.
 
 ```sh
 fin giro payment plan
@@ -551,7 +571,7 @@ fin giro payment result --type national --input /path/to/payment-response.json
 
 `payment result`는 복호화된 납부 응답을 해석합니다. 홈택스 연계 응답은 `--type hometax`를 사용합니다. 성공 응답에 영수증 항목이 없어도 확인된 성공은 유지합니다. 파일 해석 결과가 현재 납부 상태를 다시 조회한 결과는 아닙니다.
 
-개발용 Python 모듈 `giro.client.AuthenticatedClient`와 `giro.payment_flow.PaymentWorkflow`에는 인증된 세션에서 단건 국세 상세·등록계좌·서버시각 조회, 확인 내역 생성, 납부 1회 전송, 납부내역 조회를 연결했습니다. `prepare()`가 반환하는 금액·은행·마스킹 계좌를 확인한 뒤 별도 `pay(send=True)`로 전송합니다. 원래 로그인에서 받은 쿠키·SEED 키·기기 정보가 필요하며 이 모듈이 로그인을 대신하거나 세션 파일을 만들어 주지는 않습니다. CLI·웹앱의 실제 납부 지원이 완료된 상태는 아닙니다.
+`payment pay --send`는 저장된 세션으로 국세 상세·등록계좌·서버시각을 조회한 뒤 금액·은행·마스킹 계좌를 표시합니다. 사용자가 터미널에서 `납부`라고 확인한 다음 계좌 비밀번호를 받아 한 번 전송합니다. 확인을 취소하면 비밀번호를 받거나 납부하지 않습니다. Python 호출자는 `giro.payment_flow.PaymentWorkflow.prepare()`로 확인 내역을 받고 별도 `pay(send=True)`를 호출합니다.
 
 계좌 비밀번호는 입력 제공자로부터 4자리를 받아 메모리에서 암호화합니다. PIN 로그인 세션의 100만 원 초과 납부에는 별도 제공자로 간편비밀번호 6자리를 받아 추가 인증 값을 만듭니다. 인증서·FIDO 추가 인증은 아직 연결하지 않았습니다. 전송 전에 공통 데이터 디렉터리의 `giro/payments`에 고지별 예약을 배타적으로 기록합니다. 응답 단절·프로세스 종료·저장 실패 뒤에도 같은 고지의 재전송을 허용하지 않습니다. 이는 부분 납부 후 같은 고지를 다시 납부하는 경우에도 적용되는 현재 실행 모듈의 제한입니다. 납부내역 조회에서 빈 목록을 받았다는 이유로 예약을 해제하거나 납부 실패를 추정하지 않습니다. 기관 성공과 결과 저장 상태는 별도로 반환합니다.
 

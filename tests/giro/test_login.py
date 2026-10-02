@@ -134,7 +134,7 @@ class LoginTests(unittest.TestCase):
     def run_login(self):
         return self.login.login(pin_provider=self.pin, send=True)
 
-    def connect_python_protection(self):
+    def connect_python_protection(self, *, platform_transform=None):
         import test_codeguard_runtime as runtime_support
         # Each integration test owns a separate verified TLS CodeGuard peer.
         # Business traffic stays on the existing loopback CMS/SEED fixture.
@@ -147,7 +147,7 @@ class LoginTests(unittest.TestCase):
         self.addCleanup(peer.tearDown)
         peer.token_fields = lambda index: {'CODE_TOKEN': json.dumps({
             'CODE_RESPONSE': 'SYNTHETIC-PYTHON-TOKEN-%d' % index})}
-        runtime = peer.runtime()
+        runtime = peer.runtime(platform_transform=platform_transform)
         self.login.protection = runtime
         return peer, runtime
 

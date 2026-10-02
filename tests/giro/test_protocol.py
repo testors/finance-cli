@@ -81,8 +81,9 @@ class ProtocolTests(unittest.TestCase):
         self.assertIn('framework_queue_future_cancellation_and_thread_observations', cg['remaining_components'])
         self.assertIn('actual_updater_preference_and_platform_io', cg['remaining_components'])
         self.assertIn('actual_device_manager_and_async_observations', cg['remaining_components'])
-        self.assertIn('live_exchange_and_server_token', cg['remaining_components'])
-        self.assertFalse(cg['implemented'])
+        self.assertTrue(cg['implemented'])
+        self.assertIn('immutable_content_profile_and_recorded_state_replay', cg['implemented_components'])
+        self.assertIn('new_policy_inputs_and_server_compatibility', cg['remaining_components'])
         self.assertFalse(plan['live_login_ready'])
 
     def test_restored_defaults_are_described_not_injected(self):

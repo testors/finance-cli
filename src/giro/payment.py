@@ -35,10 +35,11 @@ def payment_plan():
                         'conditional_auth_routing', 'payment_response_models',
                         'authenticated_session_http_client', 'single_national_bill_workflow',
                         'additional_pin_encryption', 'durable_single_payment_dispatch',
-                        'receipt_query_transport'],
-        'remaining': ['authenticated_session_bootstrap', 'current_recipient_validation',
-                      'codeguard_and_registered_device_binding', 'certificate_fido_additional_auth',
-                      'cli_web_login_and_payment_integration', 'live_server_acceptance'],
+                        'receipt_query_transport', 'cli_registration_and_pin_login',
+                        'encrypted_session_reuse', 'cli_reviewed_national_account_payment'],
+        'remaining': ['current_recipient_material_provisioning', 'live_device_registration_acceptance',
+                      'certificate_fido_additional_auth', 'web_login_and_payment_integration',
+                      'local_and_customs_payment', 'live_server_acceptance'],
     }
 
 
