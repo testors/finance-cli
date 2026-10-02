@@ -86,12 +86,15 @@ def prepare(account, bank, recipient, amount, *, memo='', sender_text=None, reci
 def stepper(client, directory):
     def step(stage, body=None, *, redact=(), repeatable=False, observe=None):
         cached = directory / (stage + '-received.json')
-        if cached.exists() and not repeatable:
+        if cached.exists():
             saved = storage.read_json(cached)
-            if observe:
-                observe(saved['receipt'], saved['data'])
-            protocol.require(saved['receipt']['service_status'] == 'accepted', saved['receipt']['reason'])
-            return saved['data']
+            # A completed telephone check remains verified while later inputs
+            # arrive. Pending checks may only be checked again explicitly.
+            if not repeatable or stage == 'ars-check' and saved['data'].get('ARS_APV_NO_RESULT') == 'SUCCESS':
+                if observe:
+                    observe(saved['receipt'], saved['data'])
+                protocol.require(saved['receipt']['service_status'] == 'accepted', saved['receipt']['reason'])
+                return saved['data']
         reserved = directory / (stage + '-attempt.json')
         protocol.require(repeatable or not reserved.exists(), 'previous_' + stage.replace('-', '_') + '_attempt_unconfirmed')
         # Collect input before reserving its single submission. Cached validation
@@ -108,9 +111,12 @@ def stepper(client, directory):
         try:
             return client.request(stage, value, redact=redact, observe=received)
         finally:
-            if captured is not None and not repeatable:
+            if captured is not None:
                 try:
-                    store.record(cached, captured)
+                    if repeatable:
+                        storage.atomic_json(cached, captured)
+                    else:
+                        store.record(cached, captured)
                 except (OSError, ValueError):
                     op.warning(client.result, 'transfer_step_storage_failed')
     return step

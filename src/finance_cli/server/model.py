@@ -35,6 +35,9 @@ def display_name(value, limit=60):
 
 def credential_ref(kind, ref):
     """A typed vault reference; secrets and file paths never enter the database."""
+    if kind == 'id_password':
+        from finance_cli.services.hana_corporate.protocol import user_id
+        return {'type': 'id_password', 'ref': user_id(ref)}
     if kind == 'joint':
         from finance_cli.credentials.registry import Registry, name
         entry = Registry().entry(name(ref))
@@ -195,7 +198,7 @@ def remove_login(con, login_id, *, expected_revision):
         location = session['location'] or ''
         if location.startswith(('server/sessions/', 'server/jobs/')):
             files.append(location)  # Hometax session files and report-run copies: cookies and storage.
-        elif location.startswith('hana/sessions/') and (session['name'] or '').startswith('web'):
+        elif location.startswith(('hana/sessions/', 'hana-corporate/sessions/')) and (session['name'] or '').startswith('web'):
             files.append(location)  # Joint-certificate session directories this server created.
     return {'login_id': login_id, 'removed': True, 'targets_removed': len(targets), 'sessions_removed': len(sessions),
             'confirmations_cancelled': cancelled, 'history_kept': True, 'institution_logout': False,
@@ -324,10 +327,13 @@ def signing_for(con, login, target, purpose):
     if purpose == 'transfer_sign' and login['institution'] == 'hana' and login['method'] == 'onesign':
         credential = loads(login['credential'])
         return {'method': 'onesign', **credential} if credential else None
+    if purpose == 'transfer_sign' and login['institution'] == 'hana_corporate' and login['method'] == 'joint_certificate':
+        credential = loads(login['credential'])
+        return {'method': 'joint_certificate', **credential} if credential else None
     return None
 
 
-HANA_ACCOUNT_JOBS = ('hana.accounts.list', 'hana.onesign.accounts')
+HANA_ACCOUNT_JOBS = ('hana.accounts.list', 'hana.onesign.accounts', 'hana.corporate.accounts')
 
 
 def link_hana_accounts(con, job):
@@ -336,10 +342,10 @@ def link_hana_accounts(con, job):
     A savepoint keeps malformed rows from partially updating the account list.
     Existing names, disabled flags and profile groups stay.
     """
-    if job['name'] not in HANA_ACCOUNT_JOBS or job['status'] != 'finished' or job['outcome'] != 'success':
+    if job['name'] not in HANA_ACCOUNT_JOBS or job['status'] != 'finished' or job['outcome'] not in ('success', 'partial_success'):
         return True
     login = con.execute('SELECT * FROM logins WHERE id=?', (job['login_id'],)).fetchone()
-    if login is None or login['institution'] != 'hana' or login['disabled'] \
+    if login is None or login['institution'] not in ('hana', 'hana_corporate') or login['disabled'] \
             or login['revision'] != job['login_revision']:
         return True
     if loads(job['service_verdict'], {}).get('accepted') is not True:
@@ -362,9 +368,9 @@ def restore_hana_accounts(con):
     """Use the latest saved successful query per current login, with no bank I/O."""
     rows = con.execute('''SELECT j.* FROM logins l JOIN jobs j ON j.id=(
         SELECT id FROM jobs WHERE login_id=l.id AND login_revision=l.revision
-        AND name IN (?, ?) AND status='finished' AND outcome='success'
+        AND name IN (?, ?, ?) AND status='finished' AND outcome IN ('success', 'partial_success')
         ORDER BY observed_at DESC, created_at DESC, id DESC LIMIT 1)
-        WHERE l.institution='hana' AND l.disabled=0''', HANA_ACCOUNT_JOBS).fetchall()
+        WHERE l.institution IN ('hana', 'hana_corporate') AND l.disabled=0''', HANA_ACCOUNT_JOBS).fetchall()
     for job in rows:
         link_hana_accounts(con, job)
 

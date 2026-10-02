@@ -317,3 +317,10 @@ dialog.wide{max-width:860px}
 .limit-reference .limit-grid{margin-top:14px;gap:16px}.limit-reference .limit-grid>div{background:transparent;border:0;padding:0}
 .limit-reference .limit-grid strong{font-size:18px;color:#4b6156}
 @container finance (max-width:700px){.limit-result{padding:22px 17px}.limit-grid{grid-template-columns:1fr}.limit-grid strong{font-size:23px}}
+
+/* Corporate filters and transfer fields share the existing form controls. */
+.corporate-transfer-form .field-row{margin-top:25px}
+.corporate-transfer-form .field-row .field{margin:0}
+.corporate-history-filter{align-items:flex-end;padding-top:22px}
+.corporate-history-filter>.field{margin:0}
+.corporate-history-filter>.field label{margin:0}

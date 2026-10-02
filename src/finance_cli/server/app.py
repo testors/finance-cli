@@ -32,7 +32,7 @@ CODE = re.compile(r'[a-z][a-z0-9_]{1,63}(:[a-z0-9_,]{1,120})?')
 STATIC = {'index.html': 'text/html; charset=utf-8', 'app.css': 'text/css; charset=utf-8',
           'app.js': 'text/javascript; charset=utf-8', 'views.js': 'text/javascript; charset=utf-8',
           'api.js': 'text/javascript; charset=utf-8', 'ui.js': 'text/javascript; charset=utf-8',
-          'certificates.js': 'text/javascript; charset=utf-8'}
+          'certificates.js': 'text/javascript; charset=utf-8', 'corporate.js': 'text/javascript; charset=utf-8'}
 PUBLIC_API = {(f'{API}/auth/state', 'GET'), (f'{API}/auth/enroll', 'POST')}
 APP_CSP = ("default-src 'none'; script-src 'self'; style-src 'self'; img-src 'self' data:; connect-src 'self'; "
            "frame-src 'self'; base-uri 'none'; form-action 'self'; frame-ancestors 'none'")
@@ -405,6 +405,23 @@ def create_app(config, *, db=None, dispatcher=True, vaults=None):
                        name=value.get('name'), credential=value.get('credential'), channel=value.get('channel'),
                        signing=value.get('signing'))
 
+    @app.get(API + '/corporate/options')
+    def corporate_options():
+        from finance_cli.services.hana_corporate import keypad
+        from finance_cli.services.hana import store
+        settings, reason = [], None
+        for path in sorted(store.root('settings').glob('*.json')):
+            try:
+                keypad.load(path.stem)
+                settings.append(path.stem)
+            except (OSError, ValueError, KeyError, TypeError):
+                continue
+        try:
+            selected, _ = keypad.resolve()
+        except ValueError as error:
+            selected, reason = None, code_of(error)
+        return {'settings': settings, 'selected': selected, 'reason': reason, 'network_used': False}
+
     @app.patch(API + '/logins/{login_id}')
     async def patch_login(login_id: str, request: Request):
         value = await body(request)
@@ -609,6 +626,16 @@ def create_app(config, *, db=None, dispatcher=True, vaults=None):
         with db.read() as con:
             return jobs.public(con, jobs.get(con, job_id))
 
+    @app.get(API + '/jobs/{job_id}/corporate-ars')
+    def corporate_ars(job_id: str):
+        # The short telephone challenge comes from the private bank receipt only
+        # while this step is awaiting input. It never enters job history or logs.
+        from .adapters.hana_corporate import ars_challenge
+        with db.read() as con:
+            current = run(jobs.get, con, job_id)
+            session = con.execute('SELECT name FROM sessions WHERE id=?', (current['session_id'],)).fetchone()
+        return run(ars_challenge, current, session['name'] if session else None)
+
     @app.post(API + '/jobs/{job_id}/inputs')
     async def job_inputs(job_id: str, request: Request):
         await body(request)
@@ -686,7 +713,7 @@ def remove_private(relative):
     from finance_cli.core.paths import data_home
     base = data_home().absolute()
     path = storage.no_symlinks(base / relative)
-    allowed = (base / 'server' / 'sessions', base / 'hana' / 'sessions', base / 'server' / 'jobs')
+    allowed = (base / 'server' / 'sessions', base / 'hana' / 'sessions', base / 'hana-corporate' / 'sessions', base / 'server' / 'jobs')
     if not any(path.is_relative_to(root) and path != root for root in allowed):
         raise OSError('outside_session_store')
     if path.is_relative_to(base / 'server' / 'jobs') and (path.is_dir() or path.name != 'result.json'):

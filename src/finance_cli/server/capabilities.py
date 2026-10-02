@@ -9,6 +9,12 @@ from finance_cli.core.live_verification import HANA_FEATURE_NOTES, REVIEWED_ON, 
 
 FEATURES = (
     # area, id, title, placement, jobs
+    ('corporate', 'corporate-login', '기업 ID/PW·공동인증서·하나인증서 로그인', 'settings',
+     ('hana.corporate.login-idpw', 'hana.corporate.login', 'hana.corporate.login-onesign')),
+    ('corporate', 'corporate-accounts', '기업 계좌·잔액 조회', 'work', ('hana.corporate.accounts',)),
+    ('corporate', 'corporate-history', '기업 거래내역 조회', 'work', ('hana.corporate.history',)),
+    ('corporate', 'corporate-transfer', '기업 원화 이체·인증·결과 확인', 'work',
+     ('hana.corporate.transfer.prepare', 'hana.corporate.transfer.result', 'hana.corporate.transfer.cancel')),
     ('banking', 'hana-accounts', '계좌·잔액 조회', 'work', ('hana.accounts.list', 'hana.onesign.accounts')),
     ('banking', 'hana-history', '거래 내역·상세·내보내기', 'work',
      ('hana.history.list', 'hana.history.more', 'hana.history.detail', 'hana.history.export',
@@ -62,7 +68,7 @@ def verification_levels():
     """Live verification flags from ``fin capabilities``, kept separate from availability."""
     from finance_cli.cli.main import capabilities
     services = capabilities()['services']
-    return {'hana': services['hana']['verification'],
+    return {'hana': services['hana']['verification'], 'hana_corporate': 'live_partial',
             'hometax': 'live_verified' if services['hometax'].get('migration_live_tested') else 'live_untested',
             'giro': 'offline'}
 
@@ -111,12 +117,15 @@ def feature_state(feature, levels, cache):
                 else cache[adapter.service]
             row['jobs'].append({**adapter.describe(), 'status': 'setup_required' if reasons else 'available',
                                 'reasons': reasons, **(hana_job(adapter.name) if adapter.service == 'hana'
-                                                      else {'verification': levels.get(adapter.service)})})
+                                                      else {'verification': adapter.verification or levels.get(adapter.service)})})
             if reasons:
                 row['status'] = 'setup_required'
                 row['reasons'] = sorted(set(row['reasons']) | set(reasons))
     service = next((r.service for r in registered if r), {'banking': 'hana', 'tax': 'hometax', 'giro': 'giro'}.get(area))
     row['verification'] = levels.get(service)
+    if service == 'hana_corporate':
+        row['verification'] = combined_level(j['verification'] for j in row['jobs'])
+        row['verification_note'] = '웹 경로는 합성 검증했습니다. ID/PW의 실사용 확인은 기존 CLI 로그인 기록 기준이며 인증서 로그인·이체의 웹 실사용은 미확인입니다.'
     if service == 'hana':
         row['verification'] = (None if placement == 'planned' else 'offline' if placement == 'local' else
                                combined_level(j['verification'] for j in row['jobs']))

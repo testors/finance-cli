@@ -49,8 +49,9 @@ async function setup(t, method = 'onesign', readiness = 'query_only', secret = {
     this.setExport('certificateActions', {});
   }, {context});
   const ui = new SourceTextModule(await readFile(new URL('ui.js', root), 'utf8'), {context});
+  const corporate = new SourceTextModule(await readFile(new URL('corporate.js', root), 'utf8'), {context});
   const views = new SourceTextModule(await readFile(new URL('views.js', root), 'utf8'), {context});
-  await views.link(name => ({'./app.js': app, './api.js': api, './ui.js': ui, './certificates.js': certificates}[name]));
+  await views.link(name => ({'./app.js': app, './api.js': api, './ui.js': ui, './corporate.js': corporate, './certificates.js': certificates}[name]));
   await views.evaluate();
   return {ctx, state, calls, asked, checked, apiCalls, row, document: dom.window.document, ...views.namespace};
 }

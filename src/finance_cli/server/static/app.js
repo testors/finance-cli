@@ -5,10 +5,14 @@ import * as ui from './ui.js';
 import {actions, views} from './views.js';
 
 export const AREAS = {
-  banking: {name: '뱅킹', service: '하나은행', home: 'accounts', icon: 'accounts', items: [
+  banking: {name: '하나개인뱅킹', service: '개인 계좌·거래·이체', home: 'accounts', icon: 'accounts', items: [
     ['accounts', '내 계좌', '계좌', 'accounts', 'hana-accounts'], ['history', '거래 내역', '거래', 'history', 'hana-history'],
     ['transfer', '이체', '이체', 'transfer', 'hana-transfer'], ['inquiry', '이체 내역', '이체 내역', 'history', 'hana-inquiry'],
     ['security', '보안매체·한도', '보안', 'shield', 'hana-security']]},
+  corporate: {name: '하나기업뱅킹', service: '기업 계좌·거래·이체', home: 'corporate-accounts', icon: 'business', items: [
+    ['corporate-accounts', '기업 계좌', '계좌', 'accounts', 'corporate-accounts'],
+    ['corporate-history', '기업 거래내역', '거래', 'history', 'corporate-history'],
+    ['corporate-transfer', '기업 이체', '이체', 'transfer', 'corporate-transfer']]},
   giro: {name: '지로', service: '모바일지로', home: 'bills', icon: 'bill', items: [
     ['bills', '고지서 자료', '고지서', 'bill', 'giro-bills'], ['deadlines', '납부 기한', '기한', 'calendar', 'giro-bills'],
     ['girostatus', '연결 준비', '연결', 'shield', 'giro-readiness'], ['giro-live', '실시간 고지 조회', '실시간 조회', 'refresh', 'giro-live'],
@@ -251,6 +255,8 @@ export function askSecrets(title, allFields, description = '', {store = null} = 
 }
 
 export const SECRET_LABELS = {
+  login_password: ['login_password', '기업 로그인 비밀번호'],
+  otp: ['otp', '일반 OTP 6자리', '[0-9]{6}'],
   certificate_password: ['certificate_password', '인증서 비밀번호'],
   vault_passphrase: ['vault_passphrase', '하나인증서 저장소 암호'],
   pin: ['pin', '하나인증서 PIN 6자리', '[0-9]{6}'],
@@ -332,7 +338,7 @@ export async function showJob(id) {
   const artifacts = (job.artifacts || []).map(a => `<div class="setting-row"><span>${ui.esc(a.filename)}${a.complete === 0 ? ' · 확인 필요' : a.complete === 1 ? ' · 완전' : ''}</span><span class="row-actions">${a.media_type.startsWith('text/html') ? `<button class="text-button" data-action="preview-artifact" data-artifact="${ui.esc(a.id)}">보기</button>` : ''}<a class="text-button" href="/api/v1/artifacts/${encodeURIComponent(a.id)}">${ui.icon('download')}저장</a></span></div>`).join('');
   const cancellable = (job.status === 'queued' || job.status === 'awaiting_input') && !job.attempt?.sent;
   const reconcile = job.name === 'hana.transfer.prepare' && job.status === 'finished' && job.attempt?.sent && ['execute', 'execute_pin'].includes(job.step);
-  ui.showDialog('작업 상세', `<div class="summary-lines">${lines.map(([k, v]) => `<div class="summary-line"><span>${ui.esc(k)}</span><strong>${ui.esc(v)}</strong></div>`).join('')}</div>${job.local?.stopped ? `<p class="dialog-note">${ui.message(job.local.stopped)}</p>` : ''}${ui.verification(job.verification)}${ui.details('기관 판정 (원문 필드)', job.service_verdict)}${ui.details('결과 재조회', job.reconciliation)}${ui.details('로컬 처리 상태', job.local)}${ui.details('처리 순서', job.events?.map(e => ({시각: ui.time(e.at), 단계: e.kind, ...e.detail})))}${artifacts ? `<div class="settings-body">${artifacts}</div>` : ''}<div class="dialog-actions">${cancellable ? `<button class="button secondary" data-action="cancel-job" data-job="${ui.esc(job.id)}">작업 취소</button>` : ''}${reconcile ? `<button class="button secondary" data-action="reconcile" data-job="${ui.esc(job.id)}">이체 결과 조회</button>` : ''}<button class="button primary" data-ui="close">닫기</button></div>`, {wide: true});
+  ui.showDialog('작업 상세', `<div class="summary-lines">${lines.map(([k, v]) => `<div class="summary-line"><span>${ui.esc(k)}</span><strong>${ui.esc(v)}</strong></div>`).join('')}</div>${job.local?.stopped ? `<p class="dialog-note">${ui.message(job.local.stopped)}</p>` : ''}${ui.verification(job.verification)}${ui.details('기관 판정 (원문 필드)', job.service_verdict)}${ui.details('결과 재조회', job.reconciliation)}${ui.details('로컬 처리 상태', job.local)}${ui.details('처리 순서', job.events?.map(e => ({시각: ui.time(e.at), 단계: e.kind, ...e.detail})))}${artifacts ? `<div class="settings-body">${artifacts}</div>` : ''}<div class="dialog-actions">${cancellable ? `<button class="button secondary" data-action="cancel-job" data-job="${ui.esc(job.id)}">작업 취소</button>` : ''}${job.name === 'hana.corporate.transfer.prepare' ? `<button class="button secondary" data-action="corporate-transfer-open" data-job="${ui.esc(job.id)}">${job.status === 'awaiting_input' ? '이체 이어하기' : '이체 결과 보기'}</button>` : ''}${reconcile ? `<button class="button secondary" data-action="reconcile" data-job="${ui.esc(job.id)}">이체 결과 조회</button>` : ''}<button class="button primary" data-ui="close">닫기</button></div>`, {wide: true});
 }
 
 function chooseMode() {

@@ -258,5 +258,10 @@ export function fieldsList(row) {
 }
 
 export const KIND = {personal: '개인', sole_proprietor: '개인사업자', corporation: '법인', business: '사업장', account: '계좌'};
-export const INSTITUTION = {hometax: '홈택스', hana: '하나은행', giro: '모바일지로'};
-export const METHOD = {joint_certificate: '공동인증서', onesign: '하나인증서'};
+export const INSTITUTION = {hometax: '홈택스', hana: '하나개인뱅킹', hana_corporate: '하나기업뱅킹', giro: '모바일지로'};
+export const METHOD = {joint_certificate: '공동인증서', onesign: '하나인증서', id_password: '기업 ID/PW'};
+
+export const BANKS = [['081', '하나은행'], ['004', 'KB국민은행'], ['088', '신한은행'], ['020', '우리은행'], ['011', 'NH농협은행'],
+  ['003', 'IBK기업은행'], ['023', 'SC제일은행'], ['027', '한국씨티은행'], ['031', '대구은행'], ['032', '부산은행'],
+  ['034', '광주은행'], ['035', '제주은행'], ['037', '전북은행'], ['039', '경남은행'], ['045', '새마을금고'], ['048', '신협'],
+  ['071', '우체국'], ['089', '케이뱅크'], ['090', '카카오뱅크'], ['092', '토스뱅크']];

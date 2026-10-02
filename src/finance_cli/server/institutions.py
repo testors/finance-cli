@@ -15,7 +15,7 @@ INSTITUTIONS = {
         'target_kinds': ('personal', 'business'),
     },
     'hana': {
-        'name': '하나은행',
+        'name': '하나개인뱅킹',
         'methods': {
             'joint_certificate': {'name': '공동인증서', 'credential': 'joint',
                                   'registration': ('app_profile', 'login_input')},
@@ -23,6 +23,18 @@ INSTITUTIONS = {
         },
         'purposes': {'login': ('joint_certificate', 'onesign'), 'transfer_sign': ('onesign',)},
         'channels': (None, 'personal'),
+        'target_kinds': ('account',),
+    },
+    'hana_corporate': {
+        'name': '하나기업뱅킹',
+        'methods': {
+            'id_password': {'name': '기업 ID/PW', 'credential': 'id_password', 'registration': ()},
+            'joint_certificate': {'name': '공동인증서', 'credential': 'joint', 'registration': ()},
+            'onesign': {'name': '하나인증서 (개인사업자)', 'credential': 'onesign', 'registration': ()},
+        },
+        'purposes': {'login': ('id_password', 'joint_certificate', 'onesign'),
+                     'transfer_sign': ('joint_certificate',)},
+        'channels': (None, 'corporate'),
         'target_kinds': ('account',),
     },
 }
