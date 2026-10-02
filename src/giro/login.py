@@ -136,7 +136,8 @@ class LoginAttempt:
                 'next_action': self.next_action}
 
 
-class PinLogin:
+class PreloginClient:
+    """Shared explicit recipient/protection transport for login and enrollment."""
     def __init__(self, *, device_id, user_agent, recipient: RecipientContext,
                  protection: ProtectionRuntime):
         if not isinstance(device_id, str):
@@ -174,6 +175,7 @@ class PinLogin:
         received = client.record(self.events, name, started, status, received)
         return received
 
+class PinLogin(PreloginClient):
     def login(self, *, pin_provider, send=False):
         if not send:
             raise GiroError('기관 통신에는 명시적인 전송 승인이 필요합니다.')

@@ -18,7 +18,12 @@
     "accounts.banks": "kr/or/giro/android/net/query/service/common/QryAppQryPayableBankList",
     "hometax.detail": "kr/or/giro/android/net/query/service/link/nts/QryLinkNtsQryBillDetail",
     "national.payment": "kr/or/giro/android/net/query/service/ntax/ntaxsearch/QryNtaxSearchProcPayment",
-    "hometax.payment": "kr/or/giro/android/net/query/service/link/nts/QryLinkNtsProcPayment"
+    "hometax.payment": "kr/or/giro/android/net/query/service/link/nts/QryLinkNtsProcPayment",
+    "registration.user-info": "kr/or/giro/android/net/query/common/auth/QryUserInfo",
+    "registration.sms-send": "kr/or/giro/android/net/query/common/auth/QrySmsAuth",
+    "registration.sms-verify": "kr/or/giro/android/net/query/common/auth/QryProcSmsAuth",
+    "registration.check-user": "kr/or/giro/android/net/query/common/auth/QryChkUser",
+    "registration.pin": "kr/or/giro/android/net/query/common/pin/QryRegPin"
   },
   "models": {
     "kr/or/giro/android/net/query/etc/QryServerCert": {
@@ -773,6 +778,60 @@
         "카드번호": "string",
         "할부기간": "string",
         "합계납부금액": "string"
+      },
+      "parent": "kr/or/giro/android/net/query/QryCommon"
+    },
+    "kr/or/giro/android/net/query/common/auth/QryUserInfo": {
+      "fields": {
+        "memberErrMsg": "string",
+        "memberStatus": "string",
+        "nonce": "string",
+        "qryType": "string",
+        "userType": "string"
+      },
+      "parent": "kr/or/giro/android/net/query/QryCommon"
+    },
+    "kr/or/giro/android/net/query/common/auth/QrySmsAuth": {
+      "fields": {
+        "birthday": "string",
+        "gender": "string",
+        "name": "string",
+        "nation": "string",
+        "nonce": "string",
+        "phoneCorp": "string",
+        "phoneNo": "string",
+        "saupNo": "string",
+        "userType": "string"
+      },
+      "parent": "kr/or/giro/android/net/query/QryCommon"
+    },
+    "kr/or/giro/android/net/query/common/auth/QryProcSmsAuth": {
+      "fields": {
+        "deviceChgYn": "string",
+        "deviceUniqNo": "string",
+        "memberErrMsg": "string",
+        "memberStatus": "string",
+        "nonce": "string",
+        "smsNum": "string"
+      },
+      "parent": "kr/or/giro/android/net/query/QryCommon"
+    },
+    "kr/or/giro/android/net/query/common/auth/QryChkUser": {
+      "fields": {
+        "certType": "string",
+        "nonce": "string",
+        "pin": "string"
+      },
+      "parent": "kr/or/giro/android/net/query/QryCommon"
+    },
+    "kr/or/giro/android/net/query/common/pin/QryRegPin": {
+      "fields": {
+        "alertNumChgYn": "string",
+        "chgAlertNum": "string",
+        "deviceUniqNo": "string",
+        "nonce": "string",
+        "pin": "string",
+        "pin1": "string"
       },
       "parent": "kr/or/giro/android/net/query/QryCommon"
     }

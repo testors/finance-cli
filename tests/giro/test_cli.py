@@ -19,6 +19,15 @@ class CliTests(unittest.TestCase):
             (code, _) = self.call(args)
             self.assertEqual(code, 0)
 
+    def test_registration_plan_is_offline_without_identity_creation(self):
+        with patch('giro.registration_flow.EnrollmentStore.identity', side_effect=AssertionError('no ID')):
+            code, result = self.call(['auth', 'registration-plan'])
+        self.assertEqual(code, 0)
+        self.assertFalse(result['network_used'])
+        self.assertFalse(result['live_registration_tested'])
+        self.assertFalse(result['default_runtime_available'])
+        self.assertEqual(result['max_business_requests'], 8)
+
     def test_live_login_explicitly_unavailable(self):
         (code, result) = self.call(['auth', 'login'])
         self.assertEqual(code, 4)

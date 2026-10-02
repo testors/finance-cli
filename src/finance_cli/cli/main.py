@@ -44,7 +44,7 @@ def capabilities():
                              'returns', 'report', 'invoice'],
                     'requirements': ['Node runtime', 'JDK 17+ for invoice signing'],
                     'migration_live_tested': False},
-        'giro': {'offline': ['auth-plan', 'request-plan', 'bills', 'payment-accounts', 'payment-plan',
+        'giro': {'offline': ['auth-plan', 'registration-plan', 'request-plan', 'bills', 'payment-accounts', 'payment-plan',
                             'payment-result', 'certificate-validation', 'codeguard'],
                  'live': ['explicit PIN-free bootstrap probes', 'pinned-public-root-preparation'],
                  'live_login': False}},

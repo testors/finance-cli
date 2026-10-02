@@ -201,8 +201,13 @@ class RuntimeTests(unittest.TestCase):
 
     def test_login_initialization_waits_for_update_notification(self):
         runtime = self.runtime()
-        gate, entered = Event(), Event()
+        gate, entered, initialized = Event(), Event(), Event()
         self.gates.append(gate)
+        initialize = runtime.initialize
+        def tracked_initialize():
+            initialize()
+            initialized.set()
+        runtime.initialize = tracked_initialize
         resolve = runtime.platform.resolve
         def delayed(effect):
             if current_thread().name == 'cg-update' and effect.kind == 'preference_read':
@@ -214,6 +219,9 @@ class RuntimeTests(unittest.TestCase):
             ready = pool.submit(runtime.initialize_for_login, timeout=3)
             try:
                 self.assertTrue(entered.wait(1))
+                # The update worker may reach its first read before the UI
+                # thread finishes initialize(). Observe both independently.
+                self.assertTrue(initialized.wait(1))
                 self.assertTrue(runtime.process.is_init)
                 self.assertFalse(ready.done())
             finally:

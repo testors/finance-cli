@@ -31,6 +31,7 @@ def parser():
     auth = sub.add_parser("auth", help="인증 순서 또는 로컬 PIN 코덱")
     auth_sub = auth.add_subparsers(dest="action", required=True)
     auth_sub.add_parser("plan", help="확인된 인증 흐름과 미해결 항목")
+    auth_sub.add_parser('registration-plan', help='기존 개인 회원 신규 기기 등록 순서·입력·검증 범위; 무통신')
     auth_sub.add_parser("login", help="미구현: 네트워크 요청 없이 오류 반환")
     trust = auth_sub.add_parser('prepare-trust', help='고정 해시의 공개 루트 2개 준비; 기본은 무통신 계획')
     trust.add_argument('--cache', help='명시적인 기존 절대경로 디렉터리; 공개 인증서·폐지목록 전용')
@@ -135,6 +136,9 @@ def run(args):
     if args.command == "auth":
         if args.action == "plan":
             return auth_plan(), 0
+        if args.action == 'registration-plan':
+            from .registration_flow import registration_plan
+            return registration_plan(), 0
         if args.action == "login":
             return {"error": "live_auth_unavailable", **auth_plan()}, 4
         if args.action == 'prepare-trust':

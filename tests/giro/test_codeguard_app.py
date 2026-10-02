@@ -103,7 +103,7 @@ class AppInputTests(unittest.TestCase):
 
     def test_supported_token_requirements_include_link_detail(self):
         self.assertEqual({name for name, ep in ENDPOINTS.items() if ep.codeguard_required},
-                         {'auth.pin', 'hometax.detail'})
+                         {'auth.pin', 'hometax.detail', 'registration.user-info'})
         self.assertFalse(ENDPOINTS['hometax.detail'].session_required)
         self.assertEqual(ENDPOINTS['hometax.detail'].mode, 'ENCRYPT')
 
