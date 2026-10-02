@@ -234,6 +234,26 @@ class RegistrationTests(TestCase):
         self.assertEqual(result.processing_issues, ['pin_confirmation_mismatch'])
         self.assertNotIn('registration.pin', self.server.steps)
 
+    def test_local_input_validation_preserves_the_screen_for_explicit_correction(self):
+        self.send_sms()
+        before = list(self.server.calls)
+        result = self.registration.verify_sms(code_provider=lambda: '123', send=True)
+        self.assertEqual(result.next_action, 'sms_code')
+        self.assertEqual(result.processing_issues, ['local_input_invalid'])
+        self.assertEqual(before, self.server.calls)
+        self.registration.verify_sms(code_provider=lambda: '123456', send=True)
+        before = list(self.server.calls)
+        result = self.registration.check_existing_pin(pin_provider=lambda: '123', send=True)
+        self.assertEqual(result.next_action, 'existing_pin')
+        self.assertEqual(before, self.server.calls)
+        self.registration.check_existing_pin(pin_provider=lambda: '012345', send=True)
+        before = list(self.server.calls)
+        result = self.registration.register_pin(pin_provider=lambda: '234567',
+            confirmation_provider=lambda: 'abc123', send=True)
+        self.assertEqual(result.next_action, 'new_pin')
+        self.assertEqual(before, self.server.calls)
+        self.assertEqual(self.register().report()['registration_service_decision'], 'success')
+
     def test_registration_rejection_preserves_nonce_and_does_not_retry(self):
         self.check_pin()
         self.server.responses['registration.pin'] = (200, {'responseCode': '999', 'nonce': 'new-pin-nonce'})

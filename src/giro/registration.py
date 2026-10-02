@@ -94,7 +94,8 @@ class DeviceRegistration(PreloginClient):
         with self._lock:
             if self.next_action not in allowed:
                 raise GiroError('현재 등록 단계에서는 이 요청을 실행할 수 없습니다.')
-            result = RegistrationStep(self.next_action)
+            previous_action = self.next_action
+            result = RegistrationStep(previous_action)
             self.next_action = 'stopped'  # Reserve before inputs or side effects.
             try:
                 operation(result)
@@ -102,6 +103,12 @@ class DeviceRegistration(PreloginClient):
                 result.processing_issues.append('recipient_validation_failed')
             except CertificateBackendLimit:
                 result.processing_issues.append('recipient_validation_incomplete')
+            except GiroError:
+                if result.stage in ('sms.input', 'pin.input'):
+                    self.next_action = previous_action
+                    result.processing_issues.append('local_input_invalid')
+                else:
+                    result.processing_issues.append('stage_processing_incomplete')
             except Exception:
                 result.processing_issues.append('stage_processing_incomplete')
             result.next_action = self.next_action
