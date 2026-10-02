@@ -76,8 +76,10 @@ def login(session, identity, settings, *, send=False, inputs=None, exchange=send
             client.saved.update(login_method='1', user_id=identity, settings=settings)
             try:
                 for stage in ('emergency', 'app-info'):
-                    protocol.check_bootstrap(stage, client.request(stage, native=True))
-                public = client.request('keypad-key', native=True, assessor=protocol.assess_native).get('publicKey')
+                    warnings = protocol.check_bootstrap(stage, client.request(stage, native=True, assessor=protocol.assess_data))
+                    if warnings:
+                        result['stages'][-1]['warnings'] = warnings
+                public = client.request('keypad-key', native=True, assessor=protocol.assess_data).get('publicKey')
                 protocol.require(isinstance(public, str) and bool(public), 'keypad_public_key_unavailable')
                 try:
                     encrypted = encrypt_character_password(public, password, mac)

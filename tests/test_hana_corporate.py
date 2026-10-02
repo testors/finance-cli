@@ -125,6 +125,8 @@ class FakeBank:
                 else:
                     self.case.assertEqual(signature, 'SYNTHETIC-CONFIRMED-SIGNATURE')
             value = {'headerData': {'status': '200'}, 'data': values[stage]}
+            if stage in ('emergency', 'app-info'):
+                value.pop('headerData')
             if stage in self.modifiers:
                 value = self.modifiers[stage](value)
             return 200, [], json.dumps(value).encode(), self.corporate_cookies
@@ -336,12 +338,13 @@ class CorporateTests(unittest.TestCase):
         self.assertEqual(sum(r[3].endswith('/requestSecretE') for r in bank.calls), 1)
         self.assertFalse(any(r[3].endswith('/easnCertElecSign') for r in bank.calls))
 
-    def test_bootstrap_notice_stops_before_nonce(self):
+    def test_bootstrap_notice_is_logged_without_blocking_login(self):
         bank = self.joint()
-        bank.modifiers['app-info'] = lambda v: {**v, 'data': {**v['data'], 'noticeInfo': {'text': 'SYNTHETIC-PRIVATE'}}}
+        bank.modifiers['app-info'] = lambda v: {**v, 'data': {**v['data'], 'noticeInfo': {'tite': 'SYNTHETIC-PRIVATE'}}}
         result = self.run_login(bank)
-        self.assertEqual(result['error'], 'app_notice_requires_review')
-        self.assertEqual(len(bank.calls), 2)
+        self.assertTrue(result['accepted'], result)
+        self.assertEqual(result['stages'][1]['warnings'], ['app_notice'])
+        self.assertNotIn('SYNTHETIC-PRIVATE', json.dumps(result))
 
     def test_form_and_tbs_encoding(self):
         self.assertEqual(protocol.form({'COMM_HEAD': {'SIGNED_MSG': 'a+b/c='}, 'empty': {}, 'x': ['a b', None]}),

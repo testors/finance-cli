@@ -108,6 +108,14 @@ def assess_native(status, value):
     return result
 
 
+def assess_data(status, value):
+    """Preparation repositories consume data without checking a business status."""
+    result = {'http_status': status, 'service_status': 'unconfirmed', 'reason': 'response_unconfirmed'}
+    if 200 <= status < 300 and isinstance(value, dict) and isinstance(value.get('data'), dict):
+        result.update(service_status='accepted', reason='data_received')
+    return result
+
+
 def customer_guidance(value):
     if value.get('CRPN_REG_NO') in ('1101110672538', 1101110672538) and value.get('LGIN_CERT_METH_CD') in ('1', 1):
         return 'certificate_login_required'
@@ -174,15 +182,29 @@ def check_bootstrap(stage, value):
     require(isinstance(value, dict), 'bootstrap_data_unavailable')
     if stage == 'emergency':
         require(value.get('emergency_yn') != 'Y', 'emergency_notice')
-        require(isinstance(value.get('emergency_yn'), str), 'emergency_status_unavailable')
-        return
+        # The nullable Gson String flag gates the next request only for exact Y.
+        require(value.get('emergency_yn') is None or isinstance(value['emergency_yn'], (str, int, float, bool)),
+                'emergency_status_unavailable')
+        return [] if value.get('emergency_yn') == 'N' else ['emergency_status_unusual']
     info = value.get('appInfo')
     require(isinstance(info, dict), 'app_version_unavailable')
-    # Service compares versions after removing dots; preserve that ordering.
+    warnings = []
+    # Only the minimum version is mandatory. Optional update dismissal continues.
     for key, reason in (('minVerNo', 'app_update_required'), ('prsVerNo', 'app_update_notice')):
         version = info.get(key)
-        require(isinstance(version, str), 'app_version_unavailable')
-        number = version.replace('.', '')
-        if number.isascii() and number.isdecimal():
-            require(int(VERSION.replace('.', '')) >= int(number), reason)
-    require(value.get('noticeInfo') is None, 'app_notice_requires_review')
+        require(version is None or isinstance(version, (str, int, float, bool)), 'app_version_unavailable')
+        number = str(version).replace('.', '')
+        if not (number.isascii() and number.isdecimal()):
+            # IntroVM.checkVersion returns false for absent/non-numeric versions.
+            warnings.append('app_version_unavailable')
+            continue
+        require(int(number) <= 2147483647, 'app_version_parse_failed')
+        if int(VERSION.replace('.', '')) < int(number):
+            require(key != 'minVerNo', reason)
+            warnings.append(reason)
+    notice = value.get('noticeInfo')
+    require(notice is None or isinstance(notice, dict), 'app_notice_data_unavailable')
+    if notice is not None and notice.get('tite') not in (None, ''):
+        # Informational confirmation leads to checkedNotice, not login rejection.
+        warnings.append('app_notice')
+    return list(dict.fromkeys(warnings))

@@ -61,6 +61,8 @@ class Bank:
                   'login-idpw': {'USR_MGNT_NO': 'SYNTHETIC-MGMT', 'PSNL_ENPR_YN': 'Y', 'LOGIN_TIME': 1234},
                   'withdrawal-info': {}, 'customer-check': {'AUTH_58_YN': 'N'}, 'logout': {}}
         response = {'headerData': {'status': '200'}, 'data': values[stage]}
+        if stage in ('emergency', 'app-info', 'keypad-key'):
+            response.pop('headerData')
         response = self.modifiers.get(stage, lambda x: x)(response)
         return 200, [], json.dumps(response).encode(), [{'name': 'SYNTHETIC-CORPORATE'}]
 
@@ -279,11 +281,78 @@ class IdPasswordTests(unittest.TestCase):
         self.assertEqual(result['error'], 'keypad_encryption_failed')
         self.assertEqual(bank.calls[-1], 'keypad-key')
 
-    def test_key_210_stops_before_password_submission(self):
+    def test_key_data_callback_does_not_use_login_status_rules(self):
         bank = self.prepare()
         bank.modifiers['keypad-key'] = lambda v: {**v, 'headerData': {'status': '210'}}
-        self.assertIsNone(self.execute(bank)['accepted'])
-        self.assertEqual(bank.calls[-1], 'keypad-key')
+        self.assertTrue(self.execute(bank)['accepted'])
+        self.assertEqual(bank.calls[-1], 'customer-check')
+
+    def test_bootstrap_data_ignores_unused_status_without_changing_login_rules(self):
+        bank = self.prepare()
+        for stage in ('emergency', 'app-info', 'keypad-key'):
+            bank.modifiers[stage] = lambda v: {**v, 'headerData': {'status': '500'}}
+        result = self.execute(bank)
+        self.assertTrue(result['accepted'])
+        self.assertEqual([row['reason'] for row in result['stages'][:3]], ['data_received'] * 3)
+        self.assertEqual(protocol.assess_native(200, {'data': {}})['service_status'], 'unconfirmed')
+
+    def test_emergency_exact_Y_stops_before_app_info_and_login(self):
+        bank = self.prepare()
+        bank.modifiers['emergency'] = lambda v: {'data': {'emergency_yn': 'Y', 'content': 'SYNTHETIC-PRIVATE'}}
+        result = self.execute(bank)
+        self.assertEqual(result['error'], 'emergency_notice')
+        self.assertIsNone(result['accepted'])
+        self.assertEqual(bank.calls, ['emergency'])
+        self.assertNotIn('SYNTHETIC-PRIVATE', json.dumps(result))
+
+    def test_emergency_nullable_scalar_flag_matches_exact_Y_predicate(self):
+        for flag in ('N', 'y', '', None, False, 0):
+            with self.subTest(flag=flag):
+                protocol.check_bootstrap('emergency', {'emergency_yn': flag})
+        protocol.check_bootstrap('emergency', {})
+        for flag in ([], {}):
+            with self.subTest(flag=flag), self.assertRaises(protocol.Stop):
+                protocol.check_bootstrap('emergency', {'emergency_yn': flag})
+
+    def test_preparation_requires_successful_http_and_object_data(self):
+        for status, value in ((503, {'data': {}}), (200, {}), (200, {'data': None}),
+                              (200, {'data': []}), (200, [])):
+            with self.subTest(status=status, value=value):
+                self.assertEqual(protocol.assess_data(status, value)['service_status'], 'unconfirmed')
+        bank = self.prepare()
+        bank.modifiers['emergency'] = lambda v: {'headerData': {'status': '200'}}
+        result = self.execute(bank)
+        self.assertEqual(result['error'], 'response_unconfirmed')
+        self.assertIsNone(result['accepted'])
+        self.assertEqual(bank.calls, ['emergency'])
+
+    def test_optional_update_and_notice_warn_without_changing_login(self):
+        bank = self.prepare()
+        bank.modifiers['app-info'] = lambda v: {'data': {'appInfo': {'minVerNo': '6.2.0', 'prsVerNo': '6.2.3'},
+                                                        'noticeInfo': {'tite': 'SYNTHETIC-PRIVATE'}}}
+        result = self.execute(bank)
+        self.assertTrue(result['accepted'], result)
+        self.assertEqual(result['stages'][1]['warnings'], ['app_update_notice', 'app_notice'])
+        self.assertNotIn('SYNTHETIC-PRIVATE', json.dumps(result))
+
+    def test_mandatory_update_preserves_original_stop(self):
+        bank = self.prepare()
+        bank.modifiers['app-info'] = lambda v: {'data': {'appInfo': {'minVerNo': '6.2.3', 'prsVerNo': '6.2.3'}}}
+        result = self.execute(bank)
+        self.assertIsNone(result['accepted'])
+        self.assertEqual(result['error'], 'app_update_required')
+        self.assertEqual(bank.calls, ['emergency', 'app-info'])
+
+    def test_absent_or_non_numeric_versions_warn_and_empty_notice_continues(self):
+        for version in (None, '', 'unknown', '6.2.2-beta', False):
+            with self.subTest(version=version):
+                warnings = protocol.check_bootstrap('app-info', {'appInfo': {'minVerNo': version}, 'noticeInfo': {}})
+                self.assertEqual(warnings, ['app_version_unavailable'])
+        bank = self.prepare()
+        bank.modifiers['app-info'] = lambda v: {'data': {'appInfo': {}, 'noticeInfo': {}}}
+        result = self.execute(bank)
+        self.assertTrue(result['accepted'], result)
+        self.assertEqual(result['stages'][1]['warnings'], ['app_version_unavailable'])
 
     def test_input_boundaries_do_not_normalize_password(self):
         self.assertEqual(protocol.user_id('aBcD0123'), 'ABCD0123')

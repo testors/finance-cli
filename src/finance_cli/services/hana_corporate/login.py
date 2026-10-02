@@ -54,7 +54,9 @@ def login(session, method, credential, *, send=False, inputs=None, exchange=send
             client.saved['login_method'] = method
             try:
                 for stage in ('emergency', 'app-info'):
-                    protocol.check_bootstrap(stage, client.request(stage, native=True))
+                    warnings = protocol.check_bootstrap(stage, client.request(stage, native=True, assessor=protocol.assess_data))
+                    if warnings:
+                        result['stages'][-1]['warnings'] = warnings
                 nonce = client.request('nonce', native=method == '2').get('delfinoNonce')
                 protocol.require(isinstance(nonce, str), 'nonce_unavailable')
                 if method == '2':
