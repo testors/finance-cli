@@ -23,7 +23,7 @@ BASE = 'https://m.giro.or.kr/CodeGuard/'
 CODEGUARD_USER_AGENT = 'FinanceCLI/0.1'
 
 
-def auth_execution_plan(*, register=False):
+def auth_execution_plan(*, register=False, retry=False):
     return dict(operation='register-and-login' if register else 'pin-login',
         plan_only=True, network_used=False, input_accessed=False, institution_verified=False,
         existing_phone_registration_may_be_replaced=register,
@@ -32,7 +32,7 @@ def auth_execution_plan(*, register=False):
         maximum_terms_requests=3 if register else 0,
         device_identity='persistent CLI identity', protection_inputs='recorded-state-replay',
         session_storage='AES-GCM with private local key; PIN and protection token not saved',
-        automatic_retry=False, payment=False,
+        automatic_retry=False, retry_requested=retry, payment=False,
         required_setup=['installed private protection profile', 'current recipient certificate/CRL cache'])
 
 
@@ -74,13 +74,14 @@ def login_dependencies(*, register=False, profile_path=None, public_cache=None):
 
 
 def authenticate(*, pin_provider, register=False, enrollment_providers=None, send=False,
-                 profile_path=None, public_cache=None, enrollment_store=None, session_store=None):
+                 profile_path=None, public_cache=None, enrollment_store=None, session_store=None, retry=False):
     """No file/provider access without send; no retry after any remote result.
 
     Registration continues explicitly through the login PIN provider. The
     providers are UI adapters, never PIN values or command-line arguments.
     """
-    if not send: return auth_execution_plan(register=register)
+    if retry and not register: raise GiroError('등록 초기 단계의 명시적 재시도에만 사용할 수 있습니다.')
+    if not send: return auth_execution_plan(register=register, retry=retry)
     result = dict(operation='register-and-login' if register else 'pin-login', plan_only=False,
         network_used=False, session_saved=False, automatic_retry=False, processing_issues=[],
         registration_service_decision='unobserved', login_service_decision='unobserved')
@@ -97,7 +98,7 @@ def authenticate(*, pin_provider, register=False, enrollment_providers=None, sen
                 # phone helper; no discovery, private Android ID, or host ID.
                 providers = enrollment_providers(dependencies.profile)
                 attempt = enroll_once(client_factory=lambda device_id: DeviceRegistration(device_id=device_id, **options),
-                    store=enrollment_store, login_pin_provider=pin_provider, send=True, **providers)
+                    store=enrollment_store, login_pin_provider=pin_provider, send=True, retry=retry, **providers)
                 report = attempt.report()
                 result.update(report)
                 result['login_service_decision'] = (report['login'] or {}).get('login_service_decision', 'unobserved')

@@ -2,9 +2,11 @@
 
 Providers own terminal/UI input. No platform identity or runtime is inferred.
 The durable reservation prevents a restart from silently repeating enrollment;
-source-compatible manual retries remain available on DeviceRegistration itself.
+An explicit retry can archive a confirmed rejection of the initial read-only
+queries. Ambiguous or later enrollment attempts are never silently replaced.
 """
 from dataclasses import dataclass, field
+import hashlib
 import json
 from pathlib import Path
 import re
@@ -22,6 +24,32 @@ TERMS = (
     {'name': '고유식별정보 처리', 'provisionType': '5'},
 )
 TERMS_URL = 'https://m.giro.or.kr/girohelp/guide/mobileProvision.m'
+
+
+class EnrollmentRetryUnavailable(GiroError):
+    pass
+
+
+def retryable_start_report(report):
+    """Only a completed, explicit rejection before SMS/registration can restart.
+
+    This is a local attempt reservation rule, not a new service verdict. The
+    next attempt still queries device status and follows its normal routing.
+    """
+    if not isinstance(report, dict): return False
+    steps = report.get('steps')
+    if (report.get('state') != 'finished' or report.get('next_action') != 'stopped'
+            or report.get('registration_service_decision') != 'unobserved'
+            or report.get('login') is not None
+            or not isinstance(steps, list) or len(steps) != 1 or not isinstance(steps[0], dict)):
+        return False
+    step = steps[0]
+    return (step.get('stage') in ('auth.server-cert', 'auth.device-status', 'auth.datetime')
+            and step.get('response_endpoint') == step.get('stage')
+            and step.get('response_origin') == 'response'
+            and step.get('service_decision') == 'failure'
+            and step.get('registration_service_decision') == 'unobserved'
+            and step.get('next_action') == 'stopped')
 
 
 def registration_plan():
@@ -49,13 +77,15 @@ class EnrollmentStore:
     def __init__(self, root=None):
         self.root = Path(root) if root is not None else data_home() / 'giro' / 'enrollment'
 
-    def identity(self):
+    def identity(self, *, create=True):
         """Persist before any request; never replace an existing or corrupt ID."""
         root = storage.directory(self.root)
         path = root / 'identity.json'
         try:
             document = json.loads(storage.read(path, limit=4096))
         except FileNotFoundError:
+            if not create:
+                raise EnrollmentRetryUnavailable('재시도에는 기존 CLI 식별자가 필요합니다.') from None
             document = dict(schema=1, source='cli-generated', device_id=secrets.token_hex(8))
             try:
                 storage.write_new(path, (json.dumps(document) + '\n').encode())
@@ -68,12 +98,30 @@ class EnrollmentStore:
             raise GiroError('CLI 기기 식별자 기록을 확인할 수 없습니다. 자동으로 새로 만들지 않습니다.')
         return document['device_id']
 
-    def reserve(self):
-        path = storage.directory(self.root) / 'attempt.json'
-        try:
-            storage.write_new(path, b'{"state":"reserved","registration_service_decision":"unobserved"}\n')
-        except FileExistsError:
-            raise GiroError('이미 기기 등록을 시도한 기록이 있습니다. 기존 결과를 확인하세요.') from None
+    def reserve(self, *, retry=False):
+        root = storage.directory(self.root)
+        path = root / 'attempt.json'
+        pending = dict(state='reserved', registration_service_decision='unobserved')
+        with storage.lock(root / '.attempt.lock'):
+            if retry:
+                try:
+                    previous = storage.read(path)
+                    if not retryable_start_report(json.loads(previous)):
+                        raise ValueError('not_a_confirmed_initial_rejection')
+                except Exception:
+                    raise EnrollmentRetryUnavailable('초기 조회의 확정 실패 기록만 명시적으로 재시도할 수 있습니다.') from None
+                archive = storage.directory(root / 'attempts') / (hashlib.sha256(previous).hexdigest() + '.json')
+                try:
+                    storage.write_new(archive, previous)
+                except FileExistsError:
+                    if storage.read(archive) != previous: raise GiroError('기존 시도 기록을 보존하지 못했습니다.')
+                # Archive durably before replacing the current reservation.
+                storage.atomic_json(path, pending)
+            else:
+                try:
+                    storage.write_new(path, (json.dumps(pending) + '\n').encode())
+                except FileExistsError:
+                    raise GiroError('이미 기기 등록을 시도한 기록이 있습니다. 기존 결과를 확인하세요.') from None
         return path
 
     def finish(self, path, report):
@@ -105,7 +153,7 @@ class EnrollmentAttempt:
 
 def enroll_once(*, client_factory, consent_provider, identity_provider, sms_provider,
                 existing_pin_provider, new_pin_provider, confirmation_provider,
-                store=None, login_pin_provider=None, send=False):
+                store=None, login_pin_provider=None, send=False, retry=False):
     """Factory(device_id) -> DeviceRegistration; providers are called once at most.
 
 The caller displays the original terms before consent_provider returns True.
@@ -117,8 +165,8 @@ No automatic certificate fallback, member join, restart or payment.
     store = store if store is not None else EnrollmentStore()
     result, reservation, client = EnrollmentAttempt(), None, None
     try:
-        device_id = store.identity()
-        reservation = store.reserve()
+        device_id = store.identity(create=False) if retry else store.identity()
+        reservation = store.reserve(retry=True) if retry else store.reserve()
         client = client_factory(device_id)
         def record(step):
             result.steps.append(step)
@@ -146,6 +194,8 @@ No automatic certificate fallback, member join, restart or payment.
                 result.processing_issues.append('enrollment_receipt_save_incomplete')
             result.login_attempt = client.login(pin_provider=login_pin_provider, send=True)
             result.next_action = client.next_action
+    except EnrollmentRetryUnavailable:
+        result.processing_issues.append('enrollment_retry_unavailable')
     except (Exception, KeyboardInterrupt):
         result.processing_issues.append('enrollment_processing_incomplete')
     if client is not None:

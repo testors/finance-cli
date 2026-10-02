@@ -105,6 +105,7 @@ def run_auth(args):
             return dict(error='protection_profile_install_incomplete', network_used=False), 2
     if args.live: private_terminal()
     result = authenticate(register=args.action == 'register', send=args.live,
+        retry=getattr(args, 'retry', False),
         pin_provider=lambda: secret('로그인 PIN 6자리: '),
         enrollment_providers=lambda profile: enrollment_inputs(profile, getattr(args, 'carrier', None)),
         profile_path=args.protection_profile, public_cache=args.public_cache)

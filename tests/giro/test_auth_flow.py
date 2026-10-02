@@ -91,6 +91,41 @@ class AuthFlowTests(unittest.TestCase):
         self.assertEqual(result['registration_service_decision'], 'unobserved')
         self.assertFalse(any(name.startswith('registration.') for name in self.server.steps))
 
+    def test_explicit_retry_archives_initial_rejection_and_reuses_identity_through_login(self):
+        accepted = self.server.responses['auth.device-status']
+        self.server.responses['auth.device-status'] = (200, {'errorInfo': {'errorCode': '999'}})
+        first = self.invoke()
+        self.assertEqual(first['steps'][0]['service_decision'], 'failure')
+        root = Path(self.temp.name).resolve() / 'enrollment'
+        store = EnrollmentStore(root)
+        identity, receipt = (root / 'identity.json').read_bytes(), (root / 'attempt.json').read_bytes()
+        calls = list(self.server.calls)
+        def invoke(retry):
+            with patch('giro.auth_flow.login_dependencies', self.dependencies):
+                return authenticate(register=True, retry=retry, send=True,
+                    pin_provider=lambda: '234567', enrollment_providers=self.providers,
+                    enrollment_store=store, session_store=self.sessions)
+        blocked = invoke(False)
+        self.assertIn('enrollment_processing_incomplete', blocked['processing_issues'])
+        self.assertEqual(self.server.calls, calls)
+        self.server.responses['auth.device-status'] = accepted
+        self.protection.values.extend(['DISCARDED', '{"CODE_RESPONSE":"SYNTHETIC-LOGIN"}'])
+        result = invoke(True)
+        self.assertEqual(result['registration_service_decision'], 'success', result)
+        self.assertEqual(result['login_service_decision'], 'success', result)
+        self.assertTrue(result['session_saved'])
+        self.assertEqual((root / 'identity.json').read_bytes(), identity)
+        archives = list((root / 'attempts').glob('*.json'))
+        self.assertEqual(len(archives), 1)
+        self.assertEqual(archives[0].read_bytes(), receipt)
+        self.assertEqual(archives[0].stat().st_mode & 0o777, 0o600)
+        device_id = json.loads(identity)['device_id']
+        self.assertTrue(all(c[1]['deviceId'] == [device_id] for c in self.server.calls))
+        calls = list(self.server.calls)
+        refused = invoke(True)
+        self.assertIn('enrollment_retry_unavailable', refused['processing_issues'])
+        self.assertEqual(self.server.calls, calls)
+
     def test_failed_login_keeps_registration_success_and_no_saved_session(self):
         self.protection.values.extend(['DISCARDED', '{"CODE_RESPONSE":"SYNTHETIC-LOGIN"}'])
         self.server.responses['auth.pin'] = (200, {'responseCode': '999'})

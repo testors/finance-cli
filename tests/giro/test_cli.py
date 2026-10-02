@@ -29,13 +29,21 @@ class CliTests(unittest.TestCase):
         self.assertEqual(result['max_business_requests'], 10)
 
     def test_login_registration_query_and_payment_default_to_no_io_plans(self):
-        for command in (['auth', 'login'], ['auth', 'register'], ['bills', 'list', '--type', 'national'], ['payment', 'pay']):
+        for command in (['auth', 'login'], ['auth', 'register'], ['auth', 'register', '--retry'],
+                        ['bills', 'list', '--type', 'national'], ['payment', 'pay']):
             with patch('giro.auth_flow.login_dependencies', side_effect=AssertionError('no dependencies')), \
                  patch('giro.session_store.SessionStore.use', side_effect=AssertionError('no session')):
                 code, result = self.call(command)
             self.assertEqual(code, 0)
             self.assertFalse(result['network_used'])
             self.assertTrue(result['plan_only'])
+
+    def test_register_retry_option_is_forwarded_only_with_explicit_command(self):
+        with patch('giro.auth_cli.private_terminal'), \
+             patch('giro.auth_cli.authenticate', return_value={'plan_only': True}) as run:
+            self.call(['auth', 'register', '--retry', '--send'])
+        self.assertTrue(run.call_args.kwargs['retry'])
+        self.assertTrue(run.call_args.kwargs['send'])
 
     def test_explicit_auth_requires_private_terminal_before_dependencies(self):
         with patch('giro.auth_flow.login_dependencies', side_effect=AssertionError('no dependencies')):
