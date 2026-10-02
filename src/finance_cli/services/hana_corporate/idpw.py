@@ -61,14 +61,15 @@ def login(session, identity, settings, *, send=False, inputs=None, exchange=send
               'session_current_validity': 'unverified'}
     try:
         identity = protocol.user_id(identity)
-        directory = store.session_path(session)
+        settings, mac = keypad.resolve(settings)
+        OpenSSL()
+        session, directory = store.prepare_idpw(session)
+        result.update(session=session, settings=settings)
         with storage.lock(directory / 'operation.lock'):
             protocol.require(not (directory / 'login-attempt.json').exists(), 'login_already_attempted_use_new_session')
             profile = store.device(storage.read_json(directory / 'device.json'))
             # Validate push consistency and local crypto/settings before reading a secret or sending.
             protocol.idpw_body(identity, 'validation-only', profile['push'])
-            mac = keypad.load(settings)
-            OpenSSL()
             password = protocol.id_password(inputs['password']())
             store.record(directory / 'login-attempt.json', {'login_method': '1', 'settings': settings, 'automatic_retry': False})
             client = Client(directory, profile, result, exchange=exchange)

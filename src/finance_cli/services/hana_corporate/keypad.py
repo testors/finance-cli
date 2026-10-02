@@ -44,3 +44,19 @@ def load(name):
     material = base64.b64decode(value['keypad_mac'], validate=True)
     require(len(material) == 20, 'invalid_keypad_mac')
     return material
+
+
+def resolve(name=None):
+    if name is not None:
+        path = shared.root('settings') / (shared.name(name) + '.json')
+        require(path.exists(), 'keypad_settings_not_found')
+        return name, load(name)
+    available = []
+    for path in sorted(shared.root('settings').glob('*.json')):
+        try:
+            available.append((path.stem, load(path.stem)))
+        except (OSError, ValueError, KeyError, TypeError):
+            continue
+    require(available, 'keypad_settings_required_run_setup_extract')
+    require(len({material for _, material in available}) == 1, 'multiple_keypad_settings_specify_settings')
+    return available[0]

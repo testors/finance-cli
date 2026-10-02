@@ -1,5 +1,7 @@
 """Private corporate session records; certificates remain in their shared stores."""
 import json
+import secrets
+import uuid
 
 from finance_cli.core import storage
 from finance_cli.core.paths import data_home
@@ -53,6 +55,51 @@ def create(session, profile):
     path.mkdir(mode=0o700)
     record(path / 'device.json', profile)
     return {'channel': 'corporate', 'session': session, 'created': True, 'network_used': False}
+
+
+def app_uuid(advertising_id, model):
+    def java_hash(text):
+        raw = text.encode('utf-16-be')
+        value = 0
+        for offset in range(0, len(raw), 2):
+            value = (31 * value + int.from_bytes(raw[offset:offset + 2], 'big')) & 0xffffffff
+        return value if value < 0x80000000 else value - 0x100000000
+    mask = (1 << 64) - 1
+    return str(uuid.UUID(int=((java_hash(advertising_id) & mask) << 64) | (java_hash(model) & mask)))
+
+
+def default_device():
+    """Persist an isolated CLI client profile, never a copied phone identity."""
+    directory = storage.directory(root().parent)
+    with storage.lock(directory / 'client.lock'):
+        path = directory / 'client.json'
+        if path.exists():
+            value = storage.read_json(path)
+            require(value.get('format') == 'finance-hana-corporate-client-v1', 'unsupported_corporate_client')
+            return device(value['device'])
+        advertising_id = str(uuid.uuid4())
+        model = 'FinanceCLI'
+        identifier = app_uuid(advertising_id, model)
+        profile = device({'custom_user_agent': {
+            'platform': 'Android', 'brand': 'generic', 'model': model, 'version': '13',
+            'deviceId': identifier, 'hUid': identifier, 'uid': secrets.token_hex(8),
+            'terminalInfoId': advertising_id, 'appVersion': VERSION, 'appName': 'HanaNCBS',
+            'phoneNumber': '', 'countryIso': '', 'telecom': '', 'simSerialNumber': '',
+            'subscriberId': '', 'phoneName': '', 'etcStr': '', 'timeZoneId': 'Asia/Seoul',
+            'deviceWidth': 1080, 'deviceHeight': 2400,
+            'userAgent': 'Mozilla/5.0 (Linux; Android 13; FinanceCLI; wv) AppleWebKit/537.36 '
+                         '(KHTML, like Gecko) Version/4.0 Chrome/120.0.0.0 Mobile Safari/537.36',
+        }})
+        record(path, {'format': 'finance-hana-corporate-client-v1', 'source': 'generated-cli', 'device': profile})
+        return profile
+
+
+def prepare_idpw(session=None):
+    session = name(session) if session is not None else 'login-' + uuid.uuid4().hex
+    path = storage.no_symlinks(root() / session)
+    if not path.exists():
+        create(session, default_device())
+    return session, session_path(session)
 
 
 def inspect(session):

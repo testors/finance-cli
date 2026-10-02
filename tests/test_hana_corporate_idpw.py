@@ -83,6 +83,117 @@ class IdPasswordTests(unittest.TestCase):
     def execute(self, bank, name='company'):
         return idpw.login(name, 'SyntheticId', 'common', send=True, inputs={'password': lambda: PASSWORD}, exchange=bank)
 
+    def settings_only(self, name='shared-keypad', material=MAC):
+        storage.directory(shared.root('settings'))
+        storage.write_new(shared.root('settings') / (name + '.json'), json.dumps({
+            'format': 'finance-hana-settings-v1', 'version': '1.0.27',
+            'keypad_mac': base64.b64encode(material).decode()}).encode())
+
+    def test_minimal_cli_creates_session_and_uses_shared_settings(self):
+        self.settings_only()
+        bank = Bank(self)
+        invoke = idpw.login
+        output = io.StringIO()
+        with contextlib.redirect_stdout(output), patch('getpass.getpass', return_value=PASSWORD) as prompt, \
+             patch.object(idpw, 'login', side_effect=lambda *a, **kw: invoke(*a, **kw, exchange=bank)):
+            code = main(['hana', 'corporate', 'login-idpw', '--user-id=SyntheticId', '--send'])
+        result = json.loads(output.getvalue())
+        self.assertEqual(code, 0, result)
+        self.assertTrue(result['accepted'])
+        self.assertEqual(result['settings'], 'shared-keypad')
+        self.assertTrue(result['session'].startswith('login-'))
+        self.assertTrue(store.inspect(result['session'])['attempted'])
+        self.assertEqual(prompt.call_count, 1)
+        self.assertFalse(shared.root('identities').exists())
+        self.assertNotIn(PASSWORD, output.getvalue())
+
+    def test_missing_named_session_is_prepared_once_and_attempt_never_reused(self):
+        self.settings_only()
+        bank = Bank(self)
+        result = idpw.login('chosen', 'SyntheticId', None, send=True, inputs={'password': lambda: PASSWORD}, exchange=bank)
+        self.assertTrue(result['accepted'], result)
+        self.assertEqual(result['session'], 'chosen')
+        blocked = idpw.login('chosen', 'SyntheticId', None, send=True,
+                             inputs={'password': lambda: self.fail('reprompt')}, exchange=bank)
+        self.assertEqual(blocked['error'], 'login_already_attempted_use_new_session')
+        self.assertEqual(bank.calls.count('login-idpw'), 1)
+
+    def test_auto_sessions_isolate_cookies_and_keep_client_identity(self):
+        self.settings_only()
+        results = [idpw.login(None, 'SyntheticId', None, send=True,
+                             inputs={'password': lambda: PASSWORD}, exchange=Bank(self)) for _ in range(2)]
+        self.assertTrue(all(row['accepted'] for row in results), results)
+        self.assertNotEqual(results[0]['session'], results[1]['session'])
+        profiles = [storage.read_json(store.session_path(row['session']) / 'device.json') for row in results]
+        self.assertEqual(profiles[0], profiles[1])
+        agent = profiles[0]['custom_user_agent']
+        self.assertEqual(agent['deviceId'], store.app_uuid(agent['terminalInfoId'], agent['model']))
+        self.assertEqual(agent['deviceId'], agent['hUid'])
+        self.assertRegex(agent['uid'], '^[0-9a-f]{16}$')
+        for path in [store.root().parent / 'client.json', *[store.session_path(row['session']) / 'device.json' for row in results]]:
+            self.assertEqual(path.stat().st_mode & 0o777, 0o600)
+
+    def test_existing_explicit_device_profile_is_preserved(self):
+        bank = self.prepare()
+        before = (store.session_path('company') / 'device.json').read_bytes()
+        self.assertTrue(self.execute(bank)['accepted'])
+        self.assertEqual((store.session_path('company') / 'device.json').read_bytes(), before)
+        self.assertFalse((store.root().parent / 'client.json').exists())
+
+    def test_minimal_plan_both_formats_do_not_read_or_create_local_state(self):
+        for format_args in ([], ['--format', 'json-v1']):
+            output = io.StringIO()
+            with contextlib.redirect_stdout(output), patch.object(keypad, 'resolve', side_effect=AssertionError('settings')), \
+                 patch.object(store, 'prepare_idpw', side_effect=AssertionError('session')), \
+                 patch('getpass.getpass', side_effect=AssertionError('password')):
+                code = main([*format_args, 'hana', 'corporate', 'login-idpw', '--user-id=SyntheticId'])
+            result = json.loads(output.getvalue())
+            self.assertEqual(code, 0)
+            self.assertEqual((result['result'] if format_args else result)['processing_status'], 'planned')
+        self.assertFalse(self.home.exists())
+
+    def test_absent_settings_stop_before_password_and_client_creation(self):
+        result = idpw.login(None, 'SyntheticId', None, send=True,
+                            inputs={'password': lambda: self.fail('password')}, exchange=lambda *a: self.fail('network'))
+        self.assertEqual(result['error'], 'keypad_settings_required_run_setup_extract')
+        self.assertFalse(result['network_used'])
+        self.assertFalse(self.home.exists())
+
+    def test_same_keypad_material_needs_no_manual_selection(self):
+        self.settings_only('first')
+        self.settings_only('second')
+        self.assertEqual(keypad.resolve(), ('first', MAC))
+        self.settings_only('different', bytes(reversed(MAC)))
+        result = idpw.login(None, 'SyntheticId', None, send=True, inputs={'password': lambda: self.fail('password')})
+        self.assertEqual(result['error'], 'multiple_keypad_settings_specify_settings')
+        self.assertFalse(store.root().exists())
+        self.assertEqual(keypad.resolve('second'), ('second', MAC))
+
+    def test_explicit_missing_settings_do_not_fall_back(self):
+        self.settings_only()
+        result = idpw.login(None, 'SyntheticId', 'missing', send=True, inputs={'password': lambda: self.fail('password')})
+        self.assertEqual(result['error'], 'keypad_settings_not_found')
+        self.assertFalse(store.root().exists())
+
+    def test_client_storage_failure_stops_without_network(self):
+        self.settings_only()
+        with patch.object(store, 'record', side_effect=OSError('SYNTHETIC-PRIVATE')):
+            result = idpw.login(None, 'SyntheticId', None, send=True, inputs={'password': lambda: self.fail('password')})
+        self.assertFalse(result['network_used'])
+        self.assertIsNone(result['accepted'])
+        self.assertNotIn('SYNTHETIC-PRIVATE', json.dumps(result))
+
+    def test_invalid_saved_client_is_not_silently_replaced(self):
+        self.settings_only()
+        directory = storage.directory(store.root().parent)
+        path = directory / 'client.json'
+        store.record(path, {'format': 'unsupported'})
+        before = path.read_bytes()
+        result = idpw.login(None, 'SyntheticId', None, send=True, inputs={'password': lambda: self.fail('password')})
+        self.assertEqual(result['error'], 'unsupported_corporate_client')
+        self.assertEqual(path.read_bytes(), before)
+        self.assertFalse(result['network_used'])
+
     def test_complete_wire_encryption_cookie_isolation_and_no_certificate(self):
         bank = self.prepare()
         with patch('finance_cli.credentials.registry.Registry.material', side_effect=AssertionError('certificate accessed')), \
@@ -300,13 +411,14 @@ class IdPasswordTests(unittest.TestCase):
         self.assertFalse(self.home.exists())
 
     def test_cli_password_stdin_preserves_spaces_and_reads_one_line(self):
-        bank = self.prepare()
+        self.settings_only()
+        bank = Bank(self)
         invoke = idpw.login
         stream = io.TextIOWrapper(io.BytesIO((PASSWORD + '\r\nDO-NOT-READ\n').encode()))
         out = io.StringIO()
         with contextlib.redirect_stdout(out), patch('sys.stdin', stream), patch('getpass.getpass', side_effect=AssertionError('prompt')), \
              patch.object(idpw, 'login', side_effect=lambda *a, **kw: invoke(*a, **kw, exchange=bank)):
-            code = main(['--format', 'json-v1', 'hana', 'corporate', 'login-idpw', '--session=company', '--user-id=SyntheticId', '--settings=common', '--password-stdin', '--send'])
+            code = main(['--format', 'json-v1', 'hana', 'corporate', 'login-idpw', '--user-id=SyntheticId', '--password-stdin', '--send'])
         self.assertEqual(code, 0, out.getvalue())
         self.assertTrue(json.loads(out.getvalue())['result']['accepted'])
         self.assertEqual(stream.buffer.read(), b'DO-NOT-READ\n')

@@ -4,7 +4,41 @@
 
 공동인증서는 공통 금고의 기존 `--credential` 또는 하나은행용 `--profile`을 선택합니다. 하나인증서는 기존 `fin hana onesign`의 identity를 `--name`으로 선택합니다. 인증서·개인키를 기업용으로 복제하거나 다시 가져오지 않습니다. 하나인증서는 은행에 연결된 기업 ID를 사용하며 신규 연결·변경이 필요하면 `corporate_id_link_required`로 중단합니다.
 
-## 기업 세션 준비
+## ID/PW 로그인
+
+기업 인터넷뱅킹 ID와 로그인 비밀번호를 사용합니다. ID는 영문·숫자 4–20자이며 대문자로 변환합니다. 비밀번호는 대소문자·공백을 그대로 보존하는 6–16자 입력입니다. 영문·숫자·출력 가능한 ASCII 특수문자를 지원하며, 실제 비밀번호 등록 정책은 은행에 따릅니다. 인증서·인증서 암호·개인뱅킹 로그인을 요구하지 않습니다. 시스템 OpenSSL 3가 필요합니다.
+
+이미 하나은행 키패드 설정이 설치되어 있다면 다음 한 명령으로 로그인합니다. 비밀번호는 숨김 입력합니다.
+
+```sh
+fin hana corporate login-idpw --user-id YOURID --send
+```
+
+로그인 기록과 쿠키를 담는 로컬 세션은 자동 생성합니다. `session new`나 기기 JSON 작성, 휴대폰 연결이 필요하지 않습니다. CLI 전용 연결 정보를 최초 실행 시 만들고 이후에도 유지합니다. 실제 휴대폰의 식별자·개인뱅킹 쿠키·인증서를 복사하지 않습니다. CLI 연결 정보의 은행 서버 수락은 아직 검증하지 않았습니다.
+
+호환되는 공통 키패드 설정을 자동으로 사용합니다. 여러 설정의 키패드 재료가 같으면 같은 설정으로 취급합니다. 서로 다른 재료가 있다면 `--settings 이름`으로 선택할 수 있습니다. `--session 이름`은 로그인 기록 이름을 직접 정하고 싶을 때만 사용하며, 없는 이름이면 자동으로 준비합니다. 이미 로그인 요청을 시작한 이름은 덮어쓰거나 재사용하지 않습니다.
+
+자동화에서는 `--format json-v1`과 `--password-stdin`을 사용할 수 있습니다. 결과의 `session`은 이후 관측 결과 확인에 쓰는 로컬 기록 이름이며 기업 ID가 아닙니다. `--send`를 빼면 파일·비밀번호 접근 없이 계획만 반환합니다.
+
+키패드 설정이 없는 첫 설치에서는 한 번만 준비합니다. 이미 `fin hana setup extract`로 설치한 1.0.27 설정이 있으면 자동으로 재사용하며, identity 생성이나 인증서 발급은 필요 없습니다. 기업 앱만 사용하는 경우에는 기업 6.2.2의 ARM64 분할 설치 패키지에서 키패드 설정만 설치합니다. 알려진 버전의 데이터만 읽으며 앱 코드를 실행하지 않고 기존 설정을 덮어쓰지 않습니다.
+
+```sh
+# 최초 설정 준비; 은행 통신 없음
+fin hana corporate setup extract --package /path/to/split_config.arm64_v8a.apk --settings company-keypad
+
+# 이후에는 ID와 숨김 입력 비밀번호로 로그인
+fin hana corporate login-idpw --user-id YOURID --send
+```
+
+`--password-stdin`은 **기업 로그인 비밀번호 한 줄만** 읽습니다. 다른 금고 암호·인증서 암호·PIN을 입력하지 않습니다. 비밀번호를 명령줄 인자로 넘기는 옵션은 없습니다. 푸시 등록 여부는 `management_number`의 존재 여부와 일치해야 합니다.
+
+로그인 요청은 한 번만 제출합니다. 비밀번호 오류 횟수는 응답에 있을 때만 `password_failures_reported`로 표시하고 자동 재시도하지 않습니다. `agreement_required`는 약관 절차가 필요하다는 뜻이며 자동 동의하지 않습니다. ID/PW 로그인에는 인증서 로그인과 다른 성공 판정을 적용합니다.
+
+ID/PW 후속 고객 확인 결과의 `follow_up.customer_guidance`는 `none`, `visit_branch_notice`, `customer_verification_choice_required`, `certificate_login_required`, `unconfirmed`로 구분합니다. 고객확인 등록은 자동 실행하지 않습니다. 은행 내부 조직의 인증서 로그인 제한에 해당하면 로그아웃을 요청하고 최초 로그인 수락과 별도로 결과를 기록합니다. `session_usage=certificate_login_required`인 세션은 계속 사용하지 않습니다. `session_current_validity=logged_out`은 로그아웃 수락까지 관측한 경우입니다.
+
+로그인 이후 개별 업무가 요구하는 권한·인증서는 별개입니다. ID/PW로 인증서 서명을 대신하지 않으며, 공동인증서가 필요한 기능은 공통 저장소를 사용합니다.
+
+## 인증서 로그인용 기업 세션 준비
 
 기업 앱 6.2.2의 기기 정보를 사용자가 지정한 JSON 파일로 준비합니다. 개인 앱의 기기 정보를 자동으로 복사하지 않습니다. 다음은 형식 예이며 `YOUR_*`와 기기 속성을 실제 사용할 값으로 바꿉니다. 예시 값의 서버 수락을 보장하지 않습니다.
 
@@ -53,32 +87,6 @@ fin hana corporate login --session another-session --profile existing-hana-profi
 ```
 
 공동인증서는 현재 RSA2048/SHA256 프로필을 지원합니다. `--password-stdin`은 공동 금고와 인증서 해제에 사용하는 암호 한 줄만 읽습니다. PIN·계좌 비밀번호·OTP를 같은 입력으로 읽지 않습니다.
-
-## ID/PW 로그인
-
-기업 인터넷뱅킹 ID와 로그인 비밀번호를 사용합니다. ID는 영문·숫자 4–20자이며 대문자로 변환합니다. 비밀번호는 대소문자·공백을 그대로 보존하는 6–16자 입력입니다. 영문·숫자·출력 가능한 ASCII 특수문자를 지원하며, 실제 비밀번호 등록 정책은 은행에 따릅니다. 인증서·인증서 암호·개인뱅킹 로그인을 요구하지 않습니다. 시스템 OpenSSL 3가 필요합니다.
-
-키패드 설정은 공통 서비스 설정 이름을 `--settings`로 참조합니다. 이미 `fin hana setup extract`로 설치한 1.0.27 설정이 있으면 그대로 선택할 수 있으며, identity 생성이나 인증서 발급은 필요 없습니다. 기업 앱만 사용하는 경우에는 기업 6.2.2의 ARM64 분할 설치 패키지에서 키패드 설정만 설치합니다. 알려진 버전의 데이터만 읽으며 앱 코드를 실행하지 않고 기존 설정을 덮어쓰지 않습니다.
-
-```sh
-# 최초 설정 준비; 은행 통신 없음
-fin hana corporate setup extract --package /path/to/split_config.arm64_v8a.apk --settings company-keypad
-fin hana corporate session new --session company-id --device-file /path/to/corporate-device.json
-
-# 전송 계획: 파일·비밀번호 접근 없음
-fin hana corporate login-idpw --session company-id --user-id YOURID --settings company-keypad
-
-# 사용자가 실제 로그인을 실행할 때: 비밀번호는 숨김 입력
-fin hana corporate login-idpw --session company-id --user-id YOURID --settings company-keypad --send
-```
-
-`--password-stdin`은 **기업 로그인 비밀번호 한 줄만** 읽습니다. 다른 금고 암호·인증서 암호·PIN을 입력하지 않습니다. 비밀번호를 명령줄 인자로 넘기는 옵션은 없습니다. 푸시 등록 여부는 `management_number`의 존재 여부와 일치해야 합니다.
-
-로그인 요청은 한 번만 제출합니다. 비밀번호 오류 횟수는 응답에 있을 때만 `password_failures_reported`로 표시하고 자동 재시도하지 않습니다. `agreement_required`는 약관 절차가 필요하다는 뜻이며 자동 동의하지 않습니다. ID/PW 로그인에는 인증서 로그인과 다른 성공 판정을 적용합니다.
-
-ID/PW 후속 고객 확인 결과의 `follow_up.customer_guidance`는 `none`, `visit_branch_notice`, `customer_verification_choice_required`, `certificate_login_required`, `unconfirmed`로 구분합니다. 고객확인 등록은 자동 실행하지 않습니다. 은행 내부 조직의 인증서 로그인 제한에 해당하면 로그아웃을 요청하고 최초 로그인 수락과 별도로 결과를 기록합니다. `session_usage=certificate_login_required`인 세션은 계속 사용하지 않습니다. `session_current_validity=logged_out`은 로그아웃 수락까지 관측한 경우입니다.
-
-로그인 이후 개별 업무가 요구하는 권한·인증서는 별개입니다. ID/PW로 인증서 서명을 대신하지 않으며, 공동인증서가 필요한 기능은 공통 저장소를 사용합니다.
 
 ## 하나인증서 로그인
 
