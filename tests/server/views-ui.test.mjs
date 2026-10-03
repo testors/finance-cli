@@ -402,7 +402,8 @@ test('ready sessions keep a visible login action without requesting credentials 
   assert.deepEqual(ui.calls[0].options.secrets, {pin: '123456'});
   assert.equal(ui.asked[0][3].store, 'synthetic');
   await ui.calls[0].options.onDone({outcome: 'success'});
-  assert.equal(ui.calls.length, 1, 'successful re-login must not retry the earlier query');
+  assert.deepEqual(ui.calls.map(c => c.name), ['hana.onesign.login', 'hana.onesign.accounts'],
+    'a successful bank login reads balances once and replays nothing else');
 });
 
 test('a rejected account query leaves manual re-login available without assuming expiry', async t => {
@@ -716,3 +717,44 @@ test('invoice amounts are suggested from quantity and unit price without overwri
   assert.equal(field('tax_amount').value, '1001', 'a typed amount stays');
   assert.equal(ui.calls.length, 0);
 });
+
+for (const method of ['onesign', 'joint_certificate']) {
+  test(`a successful ${method} bank login reads balances once, but not for a transfer or a failed login`, async t => {
+    const ui = await setup(t, method, 'ready', {});
+    const main = ui.document.querySelector('main');
+    const names = () => ui.calls.map(c => c.name);
+    const [loginJob, accountsJob] = method === 'onesign' ? ['hana.onesign.login', 'hana.onesign.accounts'] : ['hana.login', 'hana.accounts.list'];
+    main.innerHTML = await ui.views.accounts(ui.ctx);
+    await ui.actions.login(ui.ctx, {dataset: {login: 'login'}});
+    assert.match(ui.asked[0][2], /잔액을 이어서 조회/, 'the dialog says so before any password is typed');
+    await ui.calls[0].options.onDone({outcome: 'rejected'});
+    await ui.calls[0].options.onDone({outcome: 'success', local: {stopped: 'session_not_saved'}});
+    assert.deepEqual(names(), [loginJob], 'a login that did not succeed asks for nothing more');
+    await ui.calls[0].options.onDone({outcome: 'success'});
+    assert.deepEqual(names(), [loginJob, accountsJob]);
+    assert.equal(ui.calls[1].options.panel, 'job-login');
+    if (method === 'onesign') assert.match(ui.asked[1][2], /저장소 암호가 한 번 더/);
+
+    // From a screen that does not list this login's accounts the query runs quietly.
+    main.innerHTML = await ui.views.history(ui.ctx);
+    await ui.calls[0].options.onDone({outcome: 'success'});
+    assert.equal(ui.calls[2].name, accountsJob);
+    assert.equal(ui.calls[2].options.panel, undefined, 'the open screen is left as it is');
+    await ui.calls[2].options.onDone({status: 'finished', outcome: 'unknown', local: {}});
+    assert.match(main.querySelector('.page-error').textContent, /로그인 뒤 잔액 조회 결과: 결과 미확인/);
+
+    const before = ui.calls.length;
+    await ui.actions.login(ui.ctx, {dataset: {login: 'login', reason: 'transfer_login_required'}});
+    assert.doesNotMatch(ui.asked.at(-1)[2], /잔액을 이어서 조회/);
+    await ui.calls.at(-1).options.onDone({outcome: 'success'});
+    assert.equal(ui.calls.length, before + 1, 'a login opened to send a transfer reads no balances');
+    ui.state.view = 'transfer';
+    await ui.actions.login(ui.ctx, {dataset: {login: 'login'}});
+    await ui.calls.at(-1).options.onDone({outcome: 'success'});
+    assert.equal(ui.calls.length, before + 2);
+    ui.state.view = 'accounts'; ui.row.readiness = 'login_required';
+    await ui.actions.login(ui.ctx, {dataset: {login: 'login'}});
+    await ui.calls.at(-1).options.onDone({outcome: 'success'});
+    assert.equal(ui.calls.length, before + 3, 'without a usable session nothing more is requested');
+  });
+}

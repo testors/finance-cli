@@ -651,7 +651,7 @@ function connectionCard(row) {
   const addTarget = canQuery(row) && !row.disabled && targets.length
     ? `<button type="button" class="text-button" data-action="${verify}" data-login="${esc(row.id)}">${verifyLabel} ${icon('arrow')}</button>` : '';
   const emptyTargets = row.disabled ? '' : !canQuery(row)
-    ? `<p class="target-empty">${['hana', 'hana_corporate'].includes(row.institution) ? '로그인 후 계좌를 조회하면 자동으로 연결돼요.' : '로그인하면 사용자·사업장을 확인해 선택할 수 있어요.'}</p>`
+    ? `<p class="target-empty">${['hana', 'hana_corporate'].includes(row.institution) ? '로그인하면 계좌와 잔액을 이어서 조회해 자동으로 연결해요.' : '로그인하면 사용자·사업장을 확인해 선택할 수 있어요.'}</p>`
     : `<p class="target-empty">${['hana', 'hana_corporate'].includes(row.institution) ? '아직 조회한 계좌가 없어요. 계좌를 조회하면 바로 사용할 수 있어요.' : '사용자·사업장 확인을 실행하고 결과에서 선택하세요.'}</p>`;
   return `<section class="panel connection-card ${row.disabled ? 'disabled' : ''}" aria-labelledby="login-${esc(row.id)}">
     <div class="connection-head"><div class="bank-symbol">${symbol}</div><div class="connection-title"><h2 id="login-${esc(row.id)}">${esc(row.display_name)}</h2><p class="meta">${esc(ui.INSTITUTION[row.institution])} · ${esc(ui.METHOD[row.method])}${row.credential?.ref ? ' · ' + esc(row.credential.ref) : ''}</p></div><div class="login-status">${loginStatus(row)}</div><div class="connection-actions">${primaryAction(row, targets)}<button type="button" class="icon-button" data-action="login-menu" data-login="${esc(row.id)}" aria-label="${esc(row.display_name)} 더보기">${icon('more')}</button></div></div>
@@ -664,7 +664,7 @@ function connectionCard(row) {
 function onboarding() {
   const steps = [['인증서 발급·가져오기', '공동인증서를 가져오거나 하나인증서를 신규 발급해 보관해요. 금융인증서 발급은 아직 미지원이에요.'],
     ['기관 연결 추가', '기관·로그인 방법·인증서를 고르면 이어서 로그인 창이 열려요.'],
-    ['조회', '은행 계좌는 조회하면 자동으로 연결돼요. 홈택스는 로그인 뒤 사용자·사업장을 확인해 선택하세요. 업무 프로필은 필요할 때만 만들면 돼요.']];
+    ['조회', '은행은 로그인하면 계좌와 잔액을 이어서 조회해 연결해요. 홈택스는 로그인 뒤 사용자·사업장을 확인해 선택하세요. 업무 프로필은 필요할 때만 만들면 돼요.']];
   return `<section class="panel onboarding"><div class="panel-heading"><div><h2>처음 연결하기</h2><p class="meta">하나기업뱅킹 ID/PW와 모바일지로는 인증서 없이 2단계부터 시작해요.</p></div></div><ol class="onboarding-steps">${steps.map(([t, d], i) => `<li><b>${i + 1}</b><div><strong>${t}</strong><p>${d}</p></div></li>`).join('')}</ol><div class="onboarding-actions">${ui.button('인증서 발급·가져오기', 'data-action="certificate-add"')}${ui.button('기관 연결 추가', 'data-action="add-login-dialog"', 'primary')}<p class="field-help">기존 CLI 인증서 프로필이 있으면 서버에서 <span class="code">fin server import-profiles</span>로 가져올 수 있어요.</p></div></section>`;
 }
 
@@ -874,15 +874,21 @@ export const actions = {
     if (row.institution === 'giro') return giroLogin(ctx, row);
     const reason = button.dataset.reason === 'session_idle_expired' ? ui.message('session_idle_expired') + ' '
       : button.dataset.reason === 'transfer_login_required' ? '새 이체에는 새 로그인이 필요해요. 로그인한 뒤 「이체 내용 확인」을 다시 눌러 주세요. ' : '';
-    // A first Hometax login goes on to the user/business check; the dialog says so before any password is typed.
+    // A first Hometax login goes on to the user/business check, and a bank login to one balance
+    // query; the dialog says so before any password is typed. The balance query is a new read, not a
+    // replay of whatever was interrupted, and a login opened to send a transfer skips it.
     const discover = row.institution === 'hometax' && !state.targets.some(t => t.login_id === row.id);
-    const secrets = await askSecrets(`${row.display_name} 로그인`, loginSecrets(row), reason + (row.institution === 'hometax' ? '공동인증서로 홈택스에 로그인해요.' + (discover ? ' 로그인한 뒤 사용자·사업장을 이어서 확인해요.' : '') : row.method === 'onesign' ? '하나인증서로 새 로그인 세션을 만들어요.' : '앱 인증과 공동인증서 로그인을 진행해요.'), {store: onesignStore(row)});
+    const balances = row.institution === 'hana' && state.view !== 'transfer' && button.dataset.reason !== 'transfer_login_required';
+    const next = balances ? ' 로그인한 뒤 잔액을 이어서 조회해요.' : '';
+    const secrets = await askSecrets(`${row.display_name} 로그인`, loginSecrets(row), reason + (row.institution === 'hometax' ? '공동인증서로 홈택스에 로그인해요.' + (discover ? ' 로그인한 뒤 사용자·사업장을 이어서 확인해요.' : '') : (row.method === 'onesign' ? '하나인증서로 새 로그인 세션을 만들어요.' : '앱 인증과 공동인증서 로그인을 진행해요.') + next), {store: onesignStore(row)});
     if (!secrets) return;
     await runForLogin(ctx, loginJob(row), row, {}, {secrets, onDone: async job => {
       const stopped = job.local?.stopped ? ui.message(job.local.stopped) : '';
       ui.toast([ui.OUTCOME[job.outcome]?.[0], stopped].filter(Boolean).join(' · '));
       await afterModel(ctx);
-      if (discover && job.outcome === 'success' && !stopped) await actions.discover(ctx, {dataset: {login: row.id}});
+      if (job.outcome !== 'success' || stopped) return;
+      if (discover) await actions.discover(ctx, {dataset: {login: row.id}});
+      else if (balances && canQuery(login(row.id) || {})) await actions['accounts-query'](ctx, {dataset: {login: row.id, after: 'login'}});
     }});
   },
   'session-check': async (ctx, button) => {
@@ -896,15 +902,29 @@ export const actions = {
   'accounts-query': async (ctx, button) => {
     if (!await ensureBankSession(ctx, button.dataset.login)) return;
     const row = login(button.dataset.login);
+    const afterLogin = button.dataset.after === 'login';
     let secrets;
     if (row.method === 'onesign') {
-      secrets = await askSecrets('계좌 조회', [SECRET_LABELS.vault_passphrase], '', {store: onesignStore(row)});
+      // Nothing typed for the login is kept, so a store that is not remembered is asked for once more.
+      secrets = await askSecrets('계좌 조회', [SECRET_LABELS.vault_passphrase],
+        afterLogin ? '로그인했어요. 잔액을 이어서 조회하려면 저장소 암호가 한 번 더 필요해요. 「기억」을 선택하면 다음부터 묻지 않아요.' : '', {store: onesignStore(row)});
       if (!secrets) return;
     }
-    await runForLogin(ctx, accountsJobName(row), row, {}, {secrets, onDone: async job => {
-      if (job.local?.account_linking_failed) ui.toast('은행 조회는 완료됐지만 계좌를 연결하지 못했어요. 저장소 상태를 확인하세요.');
-      await afterModel(ctx);
-    }});
+    const name = accountsJobName(row);
+    const linking = job => { if (job.local?.account_linking_failed) ui.toast('은행 조회는 완료됐지만 계좌를 연결하지 못했어요. 저장소 상태를 확인하세요.'); };
+    if (afterLogin && !document.getElementById('job-' + row.id)) {
+      // The login was opened from a screen that does not list this login's accounts: run quietly
+      // and leave that screen (and anything typed on it) as it is.
+      ui.toast('로그인했어요. 잔액을 조회하고 있어요.');
+      await ctx.run(name, {login_id: row.id}, {secrets, key: key(name, {login_id: row.id}), onDone: async job => {
+        linking(job);
+        await refreshModel();
+        if (job.outcome === 'success') ui.toast('잔액을 조회했어요.');
+        else ui.fail(`로그인 뒤 잔액 조회 결과: ${ui.OUTCOME[job.outcome]?.[0] || job.status}. 내 계좌에서 확인하세요.`);
+      }});
+      return;
+    }
+    await runForLogin(ctx, name, row, {}, {secrets, onDone: async job => { linking(job); await afterModel(ctx); }});
   },
   extend: async (ctx, button) => {
     const row = login(button.dataset.login);
