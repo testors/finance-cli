@@ -67,7 +67,8 @@ def retryable_start_report(report):
 
 
 def registration_plan():
-    return dict(offline=True, network_used=False, live_registration_tested=False,
+    return dict(offline=True, network_used=False, live_registration_tested=True,
+        live_registration_scope='observed existing personal member: SMS, existing PIN, new PIN, then login',
         implementation='standalone Python CLI enrollment and login with prepared inputs',
         scope='existing personal member, SKT/SKM/LGT/LGM, existing PIN if deviceChgYn=Y',
         identity_source='persistent CLI-generated identifier; not an observed Android ID',
@@ -82,8 +83,7 @@ def registration_plan():
         required_inputs=['current recipient trust/CRLs', 'private prepared protection profile',
             'three reviewed consent terms', 'personal identity and own phone',
             'SMS code', 'existing six-digit login PIN when required', 'new six-digit PIN twice'],
-        remaining_live_questions=['CLI ID acceptance', 'existing phone registration effect',
-            'SMS/identity acceptance', 'PIN registration acceptance'],
+        remaining_live_questions=['existing phone registration effect', 'other registration branches'],
         default_runtime_available=True)
 
 

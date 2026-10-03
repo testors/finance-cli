@@ -24,7 +24,8 @@ class CliTests(unittest.TestCase):
             code, result = self.call(['auth', 'registration-plan'])
         self.assertEqual(code, 0)
         self.assertFalse(result['network_used'])
-        self.assertFalse(result['live_registration_tested'])
+        self.assertTrue(result['live_registration_tested'])
+        self.assertIn('existing personal member', result['live_registration_scope'])
         self.assertTrue(result['default_runtime_available'])
         self.assertEqual(result['max_business_requests'], 10)
 
