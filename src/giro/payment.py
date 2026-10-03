@@ -18,6 +18,8 @@ def payment_plan():
     return {
         'offline': True, 'network_used': False, 'live_payment_ready': False,
         'live_payment_implemented': True, 'live_payment_verified': False,
+        'live_payment_verified_scope': 'all_supported_payment_paths',
+        'verification': 'live_partial', 'live_verified_tax_types': ['national'],
         'tax_types': ['national', 'local', 'customs'],
         'registered_account_steps': [
             'auth.pin', 'national.list', 'national.detail', 'accounts.payable',
