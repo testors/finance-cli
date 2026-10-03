@@ -183,6 +183,18 @@ class HometaxAdapterTests(ServerCase):
         self.assertEqual(result['local']['detail']['target_check'][1]['branch'], 'success')
         self.assertIsNone(result['result'])
 
+    def test_page_notice_before_query_is_reported_without_its_text(self):
+        self.login_session()
+        target = self.register('personal')
+        job = self.submit('hometax.invoice.list', target_id=target['id'], input={'direction': 'sales'})
+        node = FakeNode({'account.show': session_record(data={'account': PERSONAL}),
+                         'invoice.list': session_record(branch='no_action', reason='original_action_not_observed',
+                                                        original_dialog={'message': 'synthetic private notice'}, data={})})
+        result = self.run_job(job['id'], node=node)
+        self.assertEqual(result['outcome'], 'unknown')
+        self.assertIs(result['service_verdict']['original_dialog_observed'], True)
+        self.assertNotIn('synthetic private notice', json.dumps(result))
+
     def test_unavailable_service_differs_from_zero_rows(self):
         self.login_session()
         target = self.register('personal')
@@ -191,6 +203,13 @@ class HometaxAdapterTests(ServerCase):
                              'items': [], 'pagination': {'complete': True}, 'account': PERSONAL})})
         result = self.run_job(zero['id'], node=node)
         self.assertEqual((result['outcome'], result['result']['items']), ('success', []))
+        self.assertEqual((result['result']['list_omitted'], result['result']['amount_sum']), (False, None))
+        omitted = self.submit('hometax.tax.dues', target_id=target['id'])
+        node = FakeNode({'tax.dues': tax_record(reason='original_service_result', timings=None, target_check=None, data={
+                             'pagination': {'complete': True}, 'source': {'amtSum': 0}, 'account': PERSONAL})})
+        result = self.run_job(omitted['id'], node=node)
+        self.assertEqual((result['outcome'], result['result']['items'], result['result']['list_omitted'],
+                          result['result']['amount_sum']), ('success', None, True, 0))
         unavailable = self.submit('hometax.tax.dues', target_id=target['id'])
         node = FakeNode({'tax.dues': tax_record(branch='no_action', reason='original_dues_navigation_not_observed')})
         result = self.run_job(unavailable['id'], node=node)

@@ -41,7 +41,7 @@ async function fixture(t, options = {}) {
   t.mock.method(BusinessRuntime.prototype, 'navigate', async function () {
     calls.push('dues.request');
     this.services.push({action_id:'ATERMAAA004R01', branch:options.branch || 'success', response_observed:true,
-      response:{RESULT:{result:options.branch === 'failure' ? 'F' : 'S'}, pubcRomCmnDVOList:[]}});
+      response:options.response || {RESULT:{result:options.branch === 'failure' ? 'F' : 'S'}, pubcRomCmnDVOList:[]}});
     if (options.afterResponseError) throw new Error('synthetic callback error');
   });
   t.mock.method(BusinessRuntime.prototype, 'businessSelect', async function (tin) {
@@ -70,6 +70,20 @@ test('same target is checked in memory: one initialization and one dues request'
   assert.deepEqual(record.data.items, []);
   assert.equal(record.confirmed_target.tin, PERSONAL.tin);
   assert.equal((await fs.stat(f.config.output)).mode & 0o777, 0o600);
+});
+
+test('dues list omitted with a zero sum is the empty answer; other unexpected lists still warn', async t => {
+  const warned = record => record.warnings.some(text => text.includes('목록 형식'));
+  for (const [response, expected] of [[{RESULT:{result:'S'}, amtSum:0}, false], [{RESULT:{result:'S'}}, false],
+    [{RESULT:{result:'S'}, amtSum:1000}, true], [{RESULT:{result:'S'}, amtSum:0, pubcRomCmnDVOList:'unexpected'}, true]]) {
+    const f = await fixture(t, {response});
+    const summary = await runBusiness({...f.config, target:{kind:'personal', tin:PERSONAL.tin}});
+    const record = await f.read();
+    assert.equal(summary.branch, 'success');
+    assert.equal(warned(record), expected);
+    assert.equal(Array.isArray(record.data.items), false);  // the omission itself is kept
+    assert.deepEqual(record.data.source, response);
+  }
 });
 
 test('CLI with no target keeps the current taxpayer and default summary fields', async t => {

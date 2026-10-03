@@ -15,7 +15,9 @@ export const HT = 'https://mob.tbht.hometax.go.kr';
 const clone = value => value === undefined ? undefined : JSON.parse(JSON.stringify(value));
 export const TAX_PAGES = {
   dues:{screen:'UTBRMAAC01F001',menu:'8002010100',cert:'01',title:'납부할세액조회납부',
-    action:'ATERMAAA004R01',list:'pubcRomCmnDVOList',automatic:true,localPages:true},
+    action:'ATERMAAA004R01',list:'pubcRomCmnDVOList',automatic:true,localPages:true,
+    // With nothing due the service answers success without the list field (observed with amtSum 0).
+    emptyOmitsList:response => !response?.amtSum},
   payments:{screen:'UTBRMAAC09F001',menu:'8002020200',cert:'01',title:'납부내역조회',
     action:'ATERMAAA001R01',list:'rspSpclSVOList',start:'pmtDtStrt',end:'pmtDtEnd'},
   refunds:{screen:'UTBRDAAA02F001',menu:'8002030200',cert:'03',title:'환급금상세조회',
@@ -347,7 +349,8 @@ export class BusinessRuntime {
       if (item?.response_observed) {
         pages.push({branch:item.branch,items:clone(item.response?.[entry.list]),
           page_info:clone(item.response?.pageInfoVO)});
-        if (item.branch === 'success' && !Array.isArray(item.response?.[entry.list]))
+        const list = item.response?.[entry.list];
+        if (item.branch === 'success' && !Array.isArray(list) && !(list == null && entry.emptyOmitsList?.(item.response)))
           this.warnings.push('서비스는 성공으로 판정했습니다. 목록 형식이 예상과 달라 서비스 응답도 함께 보존합니다.');
       }
     };

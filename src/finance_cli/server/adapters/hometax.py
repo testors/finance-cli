@@ -83,6 +83,9 @@ def verdict_of(record, summary=None):
         pages = data.get('pages')
         if isinstance(pages, list):
             value['page_branches'] = [p.get('branch') for p in pages if isinstance(p, dict)]
+    if isinstance(source.get('original_dialog'), dict):
+        # The page showed a notice. Its text can hold taxpayer information and stays in the private record.
+        value['original_dialog_observed'] = True
     if record is None:
         value['source'] = 'stdout_summary'
     return value
@@ -530,6 +533,14 @@ def period_config(value):
 
 class TaxDues(TargetQuery):
     name, title, command, operation = 'hometax.tax.dues', '납부할 세액', 'tax', 'dues'
+
+    def result(self, data):
+        # With nothing due the service answers success without the list field (observed with
+        # amtSum 0). Report the omission and the service's own sum; the list stays missing.
+        source = data.get('source') if isinstance(data.get('source'), dict) else {}
+        total = source.get('amtSum')
+        return {**super().result(data), 'list_omitted': data.get('items') is None,
+                'amount_sum': total if type(total) is int else None}
 
 
 class TaxPayments(TargetQuery):
