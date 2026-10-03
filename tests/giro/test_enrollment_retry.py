@@ -70,6 +70,27 @@ class EnrollmentRetryTests(unittest.TestCase):
                 with self.assertRaises(OSError): EnrollmentStore(root).reserve(retry=True)
             self.assertEqual((root / 'attempt.json').read_bytes(), before)
 
+    def test_rejected_sms_request_can_restart_but_success_or_ambiguity_cannot(self):
+        begin = dict(stage='auth.datetime', response_endpoint='auth.datetime',
+            response_origin='response', service_decision='success', callback='success',
+            next_action='identity_and_consent', registration_service_decision='unobserved')
+        for endpoint in ('registration.user-info', 'registration.sms-send'):
+            step = dict(stage=endpoint, response_endpoint=endpoint, response_origin='response',
+                service_decision='failure', callback='failure', next_action='identity_and_consent',
+                registration_service_decision='unobserved')
+            document = rejected() | {'next_action': 'identity_and_consent', 'steps': [begin, step]}
+            self.assertTrue(retryable_start_report(document))
+            for change in ({'response_origin': 'transport'}, {'service_decision': 'unobserved'},
+                           {'service_decision': 'success', 'callback': 'success'},
+                           {'callback': 'disconnected'}, {'next_action': 'sms_code'},
+                           {'stage': 'registration.sms-verify', 'response_endpoint': 'registration.sms-verify'},
+                           {'registration_service_decision': 'success'}):
+                with self.subTest(endpoint=endpoint, change=change):
+                    self.assertFalse(retryable_start_report(document | {'steps': [begin, step | change]}))
+            self.assertFalse(retryable_start_report(document | {'steps': [begin, step, step]}))
+            self.assertFalse(retryable_start_report(document | {'steps': [None, step]}))
+            self.assertFalse(retryable_start_report(document | {'steps': [begin | {'service_decision': 'failure'}, step]}))
+
     def test_interrupted_replacement_preserves_archive_and_allows_explicit_later_retry(self):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory).resolve()

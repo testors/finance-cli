@@ -155,6 +155,34 @@ class AuthFlowTests(unittest.TestCase):
         self.assertFalse(result['session_saved'])
         self.assertEqual(self.server.steps.count('auth.pin'), 1)
 
+    def test_explicit_retry_after_rejected_sms_keeps_identity_and_archives_before_login(self):
+        accepted = self.server.responses['registration.sms-send']
+        self.server.responses['registration.sms-send'] = (200, {'errorInfo': {'errorCode': '999'}})
+        first = self.invoke()
+        self.assertEqual(first['next_action'], 'identity_and_consent')
+        self.assertEqual(first['steps'][-1]['service_decision'], 'failure')
+        self.assertNotIn('registration.sms-verify', self.server.steps)
+        root = Path(self.temp.name).resolve() / 'enrollment'
+        identity, receipt = (root/'identity.json').read_bytes(), (root/'attempt.json').read_bytes()
+        before = list(self.server.calls)
+        with patch('giro.auth_flow.login_dependencies', self.dependencies):
+            blocked = authenticate(register=True, send=True, pin_provider=lambda: '234567',
+                enrollment_providers=self.providers, enrollment_store=EnrollmentStore(root), session_store=self.sessions)
+        self.assertIn('enrollment_processing_incomplete', blocked['processing_issues'])
+        self.assertEqual(self.server.calls, before)
+        self.server.responses['registration.sms-send'] = accepted
+        self.protection.values.extend(['{"CODE_RESPONSE":"SYNTHETIC-RETRY"}',
+                                      'DISCARDED', '{"CODE_RESPONSE":"SYNTHETIC-LOGIN"}'])
+        with patch('giro.auth_flow.login_dependencies', self.dependencies):
+            result = authenticate(register=True, retry=True, send=True, pin_provider=lambda: '234567',
+                enrollment_providers=self.providers, enrollment_store=EnrollmentStore(root), session_store=self.sessions)
+        self.assertEqual(result['registration_service_decision'], 'success', result)
+        self.assertEqual(result['login_service_decision'], 'success', result)
+        self.assertTrue(result['session_saved'])
+        self.assertEqual((root/'identity.json').read_bytes(), identity)
+        self.assertEqual([p.read_bytes() for p in (root/'attempts').glob('*.json')], [receipt])
+        self.assertEqual(self.server.steps.count('registration.sms-send'), 2)
+
     def test_explicit_login_after_registered_attempt_reuses_identity_without_enrolling(self):
         self.protection.values.extend(['DISCARDED', '{"CODE_RESPONSE":"SYNTHETIC-LOGIN"}'])
         accepted_login = self.server.responses['auth.pin']

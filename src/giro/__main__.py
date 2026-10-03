@@ -39,7 +39,7 @@ def parser():
         item.add_argument('--public-cache', help='수신자 인증서·CRL의 공개 자료 캐시')
         if action == 'register':
             item.add_argument('--carrier', choices=('SKT', 'SKM', 'LGT', 'LGM'))
-            item.add_argument('--retry', action='store_true', help='초기 조회 실패·등록 동의 전 종료 기록을 보존하고 같은 기기로 다시 시작')
+            item.add_argument('--retry', action='store_true', help='초기 조회·SMS 요청 실패·등록 동의 전 종료 기록을 보존하고 같은 기기로 다시 시작')
     install = auth_sub.add_parser('install-profile', help='개인 보호 입력 자료 설치; 기관 통신 없음')
     install.add_argument('--input', required=True)
     trust = auth_sub.add_parser('prepare-trust', help='고정 해시의 공개 루트 2개 준비; 기본은 무통신 계획')

@@ -2,8 +2,8 @@
 
 Providers own terminal/UI input. No platform identity or runtime is inferred.
 The durable reservation prevents a restart from silently repeating enrollment;
-An explicit retry can archive an initial read-only rejection or an exit before
-registration consent. Ambiguous or later enrollment attempts are not replaced.
+An explicit retry can archive an initial rejection, a consent exit or a rejected
+SMS request. Ambiguous or later enrollment attempts are not replaced.
 """
 from dataclasses import dataclass, field
 import hashlib
@@ -31,7 +31,7 @@ class EnrollmentRetryUnavailable(GiroError):
 
 
 def retryable_start_report(report):
-    """Only completed initial rejection or consent exit can explicitly restart.
+    """Completed rejection before SMS verification or consent exit may restart.
 
     This is a local attempt reservation rule, not a new service verdict. The
     next attempt still queries device status and follows its normal routing.
@@ -41,13 +41,23 @@ def retryable_start_report(report):
     if (report.get('state') != 'finished'
             or report.get('registration_service_decision') != 'unobserved'
             or report.get('login') is not None
-            or not isinstance(steps, list) or len(steps) != 1 or not isinstance(steps[0], dict)):
+            or not isinstance(steps, list) or len(steps) not in (1, 2)):
+        return False
+    if any(not isinstance(step, dict)
+            or step.get('response_endpoint') != step.get('stage')
+            or step.get('response_origin') != 'response'
+            or step.get('registration_service_decision') != 'unobserved' for step in steps):
         return False
     step = steps[0]
-    if (step.get('response_endpoint') != step.get('stage')
-            or step.get('response_origin') != 'response'
-            or step.get('registration_service_decision') != 'unobserved'):
-        return False
+    if len(steps) == 2:
+        rejected = steps[1]
+        return (step.get('stage') == 'auth.datetime' and step.get('service_decision') == 'success'
+                and step.get('next_action') == 'identity_and_consent'
+                and report.get('next_action') == 'identity_and_consent'
+                and rejected.get('stage') in ('registration.user-info', 'registration.sms-send')
+                and rejected.get('callback') == 'failure'
+                and rejected.get('service_decision') == 'failure'
+                and rejected.get('next_action') == 'identity_and_consent')
     if report.get('next_action') == 'consent_not_given':
         return (step.get('stage') == 'auth.datetime' and step.get('service_decision') == 'success'
                 and step.get('next_action') == 'identity_and_consent')
@@ -111,9 +121,9 @@ class EnrollmentStore:
                 try:
                     previous = storage.read(path)
                     if not retryable_start_report(json.loads(previous)):
-                        raise ValueError('not_a_confirmed_initial_rejection')
+                        raise ValueError('not_a_retryable_registration_start')
                 except Exception:
-                    raise EnrollmentRetryUnavailable('초기 조회 실패 또는 등록 동의 전 종료 기록만 재시도할 수 있습니다.') from None
+                    raise EnrollmentRetryUnavailable('초기 조회·SMS 요청의 확정 실패 또는 등록 동의 전 종료 기록만 재시도할 수 있습니다.') from None
                 archive = storage.directory(root / 'attempts') / (hashlib.sha256(previous).hexdigest() + '.json')
                 try:
                     storage.write_new(archive, previous)
