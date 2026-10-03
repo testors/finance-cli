@@ -2,8 +2,11 @@ from http.cookiejar import Cookie, CookieJar
 import json
 from pathlib import Path
 import tempfile
+import subprocess
+import sys
 import unittest
 from unittest.mock import patch
+from concurrent.futures import ThreadPoolExecutor
 
 from giro.client import AuthenticatedSession
 from giro.errors import GiroError
@@ -69,3 +72,57 @@ class SessionStoreTests(unittest.TestCase):
             patcher.start()
         patcher.stop()
         self.assertEqual(result, {'service_decision': 'success', 'processing_issues': ['session_save_incomplete']})
+
+    def test_query_lock_excludes_replacement_and_preserves_saved_session(self):
+        self.store.save(self.session)
+        with self.store.use() as (session, issues):
+            with self.assertRaises(GiroError):
+                with self.store.replacement(): self.fail('login entered during query')
+            session.info['payer'] = 'UPDATED-SYNTHETIC'
+        with self.store.use() as (session, _):
+            self.assertEqual(session.info['payer'], 'UPDATED-SYNTHETIC')
+        self.assertEqual(issues, [])
+
+    def test_replacement_excludes_other_threads_even_using_same_store_instance(self):
+        self.store.save(self.session)
+        def enter():
+            with self.assertRaises(GiroError):
+                with self.store.use(): self.fail('concurrent query entered')
+            with self.assertRaises(GiroError):
+                with self.store.replacement(): self.fail('concurrent login entered')
+        with self.store.replacement() as save:
+            with ThreadPoolExecutor(max_workers=1) as pool: pool.submit(enter).result()
+            self.session.info['payer'] = 'NEW-SYNTHETIC'
+            save(self.session)
+        with self.store.use() as (session, _):
+            self.assertEqual(session.info['payer'], 'NEW-SYNTHETIC')
+
+    def test_failed_authentication_keeps_old_session_and_releases_lock(self):
+        self.store.save(self.session)
+        before = (self.store.root/'session.json').read_bytes()
+        with self.assertRaises(RuntimeError):
+            with self.store.replacement(): raise RuntimeError('SYNTHETIC')
+        self.assertEqual((self.store.root/'session.json').read_bytes(), before)
+        with self.store.use() as (session, _): self.assertTrue(session.active)
+
+    def test_replacement_excludes_a_separate_python_process(self):
+        self.store.save(self.session)
+        script = '''
+import sys
+from giro.errors import GiroError
+from giro.session_store import SessionStore
+try:
+    with SessionStore(sys.argv[1]).use():
+        print('entered')
+except GiroError:
+    print('blocked')
+'''
+        with self.store.replacement():
+            child = subprocess.run([sys.executable, '-c', script, str(self.store.root)],
+                                   capture_output=True, text=True, timeout=10)
+        self.assertEqual(child.returncode, 0, child.stderr)
+        self.assertEqual(child.stdout.strip(), 'blocked')
+        child = subprocess.run([sys.executable, '-c', script, str(self.store.root)],
+                               capture_output=True, text=True, timeout=10)
+        self.assertEqual(child.returncode, 0, child.stderr)
+        self.assertEqual(child.stdout.strip(), 'entered')

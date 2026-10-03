@@ -214,7 +214,49 @@ class AuthFlowTests(unittest.TestCase):
 
     def test_storage_failure_does_not_turn_registration_or_login_into_failure(self):
         self.protection.values.extend(['DISCARDED', '{"CODE_RESPONSE":"SYNTHETIC-LOGIN"}'])
-        result = self.invoke(session_store=SimpleNamespace(save=Mock(side_effect=OSError('SECRET'))))
+        with patch.object(SessionStore, '_save', side_effect=OSError('SECRET')):
+            result = self.invoke()
         self.assertEqual(result['registration_service_decision'], 'success')
         self.assertEqual(result['login_service_decision'], 'success')
         self.assertEqual(result['processing_issues'], ['session_save_incomplete'])
+
+    def test_busy_session_stops_login_before_dependencies_identity_or_pin(self):
+        with tempfile.TemporaryDirectory() as directory:
+            sessions = SessionStore(Path(directory).resolve()/'session')
+            identity, pin = Mock(), Mock()
+            with sessions.replacement(), patch('giro.auth_flow.login_dependencies') as dependencies:
+                result = authenticate(send=True, pin_provider=pin, enrollment_store=identity,
+                                      session_store=sessions)
+            self.assertFalse(result['network_used'])
+            self.assertEqual(result['login_service_decision'], 'unobserved')
+            self.assertFalse(result['session_saved'])
+            self.assertEqual(result['processing_issues'], ['session_in_use_or_unavailable'])
+            self.assertEqual(self.server.calls, [])
+            dependencies.assert_not_called()
+            pin.assert_not_called()
+            self.assertEqual(identity.mock_calls, [])
+
+    def test_login_excludes_queries_and_other_logins_until_saved_and_released(self):
+        from giro.errors import GiroError
+        self.server.responses['auth.device-status'] = (200, {'responseCode': '000', 'deviceRegYn': 'Y'})
+        self.protection.values = ['DISCARDED', '{"CODE_RESPONSE":"SYNTHETIC-LOGIN"}']
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory).resolve()
+            sessions = SessionStore(root/'session')
+            def pin():
+                with self.assertRaises(GiroError):
+                    with SessionStore(root/'session').use(): self.fail('query entered during login')
+                with patch('giro.auth_flow.login_dependencies') as dependencies:
+                    other = authenticate(send=True, pin_provider=Mock(),
+                        enrollment_store=EnrollmentStore(root/'enrollment'), session_store=sessions)
+                dependencies.assert_not_called()
+                self.assertFalse(other['network_used'])
+                return '234567'
+            with patch('giro.auth_flow.login_dependencies', self.dependencies):
+                result = authenticate(send=True, pin_provider=pin,
+                    enrollment_store=EnrollmentStore(root/'enrollment'), session_store=sessions)
+            self.assertEqual(result['login_service_decision'], 'success', result)
+            self.assertTrue(result['session_saved'], result)
+            with sessions.use() as (session, _):
+                self.assertTrue(AuthenticatedClient(session).query('national.list', {'page':'1'}, send=True).app_success)
+            self.assertEqual(self.server.steps.count('auth.pin'), 1)

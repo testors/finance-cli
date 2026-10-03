@@ -16,7 +16,7 @@ from .protection_profile import ProtectionProfile
 from .public_material_io import PublicCache
 from .registration import DeviceRegistration
 from .registration_flow import EnrollmentStore, enroll_once
-from .session_store import SessionStore
+from .session_store import SessionStore, SessionAccessError
 
 
 BASE = 'https://m.giro.or.kr/CodeGuard/'
@@ -89,7 +89,8 @@ def authenticate(*, pin_provider, register=False, enrollment_providers=None, sen
     enrollment_store = enrollment_store if enrollment_store is not None else EnrollmentStore()
     session_store = session_store if session_store is not None else SessionStore()
     try:
-        with login_dependencies(register=register, profile_path=profile_path, public_cache=public_cache) as dependencies:
+        with session_store.replacement() as save_session, \
+             login_dependencies(register=register, profile_path=profile_path, public_cache=public_cache) as dependencies:
             options = dict(recipient=dependencies.recipient, protection=dependencies.runtime,
                            user_agent=dependencies.user_agent)
             if register:
@@ -109,10 +110,12 @@ def authenticate(*, pin_provider, register=False, enrollment_providers=None, sen
             result['network_used'] = bool(result.get('events'))
             if attempt.session is not None:
                 try:
-                    session_store.save(attempt.session)
+                    save_session(attempt.session)
                     result['session_saved'] = True
                 except Exception:
                     result['processing_issues'].append('session_save_incomplete')
+    except SessionAccessError:
+        result['processing_issues'].append('session_in_use_or_unavailable')
     except (Exception, KeyboardInterrupt):
         result['processing_issues'].append('authentication_processing_incomplete')
     if dependencies is not None:

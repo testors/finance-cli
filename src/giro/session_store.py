@@ -27,6 +27,10 @@ _COOKIE_FIELDS = ('version', 'name', 'value', 'port', 'port_specified', 'domain'
     'comment_url', 'rfc2109')
 
 
+class SessionAccessError(GiroError):
+    """The exclusive session store could not be entered; no auth was sent."""
+
+
 def _b64(value): return base64.b64encode(value).decode('ascii')
 def _bytes(value): return base64.b64decode(value, validate=True)
 
@@ -58,11 +62,33 @@ class SessionStore:
 
     def save(self, session):
         try:
-            root = storage.directory(self.root)
-            with storage.lock(root/'session.lock'), session.lock:
-                self._save(session)
+            with self.replacement() as save:
+                save(session)
         except Exception:
             raise GiroError('로그인 결과의 세션 저장을 완료하지 못했습니다.') from None
+
+    @contextmanager
+    def replacement(self):
+        """Exclude queries and other logins before authentication starts.
+
+        The callback saves the new session under the already acquired lock.
+        An unsuccessful login leaves the existing encrypted file untouched.
+        No process-global reentrancy exemption: another thread using this
+        same store must also be excluded.
+        """
+        try:
+            root = storage.directory(self.root)
+            lock = storage.lock(root/'session.lock')
+            lock.__enter__()
+        except Exception:
+            raise SessionAccessError('지로 세션을 사용 중이거나 저장소를 열 수 없습니다.') from None
+        try:
+            def save(session):
+                with session.lock:
+                    self._save(session)
+            yield save
+        finally:
+            lock.__exit__(None, None, None)
 
     def _load(self):
         document = storage.read_json(self.root/'session.json')
