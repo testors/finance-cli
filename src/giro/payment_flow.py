@@ -1,4 +1,4 @@
-"""Single national-tax account payment on an already authenticated session.
+"""Single-tax account payment on an already authenticated session.
 
 No authentication bypass, login retry, account registration or automatic
 reconciliation. Callers must display the returned draft before explicit send.
@@ -30,11 +30,14 @@ def _success(stage, response):
     return response.query
 
 
-def national_payment_fields(detail, *, session_info, current_datetime, amount=None):
+def tax_payment_fields(detail, *, tax_type='national', session_info, current_datetime, amount=None):
     """Flatten single-bill detail, then apply the account confirmation fields."""
-    detail = read_model(detail, 'national.detail')
+    labels = {'national': '국세(조회납부)', 'local': '지방세', 'customs': '관세(조회납부)'}
+    if tax_type not in labels:
+        raise GiroError('지원하는 납부 세목을 선택하세요.')
+    detail = read_model(detail, tax_type+'.detail')
     if detail is None or detail.get('responseCode') != '000':
-        raise GiroError('성공한 국세 상세 조회 응답이 필요합니다.')
+        raise GiroError('성공한 고지 상세 조회 응답이 필요합니다.')
     data = detail.get('paymentData')
     if data is None:
         raise GiroError('조회는 성공했지만 납부 상세 자료를 확인하지 못했습니다.')
@@ -59,14 +62,18 @@ def national_payment_fields(detail, *, session_info, current_datetime, amount=No
     total = _amount(value)  # Missing amount is a local boundary, not a service rejection.
     if data.get('mnyEditYn') in ('Y', 'P') and (0 < total < 10 or total > 10 and total % 10):
         raise GiroError('납부금액은 10원 단위여야 합니다.')
-    if not current_datetime or not session_info.get('payer'):
-        raise GiroError('로그인한 납부자와 서버 거래시각을 확인하지 못했습니다.')
     fields = {key: merged.get(key) for key in
-              ('serviceCode', 'sortCode', 'giroNo', 'key', 'when', 'mnyEditYn', 'feeGroup')}
-    fields.update(거래구분='즉시납부', 거래일시=current_datetime, 요금종류='국세(조회납부)',
-                  청구기관명=data.get('companyName'), 납부자명=session_info['payer'],
-                  납부금액=value, 납부세액=value, 거래번호=merged.get('elecNo'))
+              ('serviceCode', 'sortCode', 'giroNo', 'key', 'when', 'mnyEditYn', 'feeGroup',
+               'isCardPayableTime', 'isCardPayableTimeMsg', 'isMemberOwnGoji')}
+    fields.update(거래구분='즉시납부', 거래일시=current_datetime, 요금종류=labels[tax_type],
+                  청구기관명=data.get('companyName'), 납부자명=session_info.get('payer'),
+                  납부금액=value, 납부세액=value, 거래번호=merged.get('elecNo'), 세목=data.get('taxName'))
     return fields
+
+
+def national_payment_fields(detail, *, session_info, current_datetime, amount=None):
+    return tax_payment_fields(detail, session_info=session_info,
+                              current_datetime=current_datetime, amount=amount)
 
 
 @dataclass(repr=False)
@@ -108,7 +115,7 @@ class PaymentWorkflow:
         self.journal = journal if journal is not None else PaymentJournal()
         self._drafts = {}
 
-    def prepare(self, bill, *, account_selector, amount=None, send=False):
+    def prepare(self, bill, *, account_selector, amount=None, tax_type='national', send=False):
         """Selected list item -> detail -> registered accounts -> server time.
 
         account_selector receives masked account options and returns a 1-based
@@ -116,29 +123,31 @@ class PaymentWorkflow:
         """
         if not send:
             raise GiroError('기관 통신에는 명시적인 전송 승인이 필요합니다.')
+        if tax_type not in ('national', 'local', 'customs'):
+            raise GiroError('지원하는 납부 세목을 선택하세요.')
         with self.client.session.lock:
             self.client.require_active()
-            detail = _success('national.detail', self.client.query('national.detail', bill, send=True))
-            if not detail.get('serviceCode'):
-                raise GiroError('조회는 성공했지만 납부 서비스 코드를 확인하지 못했습니다.')
+            endpoint = tax_type+'.detail'
+            detail = _success(endpoint, self.client.query(endpoint, bill, send=True))
             accounts = _success('accounts.payable', self.client.query('accounts.payable',
-                {'serviceCode': detail['serviceCode'], 'isReserve': 'N'}, send=True))
+                {'serviceCode': detail.get('serviceCode'), 'isReserve': 'N'}, send=True))
             options = account_options(accounts)
             options.update(offline=False, network_used=True)
             selected = account_selector(options)
             clock = _success('auth.datetime', self.client.query('auth.datetime', {}, send=True))
-            fields = national_payment_fields(detail, session_info=self.client.session.info,
+            fields = tax_payment_fields(detail, tax_type=tax_type, session_info=self.client.session.info,
                 current_datetime=clock.get('currentDateTime'), amount=amount)
             prepared = prepare_registered_payment(fields, accounts, selected,
-                                                   login_type=self.client.session.login_type)
+                login_type=self.client.session.login_type, tax_type=tax_type,
+                cert_only=detail['paymentData'].get('certOnlyYn') == 'Y')
             # Use the electronic bill number, not a potentially refreshed query
             # key, amount or bank. None of those changes permits a replay.
-            identity = ['national', fields.get('거래번호')]
+            identity = [tax_type, fields.get('거래번호')]
             if not identity[-1]:
                 raise GiroError('중복 전송 방지에 필요한 고지 식별자를 확인하지 못했습니다.')
             bill_id = hashlib.sha256(json.dumps(identity, ensure_ascii=False).encode()).hexdigest()
             token = uuid.uuid4().hex
-            review = {'draft_id': token, 'amount': _amount(fields['납부금액']),
+            review = {'draft_id': token, 'tax_type': tax_type, 'amount': _amount(fields['납부금액']),
                       'issuer': fields.get('청구기관명'),
                       'tax_name': detail['paymentData'].get('taxName'),
                       'bill_number_masked': _mask_account(fields['거래번호']),
@@ -166,7 +175,7 @@ class PaymentWorkflow:
             reservation = self.journal.reserve(draft.bill_id)
             draft.used = True  # Before the first possible write to the socket.
             try:
-                received = self.client._exchange('national.payment', body)
+                received = self.client._exchange(draft.payment.tax_type+'.payment', body)
                 result = payment_result(received)
                 result['processing_issues'] = list(received.issues)
             except Exception:

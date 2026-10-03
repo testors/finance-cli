@@ -10,11 +10,12 @@ class ProtocolTests(unittest.TestCase):
         self.assertEqual(endpoint('auth.device-status').mode, 'ENVELOP')
         self.assertEqual(endpoint('auth.datetime').mode, 'ENVELOP')
         self.assertEqual(endpoint('auth.pin').mode, 'ENCRYPT')
-        self.assertFalse(auth_plan()['live_login_ready'])
+        self.assertTrue(auth_plan()['live_login_ready'])
+        self.assertTrue(auth_plan()['prepared_inputs_required'])
         self.assertEqual(auth_plan()['steps'][0]['method'], 'POST')
 
     def test_explicit_offline_catalog_no_arbitrary_urls(self):
-        self.assertEqual(len(ENDPOINTS), 24)
+        self.assertEqual(len(ENDPOINTS), 28)
         for ep in ENDPOINTS.values():
             self.assertFalse(ep.describe()['network_enabled'])
             self.assertNotIn('InsSearchKey', ep.path)
@@ -84,7 +85,7 @@ class ProtocolTests(unittest.TestCase):
         self.assertTrue(cg['implemented'])
         self.assertIn('immutable_content_profile_and_recorded_state_replay', cg['implemented_components'])
         self.assertIn('new_policy_inputs_and_server_compatibility', cg['remaining_components'])
-        self.assertFalse(plan['live_login_ready'])
+        self.assertTrue(plan['live_login_ready'])
 
     def test_restored_defaults_are_described_not_injected(self):
         result = request_plan('national.list')

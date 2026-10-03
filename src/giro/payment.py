@@ -17,6 +17,8 @@ ADDITIONAL_AUTH_AMOUNT = 1_000_000
 def payment_plan():
     return {
         'offline': True, 'network_used': False, 'live_payment_ready': False,
+        'live_payment_implemented': True, 'live_payment_verified': False,
+        'tax_types': ['national', 'local', 'customs'],
         'registered_account_steps': [
             'auth.pin', 'national.list', 'national.detail', 'accounts.payable',
             'account_selection', 'account_password', 'auth.datetime',
@@ -36,10 +38,12 @@ def payment_plan():
                         'authenticated_session_http_client', 'single_national_bill_workflow',
                         'additional_pin_encryption', 'durable_single_payment_dispatch',
                         'receipt_query_transport', 'cli_registration_and_pin_login',
-                        'encrypted_session_reuse', 'cli_reviewed_national_account_payment'],
-        'remaining': ['current_recipient_material_provisioning', 'live_device_registration_acceptance',
+                        'encrypted_session_reuse', 'cli_reviewed_national_account_payment',
+                        'local_and_customs_single_account_payment', 'read_only_payment_review',
+                        'certificate_only_branch', 'registered_account_and_receipt_detail_queries'],
+        'remaining': ['current_recipient_material_provisioning',
                       'certificate_fido_additional_auth', 'web_login_and_payment_integration',
-                      'local_and_customs_payment', 'live_server_acceptance'],
+                      'live_payment_server_acceptance'],
     }
 
 
@@ -141,14 +145,18 @@ class AccountPayment:
     fields: dict = field(repr=False)
     authentication: str
     account_masked: str | None
+    tax_type: str = 'national'
 
 
-def prepare_registered_payment(fields, payable_response, account_index, *, login_type='PIN'):
-    """Bind one returned account to already prepared single-national-tax fields.
+def prepare_registered_payment(fields, payable_response, account_index, *, login_type='PIN',
+                               tax_type='national', cert_only=False):
+    """Bind one returned account to already prepared single-tax payment fields.
 
     Bill selection, amount editing, payer and server time must be supplied by
     the caller's workflow. This does not invent them or create a live draft.
     """
+    if tax_type not in ('national', 'local', 'customs'):
+        raise GiroError('지원하는 납부 세목을 선택하세요.')
     query = _payable(payable_response)
     if query.get('responseCode') != '000':
         raise GiroError('성공한 납부 가능 계좌 조회 결과가 필요합니다.')
@@ -163,18 +171,20 @@ def prepare_registered_payment(fields, payable_response, account_index, *, login
         raise GiroError('선택한 계좌의 금융기관에서 납부할 수 있는지 확인해 주세요.')
     if not account.get('accountNo'):
         raise GiroError('계좌번호를 확인하지 못했습니다.')
-    payment = read_model(fields, 'national.payment')
+    payment = read_model(fields, tax_type+'.payment')
     if payment is None:
         raise GiroError('납부 요청 필드 객체가 필요합니다.')
     payment.update(bankCode=account.get('bankCode'), 납부은행=account.get('bankName'),
                    계좌번호=account['accountNo'], acntPwd=None,
                    addUserAcntYn=None, manageName=None)
-    auth = authentication_route(payment.get('납부금액'))
-    if auth == 'none':
+    auth = authentication_route(payment.get('납부금액'), cert_only=cert_only)
+    # Input-screen amount fields and confirmation-screen certificate routing
+    # are separate decisions. A small cert-only bill still needs a certificate.
+    if authentication_route(payment.get('납부금액')) == 'none':
         payment.update(acntPaymentType='1', addCertMethod='0')
     else:
         payment['addCertMethod'] = {'PIN': '2', 'CERT': '1', 'FIDO': '7', 'FINCERT': '3'}.get(login_type, '')
-    return AccountPayment(payment, auth, _mask_account(account['accountNo']))
+    return AccountPayment(payment, auth, _mask_account(account['accountNo']), tax_type)
 
 
 def encode_registered_payment(prepared, *, account_password_provider, key, device_id,
@@ -194,7 +204,7 @@ def encode_registered_payment(prepared, *, account_password_provider, key, devic
     fields['acntPwd'] = encode_account_password(account_password_provider(), key)
     if pin_auth:
         fields['encAddCertValue'] = encode_pin(additional_pin_provider(), key)
-    text = build_query('national.payment', fields, device_id=device_id)
+    text = build_query(prepared.tax_type+'.payment', fields, device_id=device_id)
     return encrypted_form(encrypt_text(text, key))
 
 

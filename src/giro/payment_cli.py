@@ -1,4 +1,4 @@
-"""Explicit terminal review before a single national-tax account payment."""
+"""Explicit terminal review before a single-tax account payment."""
 from .auth_cli import answer, private_terminal, secret
 from .client import AuthenticatedClient
 from .errors import GiroError
@@ -20,18 +20,23 @@ def _choose(rows, label, display):
 
 
 def run_payment(args):
+    tax_type = getattr(args, 'type', 'national')
+    prepare_only = getattr(args, 'action', 'pay') == 'prepare'
     if not args.live:
         return dict(plan_only=True, network_used=False, payment_attempted=False,
-            sequence=['existing session', 'own national bills', 'detail', 'registered accounts',
-                      'server time', 'review and confirmation', 'account password', 'one payment request'],
+            tax_type=tax_type, prepare_only=prepare_only,
+            sequence=['existing session', 'own '+tax_type+' bills', 'detail', 'registered accounts',
+                      'server time', 'review'] + ([] if prepare_only else
+                      ['confirmation', 'account password', 'one payment request']),
             automatic_login=False, automatic_retry=False), 0
     private_terminal()
     result = dict(payment_attempted=False, service_decision='unobserved', processing_issues=[])
+    client = None
     try:
         with SessionStore().use() as (session, issues):
             client = AuthenticatedClient(session)
             result['session_processing_issues'] = issues
-            bills = collect_bills(client, 'national')
+            bills = collect_bills(client, tax_type)
             if not bills.get('app_success') or bills.get('bills') is None:
                 result['bill_query'] = bills
                 return result, 4
@@ -46,20 +51,32 @@ def run_payment(args):
                 return _choose(options['accounts'], '납부계좌', lambda row:
                     f"{row['bank_name']} {row['account_masked']}")
             review = workflow.prepare(rows[selected-1]['identifiers'], account_selector=account,
-                                      amount=args.amount, send=True)
+                                      amount=args.amount, tax_type=tax_type, send=True)
             result['review'] = review
-            prompt = (f"{review['issuer']} / {review['tax_name'] or '국세'} / 고지 {review['bill_number_masked']}\n"
+            if prepare_only:
+                result.update(next_action='review_ready', prepare_only=True)
+                return result, 0
+            if review['authentication'] not in ('none', 'additional') or (
+                    review['authentication'] == 'additional' and not review['additional_pin_required']):
+                result['next_action'] = 'additional_auth_not_supported'
+                return result, 4
+            prompt = (f"{review['issuer']} / {review['tax_name'] or tax_type} / 고지 {review['bill_number_masked']}\n"
                       f"납부액 {review['amount']:,}원\n{review['bank_name']} {review['account_masked']}\n"
                       '이 금액을 납부하려면 "납부"를 입력하세요:')
-            if answer(prompt) != '납부':
+            if answer(prompt).strip() != '납부':
                 result['next_action'] = 'payment_cancelled'
                 return result, 0
             result.update(workflow.pay(review['draft_id'],
                 account_password_provider=lambda: secret('계좌 비밀번호 4자리: '),
                 additional_pin_provider=lambda: secret('추가 인증용 지로 로그인 PIN 6자리: '), send=True))
-            result['events'] = list(client.events)
     except WorkflowStopped as stopped:
         result.update(stage=stopped.stage, preparation_response=response_report(stopped.response))
     except (Exception, KeyboardInterrupt):
         result['processing_issues'].append('payment_processing_incomplete')
+    finally:
+        if client is not None:
+            try:
+                result['events'] = list(client.events)
+            except Exception:
+                result['processing_issues'].append('observation_failed')
     return result, 0 if result.get('app_success') else 2

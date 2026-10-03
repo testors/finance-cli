@@ -159,6 +159,51 @@ class PaymentFlowTests(unittest.TestCase):
             self.assertEqual(_cbc(KEY, PIN_IV, encoded[i*16:(i+1)*16], decrypt=True),
                              bytes((5, position)) + bytes(14))
 
+    def test_local_and_customs_use_their_own_single_payment_models(self):
+        for kind, label in (('local', '지방세'), ('customs', '관세(조회납부)')):
+            self.server.responses[kind+'.detail'] = (200, deepcopy(DETAIL))
+            self.server.responses[kind+'.detail'][1].update(isMemberOwnGoji='Y', isCardPayableTime='N')
+            self.server.responses[kind+'.payment'] = (200, {'responseCode': '000'})
+            draft = self.prepare(tax_type=kind)
+            self.assertEqual(draft['tax_type'], kind)
+            result = self.pay(draft)
+            self.assertTrue(result['app_success'])
+            name, fields, _, _ = self.server.calls[-1]
+            self.assertEqual(name, kind+'.payment')
+            self.assertEqual(fields['요금종류'], [label])
+            self.assertEqual(fields['납부금액'], ['900000'])
+            if kind == 'local':
+                self.assertEqual(fields['세목'], ['합성세'])
+                self.assertEqual(fields['isMemberOwnGoji'], ['Y'])
+                self.assertNotIn('mnyEditYn', fields)
+                self.assertNotIn('납부세액', fields)
+            else:
+                self.assertEqual(fields['납부세액'], ['900000'])
+                self.assertEqual(fields['mnyEditYn'], ['N'])
+            for key in ('responseCode', 'sessionInfo', 'certOnlyYn', 'paymentData'):
+                self.assertNotIn(key, fields)
+        self.assertEqual(len(list(self.journal.root.iterdir())), 2)
+
+    def test_certificate_only_local_bill_never_falls_back_to_pin_or_collects_password(self):
+        detail = deepcopy(DETAIL)
+        detail['paymentData']['certOnlyYn'] = 'Y'
+        self.server.responses['local.detail'] = (200, detail)
+        draft = self.prepare(tax_type='local')
+        self.assertEqual(draft['authentication'], 'certificate')
+        self.assertFalse(draft['additional_pin_required'])
+        provider = Mock()
+        with self.assertRaises(GiroError):
+            self.flow.pay(draft['draft_id'], account_password_provider=provider,
+                          additional_pin_provider=provider, send=True)
+        provider.assert_not_called()
+        self.assertFalse(self.journal.root.exists())
+        self.assertEqual([call[0] for call in self.server.calls],
+                         ['local.detail', 'accounts.payable', 'auth.datetime'])
+
+    def test_unknown_tax_type_cannot_query_or_fall_back_to_national_payment(self):
+        with self.assertRaises(GiroError): self.prepare(tax_type='unknown')
+        self.assertEqual(self.server.calls, [])
+
     def test_explicit_send_before_network_or_secret_input(self):
         provider = Mock()
         with self.assertRaises(GiroError):
@@ -333,6 +378,12 @@ class FieldTests(unittest.TestCase):
     def test_missing_successful_detail_is_a_local_error(self):
         with self.assertRaises(GiroError):
             self.fields({'responseCode': '000'})
+
+    def test_null_payer_and_server_time_are_not_invented_service_failure_conditions(self):
+        fields = national_payment_fields(DETAIL, session_info={}, current_datetime=None)
+        self.assertIsNone(fields['납부자명'])
+        self.assertIsNone(fields['거래일시'])
+        self.assertEqual(fields['납부금액'], '900000')
 
     def test_unsuccessful_login_cannot_create_session(self):
         with self.assertRaises(GiroError):

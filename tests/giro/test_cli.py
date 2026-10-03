@@ -31,7 +31,9 @@ class CliTests(unittest.TestCase):
 
     def test_login_registration_query_and_payment_default_to_no_io_plans(self):
         for command in (['auth', 'login'], ['auth', 'register'], ['auth', 'register', '--retry'],
-                        ['bills', 'list', '--type', 'national'], ['payment', 'pay']):
+                        ['bills', 'list', '--type', 'national'], ['payment', 'pay'],
+                        ['payment', 'prepare', '--type', 'local'], ['accounts', 'list'],
+                        ['receipts', 'show', '--input', '/nonexistent/private.json']):
             with patch('giro.auth_flow.login_dependencies', side_effect=AssertionError('no dependencies')), \
                  patch('giro.session_store.SessionStore.use', side_effect=AssertionError('no session')):
                 code, result = self.call(command)

@@ -12,7 +12,7 @@ from zoneinfo import ZoneInfo
 def deployment_plan():
     return {
         'target': 'non_android_headless_server',
-        'capability_scope': 'implemented_offline_core_not_complete_authentication',
+        'capability_scope': 'local_diagnostics_not_authentication_or_session_validation',
         'android_runtime_required': False,
         'adb_required': False,
         'jvm_required': False,
@@ -22,11 +22,10 @@ def deployment_plan():
         'protocol_locale_source': 'explicit_not_host_locale',
         'live_login_ready': False,
         'unresolved': [
-            'codeguard_process_package_and_environment_input_contract',
+            'private_prepared_protection_profile_installation',
             'registered_device_identity_and_account_state',
             'current_recipient_trust_path_crl_and_installation',
-            'stateful_authentication_transport_and_server_acceptance',
-            'noninteractive_secret_input_and_session_lifecycle',
+            'noninteractive_secret_input',
         ],
     }
 

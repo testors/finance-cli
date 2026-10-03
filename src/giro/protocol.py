@@ -47,6 +47,8 @@ _ENDPOINTS = [
     Endpoint("integrated.summary", "/service/integrated/mIntegratedQrySimple.m", "ENCRYPT",
              ("juminNo", "useUIDInfoYn"), session_required=True),
     Endpoint("accounts.registered", "/mygiro/account/mQryUserAcntList.m", "ENCRYPT", (), True),
+    Endpoint('local.provinces', '/service/localtax/localtaxsearch/mLocaltaxSelectProvince.m', 'ENCRYPT', (), True),
+    Endpoint('local.districts', '/service/localtax/localtaxsearch/mLocaltaxSelectDistrict.m', 'ENCRYPT', ('areaCode',), True),
     Endpoint("receipts.list", "/mygiro/receipt/mQryReceiptList.m", "ENCRYPT",
              ("startDate", "endDate", "page", "pageSize"), True),
     Endpoint("receipts.detail", "/mygiro/receipt/mQryReceiptDetail.m", "ENCRYPT",
@@ -77,6 +79,15 @@ for _kind, _directory, _prefix in (
                  DETAIL_FIELDS, True),
     ])
 ENDPOINTS = {entry.name: entry for entry in _ENDPOINTS}
+for _kind, _directory, _prefix in (
+    ('local', 'localtax/localtaxsearch', 'Localtax'),
+    ('customs', 'ntax/tariff', 'Tariff'),
+):
+    ENDPOINTS[_kind+'.payment'] = Endpoint(_kind+'.payment',
+        f'/service/{_directory}/m{_prefix}ProcPayment.m', 'ENCRYPT',
+        ('serviceCode', 'sortCode', 'giroNo', 'key', 'when', 'bankCode',
+         '계좌번호', 'acntPwd', '납부금액', 'acntPaymentType', 'addCertMethod',
+         'encAddCertValue', 'signedval', 'ucpidval'), True)
 
 
 def endpoint(name):
@@ -89,7 +100,8 @@ def endpoint(name):
 def auth_plan():
     from .runtime import deployment_plan
     return {
-        "offline": True, "app_version": APP_VERSION, "live_login_ready": False,
+        "offline": True, "app_version": APP_VERSION, "live_login_ready": True,
+        "live_login_verified": True, "prepared_inputs_required": True,
         "deployment": deployment_plan(),
         "steps": [
             {"endpoint": "auth.server-cert", "mode": "NOTHING", "method": "POST",
@@ -178,16 +190,15 @@ def auth_plan():
                                         "login_verdict_and_session_readiness_separation",
                                         "authenticated_query_and_payment_session_handoff",
                                         "cli_new_device_enrollment_and_login", "encrypted_session_storage"],
-             "remaining_components": ["current_trust_configuration", "prepared_profile_installation",
-                                      "live_registration_and_login_acceptance"],
+             "remaining_components": ["current_trust_configuration", "prepared_profile_installation"],
              "effect": "내부 CODE_RESPONSE / 외부 CODE_RESPONSE_TOKEN; 쿠키·키 유지"},
         ],
         "blockers": [
             "준비된 개인 보호 입력 자료와 현재 유효한 수신자 인증서·CRL 필요",
             "저장된 기기 관측 상태를 재사용하며 새 서버 정책의 미관측 입력은 추정하지 않음",
-            "CLI 기기 등록은 기존 휴대폰 등록을 바꿀 수 있음; 등록·로그인 실서버 수락 미확인",
+            "CLI 기기 등록은 기존 휴대폰 등록을 바꿀 수 있음; 기존 개인 회원 등록·PIN 로그인 수락 확인",
             "본인 세금 목록에는 계정에 등록된 본인정보가 필요; 신규 본인정보 등록 미지원",
-            "등록→로그인→조회→국세 단건 납부 연결은 합성 검증; 실서버 업무 수락 미확인",
+            "저장 세션을 별도 프로세스에서 재사용한 국세 조회 성공 확인; 지방세·관세·납부 수락은 미확인",
         ],
     }
 

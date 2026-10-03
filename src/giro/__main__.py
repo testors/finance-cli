@@ -92,24 +92,33 @@ def parser():
     pin.add_argument("--key-file", required=True, help="사용자가 제공한 16바이트 키의 32자리 hex 파일")
     request = sub.add_parser("request", help="오프라인 요청 스키마")
     request.add_argument("endpoint", choices=tuple(ENDPOINTS))
-    accounts = sub.add_parser('accounts', help='로컬 납부 가능 계좌 응답 해석; 조회 통신 없음')
+    accounts = sub.add_parser('accounts', help='등록계좌 조회 또는 로컬 납부 가능 계좌 응답 해석')
     accounts_sub = accounts.add_subparsers(dest='action', required=True)
     account_list = accounts_sub.add_parser('list')
-    account_list.add_argument('--input', required=True, help='납부 가능 계좌 응답 JSON 파일 또는 -')
+    account_source = account_list.add_mutually_exclusive_group()
+    account_source.add_argument('--input', help='로컬 납부 가능 계좌 응답 JSON 파일 또는 -')
+    account_source.add_argument('--live', '--send', dest='live', action='store_true')
     receipts = sub.add_parser('receipts', help='저장된 세션으로 납부내역 조회; 재납부·취소 없음')
-    receipt_list = receipts.add_subparsers(dest='action', required=True).add_parser('list')
+    receipt_sub = receipts.add_subparsers(dest='action', required=True)
+    receipt_list = receipt_sub.add_parser('list')
     receipt_list.add_argument('--start-date', type=date.fromisoformat, required=True)
     receipt_list.add_argument('--end-date', type=date.fromisoformat, required=True)
     receipt_list.add_argument('--page', type=int, default=1)
     receipt_list.add_argument('--live', '--send', dest='live', action='store_true')
-    payment = sub.add_parser('payment', help='납부 계획·등록계좌 국세 납부·결과 해석')
+    receipt_show = receipt_sub.add_parser('show', help='납부내역 목록에서 선택한 영수증 상세 조회')
+    receipt_show.add_argument('--input', help='목록 항목의 identifiers 객체를 담은 JSON 파일 또는 -')
+    receipt_show.add_argument('--live', '--send', dest='live', action='store_true')
+    payment = sub.add_parser('payment', help='납부 준비·등록계좌 단건 납부·결과 해석')
     payment_sub = payment.add_subparsers(dest='action', required=True)
     payment_sub.add_parser('plan', help='등록계좌·홈택스 연계 납부의 지원 범위')
-    pay = payment_sub.add_parser('pay', help='저장된 로그인으로 국세 조회 후 계좌·금액 확인 및 단건 납부')
-    pay.add_argument('--live', '--send', dest='live', action='store_true')
-    pay.add_argument('--amount', help='금액 변경이 가능한 고지에만 적용할 납부액')
+    for action in ('prepare', 'pay'):
+        pay = payment_sub.add_parser(action, help='고지·계좌·금액 확인까지만 조회' if action == 'prepare'
+                                     else '고지 조회 후 계좌·금액 확인 및 단건 납부')
+        pay.add_argument('--type', choices=TAX_TYPES, default='national')
+        pay.add_argument('--live', '--send', dest='live', action='store_true')
+        pay.add_argument('--amount', help='금액 변경이 가능한 고지에만 적용할 납부액')
     payment_result = payment_sub.add_parser('result', help='복호화된 납부 응답의 판정; 추가 조회 없음')
-    payment_result.add_argument('--type', choices=('national', 'hometax'), required=True)
+    payment_result.add_argument('--type', choices=(*TAX_TYPES, 'hometax'), required=True)
     payment_result.add_argument('--input', required=True, help='납부 응답 JSON 파일 또는 -')
     bills = sub.add_parser("bills", help="복호화된 로컬 JSON에서 고지/기한 읽기")
     bill_sub = bills.add_subparsers(dest="action", required=True)
@@ -136,15 +145,24 @@ def run(args):
     if args.command == "request":
         return request_plan(args.endpoint), 0
     if args.command == 'accounts':
-        from .payment import account_options
-        result = account_options(_load(args.input))
-        return result, 0 if result['app_success'] else 2
+        if args.input is not None:
+            from .payment import account_options
+            result = account_options(_load(args.input))
+        else:
+            from .query_flow import registered_accounts
+            result = registered_accounts(send=args.live)
+        return result, 0 if result.get('plan_only') or result.get('app_success') else 2
     if args.command == 'receipts':
-        from .query_flow import list_receipts
-        result = list_receipts(args.start_date, args.end_date, page=args.page, send=args.live)
+        from .query_flow import list_receipts, receipt_detail
+        if args.action == 'show':
+            if args.live and args.input is None:
+                raise GiroError('--send에는 목록 항목의 identifiers를 담은 --input이 필요합니다.')
+            result = receipt_detail(_load(args.input) if args.live else None, send=args.live)
+        else:
+            result = list_receipts(args.start_date, args.end_date, page=args.page, send=args.live)
         return result, 0 if result.get('plan_only') or result.get('app_success') else 2
     if args.command == 'payment':
-        if args.action == 'pay':
+        if args.action in ('prepare', 'pay'):
             from .payment_cli import run_payment
             return run_payment(args)
         from .payment import payment_plan, payment_result

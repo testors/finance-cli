@@ -9,7 +9,7 @@ from giro.client import AuthenticatedClient
 from giro.errors import GiroError
 from giro.payment_cli import run_payment
 from giro.payment_flow import PaymentJournal
-from giro.query_flow import collect_bills, list_bills, list_receipts
+from giro.query_flow import collect_bills, list_bills, list_receipts, registered_accounts, receipt_detail
 from giro.session_store import SessionStore
 import test_login as support
 from test_bills import page
@@ -34,6 +34,11 @@ class LiveWorkflowTests(unittest.TestCase):
         self.server.responses['national.list'] = (200, dict(responseCode='000',
             paymentList=[dict(support.BILL, companyName='합성세무서', payMny='900000', payLimitDate='20261010')],
             pageNaviMap={'currentPage': '1', 'totalPage': '1', 'totalCount': '1'}))
+        self.server.responses['local.provinces'] = (200, {'responseCode': '000',
+            'provinceList': [{'areaCode': 'SYNTHETIC-AREA', 'areaName': '합성시도'}]})
+        self.server.responses['local.districts'] = (200, {'responseCode': '000',
+            'districtList': [{'sortCode': 'SYNTHETIC-SORT', 'giroNo': 'SYNTHETIC-GIRO',
+                              'sigunguName': '합성지자체'}]})
 
     def test_three_tax_types_use_existing_key_cookie_and_own_uid(self):
         for tax_type in ('national', 'local', 'customs'):
@@ -45,8 +50,37 @@ class LiveWorkflowTests(unittest.TestCase):
             self.assertEqual(fields['useUIDInfoYn'], ['Y'])
             self.assertEqual(fields['page'], ['1'])
             self.assertEqual(headers['Cookie'], 'SESSION=BUSINESS-COOKIE')
+            if tax_type == 'local':
+                self.assertEqual(fields['sortCode'], ['SYNTHETIC-SORT'])
+                self.assertEqual(fields['giroNo'], ['SYNTHETIC-GIRO'])
+                self.assertEqual(result['query_region'], {'province': '합성시도', 'district': '합성지자체'})
         self.assertEqual(self.server.steps.count('auth.pin'), 1)
         self.assertEqual(len(self.server.keys), 2)
+
+    def test_local_region_initialization_happens_once_across_multiple_pages(self):
+        client = AuthenticatedClient(self.session)
+        query = client.query
+        def pages(name, fields, **kwargs):
+            if name == 'local.list': self.server.responses[name] = (200, page(int(fields['page']), 2, 2))
+            return query(name, fields, **kwargs)
+        with patch.object(client, 'query', side_effect=pages): result = collect_bills(client, 'local')
+        self.assertTrue(result['app_success'])
+        self.assertEqual(self.server.steps.count('local.provinces'), 1)
+        self.assertEqual(self.server.steps.count('local.districts'), 1)
+        self.assertEqual(self.server.steps.count('local.list'), 2)
+        self.assertEqual(self.server.steps.count('auth.pin'), 1)
+
+    def test_local_region_failure_or_null_list_stops_before_bill_query(self):
+        for response in ({'responseCode':'311'}, {'responseCode':'000'},
+                         {'responseCode':'000','provinceList':[]},
+                         {'responseCode':'000','provinceList':[None]}):
+            self.server.responses['local.provinces'] = (200, response)
+            result = collect_bills(AuthenticatedClient(self.session), 'local')
+            self.assertIsNone(result['app_success'])
+            self.assertEqual(result['preparation_response']['app_success'], response['responseCode']=='000')
+            self.assertEqual(result['next_action'], 'local_region_unavailable')
+        self.assertNotIn('local.districts', self.server.steps)
+        self.assertNotIn('local.list', self.server.steps)
 
     def test_missing_own_uid_stops_at_registration_prompt_without_query(self):
         self.session.info.pop('hasUIDInfoYn')
@@ -90,14 +124,42 @@ class LiveWorkflowTests(unittest.TestCase):
         self.assertEqual(self.server.calls[-1][1]['startDate'], ['20261001'])
         self.assertEqual(self.server.steps.count('auth.pin'), 1)
 
-    def payment(self, confirm):
+    def test_receipt_detail_uses_selected_identifiers_without_releasing_reservation(self):
+        reserved = self.journal.reserve('synthetic-payment')
+        self.server.responses['receipts.detail'] = (200, {'responseCode': '000', 'receiptItem':
+            [None, {'n': '납부액', 'v': '100'}, {'n': 'unknown label', 'v': None}]})
+        ids = {'sortCode': '01', 'giroNo': 'SYNTHETIC', 'key': 'KEY', 'paidDate': '20261003'}
+        result = receipt_detail({**ids, 'acntPwd': 'DO-NOT-SEND'}, send=True, store=self.store)
+        self.assertTrue(result['app_success'])
+        self.assertEqual(result['items'], [None, {'name':'납부액','value':'100'},
+                                          {'name':'unknown label','value':None}])
+        fields = self.server.calls[-1][1]
+        for key, value in ids.items(): self.assertEqual(fields[key], [value])
+        self.assertNotIn('acntPwd', fields)
+        self.assertFalse(result['payment_reservation_changed'])
+        self.assertTrue(reserved.exists())
+        self.assertNotIn('national.payment', self.server.steps)
+
+    def test_registered_account_query_masks_numbers_and_retains_nulls(self):
+        self.server.responses['accounts.registered'] = (200, {'responseCode': '000',
+            'userAcntList': [None, {'acntNo':'SYNTHETIC-1234', 'bankName':'합성은행',
+                                  'acntStatus': 'unknown-status', 'manageName': '이름'}]})
+        result = registered_accounts(send=True, store=self.store)
+        self.assertTrue(result['app_success'])
+        self.assertIsNone(result['accounts'][0])
+        self.assertEqual(result['accounts'][1]['account_status'], 'unknown-status')
+        self.assertEqual(result['accounts'][1]['account_masked'], '**********1234')
+        self.assertNotIn('SYNTHETIC-1234', str(result))
+        self.assertEqual(self.server.steps.count('auth.pin'), 1)
+
+    def payment(self, confirm, action='pay'):
         from giro.payment_flow import PaymentWorkflow
         def workflow(client): return PaymentWorkflow(client, journal=self.journal)
         with patch('giro.payment_cli.private_terminal'), patch('giro.payment_cli.SessionStore', return_value=self.store), \
              patch('giro.payment_cli.PaymentWorkflow', side_effect=workflow), \
              patch('giro.payment_cli.answer', return_value=confirm) as approval, \
              patch('giro.payment_cli.secret', return_value='1234') as secret:
-            result = run_payment(SimpleNamespace(live=True, amount=None))
+            result = run_payment(SimpleNamespace(live=True, amount=None, action=action, type='national'))
         return result, approval, secret
 
     def test_cancelled_review_never_collects_password_or_sends_payment(self):
@@ -107,6 +169,43 @@ class LiveWorkflowTests(unittest.TestCase):
         self.assertIn('900,000', approval.call_args[0][0])
         secret.assert_not_called()
         self.assertNotIn('national.payment', self.server.steps)
+
+    def test_prepare_returns_review_without_payment_confirmation_password_or_reservation(self):
+        (result, code), approval, secret = self.payment('납부', action='prepare')
+        self.assertEqual(code, 0, result)
+        self.assertEqual(result['next_action'], 'review_ready')
+        self.assertEqual(result['review']['amount'], 900000)
+        self.assertFalse(result['payment_attempted'])
+        approval.assert_not_called()
+        secret.assert_not_called()
+        self.assertFalse(self.journal.root.exists())
+        self.assertEqual([event['endpoint'] for event in result['events']],
+                         ['national.list', 'national.detail', 'accounts.payable', 'auth.datetime'])
+
+    def test_normalization_error_preserves_service_success(self):
+        with patch('giro.query_flow.normalize_pages', side_effect=ValueError('PRIVATE')):
+            result = list_bills('national', send=True, store=self.store)
+        self.assertTrue(result['app_success'])
+        self.assertEqual(result['service_decision'], 'success')
+        self.assertFalse(result['complete'])
+        self.assertIsNone(result['bills'])
+        self.assertIn('bill_normalization_incomplete', result['processing_issues'])
+        self.assertNotIn('PRIVATE', str(result))
+        self.assertEqual(self.server.steps.count('national.list'), 1)
+
+    def test_later_python_error_preserves_first_page_and_never_retries(self):
+        client = AuthenticatedClient(self.session)
+        self.server.responses['national.list'] = (200, page(1, 2, 2))
+        first = client.query('national.list', {}, send=True)
+        with patch.object(client, 'query', side_effect=[first, OSError('PRIVATE')]) as query:
+            result = collect_bills(client, 'national')
+        self.assertTrue(result['app_success'])
+        self.assertEqual(result['service_decision'], 'partial_success')
+        self.assertEqual(result['loaded_count'], 1)
+        self.assertFalse(result['complete'])
+        self.assertEqual(query.call_count, 2)
+        self.assertIn('query_processing_incomplete', result['processing_issues'])
+        self.assertNotIn('PRIVATE', str(result))
 
     def test_reviewed_single_payment_and_duplicate_prevention_survive_commands(self):
         (result, code), _, secret = self.payment('납부')
