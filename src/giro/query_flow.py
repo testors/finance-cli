@@ -11,7 +11,9 @@ def response_report(received):
         callback=received.callback, callback_code=received.callback_code, origin=received.origin,
         service_decision=('success' if received.app_success else 'failure')
             if received.origin == 'response' else 'unobserved',
-        processing_issues=list(received.issues))
+        processing_issues=list(received.issues),
+        no_bills_reported=received.origin == 'response' and received.code == '311'
+            and ((received.query or {}).get('errorInfo') or {}).get('errorName') == '고지내용 없음')
 
 
 def collect_bills(client, tax_type, *, max_pages=100):

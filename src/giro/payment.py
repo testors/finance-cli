@@ -42,10 +42,10 @@ def payment_plan():
                         'receipt_query_transport', 'cli_registration_and_pin_login',
                         'encrypted_session_reuse', 'cli_reviewed_national_account_payment',
                         'local_and_customs_single_account_payment', 'read_only_payment_review',
-                        'certificate_only_branch', 'registered_account_and_receipt_detail_queries'],
+                        'certificate_only_branch', 'registered_account_and_receipt_detail_queries', 'web_reviewed_account_payment'],
         'remaining': ['current_recipient_material_provisioning',
-                      'certificate_fido_additional_auth', 'web_login_and_payment_integration',
-                      'live_payment_server_acceptance'],
+                      'certificate_fido_additional_auth', 'web_live_verification',
+                      'local_and_customs_live_payment_verification'],
     }
 
 

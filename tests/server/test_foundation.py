@@ -199,7 +199,8 @@ class ModelTests(ServerCase):
             self.assertEqual(server_main(['import-profiles']), 0)
         report = json.loads(output.getvalue())
         self.assertEqual([c['service'] for c in report['created']], ['hometax'])
-        self.assertEqual(report['skipped'][0]['reason'], 'institution_without_login')
+        # Giro now has a PIN login; a legacy certificate profile is still not a PIN connection.
+        self.assertEqual(report['skipped'][0]['reason'], 'unsupported_login_method')
         self.assertEqual(path.read_bytes(), before)
         with self.db.read() as con:
             login = model.list_logins(con)[0]
@@ -211,7 +212,7 @@ class ModelTests(ServerCase):
         output = io.StringIO()
         with patch('sys.stdout', output):
             server_main(['import-profiles'])
-        self.assertEqual(json.loads(output.getvalue())['skipped'][0]['reason'], 'institution_without_login')
+        self.assertEqual(json.loads(output.getvalue())['skipped'][0]['reason'], 'unsupported_login_method')
 
     def test_targets_only_from_verification_results_and_profiles_group_them(self):
         self.enroll()

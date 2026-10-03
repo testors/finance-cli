@@ -116,6 +116,17 @@ export function verification(level) {
 }
 
 const MESSAGES = {
+  giro_device_registration_required: '서버에서 지로 기기를 먼저 등록해야 해요. fin giro auth register --send로 등록한 기기를 그대로 사용해요.',
+  giro_invalid_login_pin: '지로 로그인 간편비밀번호 6자리를 입력하세요.',
+  giro_preparation_changed: '로그인 세션이나 확인 내역이 바뀌었어요. 납부를 전송하지 않았어요. 고지를 다시 조회하세요.',
+  giro_preparation_expired: '납부 준비 시간이 지났어요. 고지를 다시 조회해 납부 내용을 확인하세요.',
+  giro_payment_auth_unsupported: '이 고지는 인증서 또는 FIDO 추가 인증이 필요해요. 이 인증 방식은 아직 지원하지 않아요.',
+  giro_preparation_stopped: '기관 응답으로 납부 준비를 중단했어요. 작업 상세에서 응답을 확인하세요.',
+  giro_operation_stopped: '지로 작업을 계속할 수 없어요. 로그인 상태와 납부 기록을 확인하세요. 자동 재시도하지 않아요.',
+  giro_parent_required: '지로 조회 결과에서 항목을 선택하세요.',
+  giro_parent_not_successful: '확인된 조회 결과에서 항목을 선택하세요.',
+  giro_item_not_found: '조회 결과에서 선택한 항목을 찾지 못했어요.',
+
   issuance_account_not_in_response: '입력한 계좌가 은행의 발급용 본인계좌 목록에 없어요. 새 발급에서는 목록에서 계좌를 선택하세요.',
   issuance_account_selection_invalid: '은행이 제공한 목록에서 인증할 본인 계좌를 선택하세요.',
   network_unreachable: '서버에 연결할 수 없어요. 네트워크와 서버 상태를 확인하세요.',
@@ -259,7 +270,7 @@ export function fieldsList(row) {
 
 export const KIND = {personal: '개인', sole_proprietor: '개인사업자', corporation: '법인', business: '사업장', account: '계좌'};
 export const INSTITUTION = {hometax: '홈택스', hana: '하나개인뱅킹', hana_corporate: '하나기업뱅킹', giro: '모바일지로'};
-export const METHOD = {joint_certificate: '공동인증서', onesign: '하나인증서', id_password: '기업 ID/PW'};
+export const METHOD = {pin: '지로 간편비밀번호', joint_certificate: '공동인증서', onesign: '하나인증서', id_password: '기업 ID/PW'};
 
 export const BANKS = [['081', '하나은행'], ['004', 'KB국민은행'], ['088', '신한은행'], ['020', '우리은행'], ['011', 'NH농협은행'],
   ['003', 'IBK기업은행'], ['023', 'SC제일은행'], ['027', '한국씨티은행'], ['031', '대구은행'], ['032', '부산은행'],

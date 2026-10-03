@@ -5,6 +5,13 @@ or channel means adding its adapter first; profile types never decide these.
 """
 
 INSTITUTIONS = {
+    'giro': {
+        'name': '모바일지로',
+        'methods': {'pin': {'name': '간편비밀번호 6자리', 'credential': None, 'registration': ()}},
+        'purposes': {'login': ('pin',)},
+        'channels': (None,),
+        'target_kinds': (),
+    },
     'hometax': {
         'name': '홈택스',
         'methods': {

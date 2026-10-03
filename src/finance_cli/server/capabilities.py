@@ -46,10 +46,15 @@ FEATURES = (
     ('tax', 'hometax-tools', '인증 응답 처리·서명 준비', 'local', ()),
     ('tax', 'hometax-file-pay', '새 세금 신고·세금 납부', 'planned', ()),
     ('giro', 'giro-bills', '고지서 자료·납부 기한 해석', 'work', ('giro.bills.parse',)),
-    ('giro', 'giro-readiness', '인증·조회 요청 계획', 'work', ('giro.readiness',)),
+    ('giro', 'giro-readiness', '서버 준비·지원 상태', 'work', ('giro.readiness',)),
     ('giro', 'giro-tools', '실행 환경·인증서·인증 처리 점검', 'local', ()),
     ('giro', 'giro-probe', '초기 연결 점검', 'local', ()),
-    ('giro', 'giro-live', '실제 로그인·실시간 조회·납부', 'planned', ()),
+    ('giro', 'giro-login', '간편비밀번호 로그인', 'settings', ('giro.login',)),
+    ('giro', 'giro-live', '국세·지방세·관세 고지 조회', 'work', ('giro.bills.list',)),
+    ('giro', 'giro-pay', '등록계좌 선택·단건 세금 납부', 'work', ('giro.payment.options', 'giro.payment.prepare')),
+    ('giro', 'giro-accounts', '등록계좌·별칭 조회', 'work', ('giro.accounts.list',)),
+    ('giro', 'giro-receipts', '납부내역·상세 조회', 'work', ('giro.receipts.list', 'giro.receipts.detail')),
+    ('giro', 'giro-register', 'CLI 기기 등록·보호 자료 설치', 'local', ()),
     ('common', 'credentials', '공동인증서 목록·표시 정보', 'settings', ()),
     ('common', 'certificate-import', '공동인증서 NPKI·PFX 가져오기', 'settings', ('cert.joint.import',)),
     ('common', 'id-cards', '신분증 보관·발급 시 선택', 'settings', ('idcard.add',)),
@@ -70,7 +75,7 @@ def verification_levels():
     services = capabilities()['services']
     return {'hana': services['hana']['verification'], 'hana_corporate': 'live_partial',
             'hometax': 'live_verified' if services['hometax'].get('migration_live_tested') else 'live_untested',
-            'giro': 'offline'}
+            'giro': services['giro']['verification']}
 
 
 def setup_reasons(service, job_name=None):
@@ -126,6 +131,11 @@ def feature_state(feature, levels, cache):
     if service == 'hana_corporate':
         row['verification'] = combined_level(j['verification'] for j in row['jobs'])
         row['verification_note'] = '웹 경로는 합성 검증했습니다. ID/PW의 실사용 확인은 기존 CLI 로그인 기록 기준이며 인증서 로그인·이체의 웹 실사용은 미확인입니다.'
+    if service == 'giro':
+        row['verification'] = 'offline' if placement == 'local' or feature_id in ('giro-bills', 'giro-readiness') else 'live_untested'
+        row['verification_reviewed_at'] = '2026-10-03'
+        row['verification_note'] = ('CLI에서 기기 등록·PIN 로그인·세션 재사용·국세 조회·등록계좌 단건 납부와 추가 PIN 인증을 확인했습니다. '
+            '웹 경로는 합성 검증했으며 웹 실사용은 미확인입니다. 지방세·관세 납부와 별도 계좌·납부내역 조회의 실사용 검증은 남아 있습니다.')
     if service == 'hana':
         row['verification'] = (None if placement == 'planned' else 'offline' if placement == 'local' else
                                combined_level(j['verification'] for j in row['jobs']))

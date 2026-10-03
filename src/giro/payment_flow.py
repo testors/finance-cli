@@ -3,7 +3,7 @@
 No authentication bypass, login retry, account registration or automatic
 reconciliation. Callers must display the returned draft before explicit send.
 """
-from dataclasses import dataclass
+from dataclasses import asdict, dataclass
 import hashlib
 import json
 from pathlib import Path
@@ -14,7 +14,7 @@ from finance_cli.core.paths import data_home
 
 from .compat import omit_null_fields, read_model
 from .errors import GiroError
-from .payment import (_amount, _mask_account, account_options, encode_registered_payment,
+from .payment import (AccountPayment, _amount, _mask_account, account_options, encode_registered_payment,
                       payment_result, prepare_registered_payment)
 
 
@@ -126,14 +126,36 @@ class PaymentWorkflow:
         if tax_type not in ('national', 'local', 'customs'):
             raise GiroError('지원하는 납부 세목을 선택하세요.')
         with self.client.session.lock:
-            self.client.require_active()
-            endpoint = tax_type+'.detail'
-            detail = _success(endpoint, self.client.query(endpoint, bill, send=True))
-            accounts = _success('accounts.payable', self.client.query('accounts.payable',
-                {'serviceCode': detail.get('serviceCode'), 'isReserve': 'N'}, send=True))
-            options = account_options(accounts)
+            data = self.options(bill, tax_type=tax_type, send=True)
+            options = account_options(data['accounts'])
             options.update(offline=False, network_used=True)
             selected = account_selector(options)
+            return self.prepare_selection(data, selected, amount=amount, send=True)
+
+    def options(self, bill, *, tax_type='national', send=False):
+        """Read detail/accounts once for an interactive caller. The result is private."""
+        if not send or tax_type not in ('national', 'local', 'customs'):
+            raise GiroError('세목과 기관 통신 승인을 확인하세요.')
+        with self.client.session.lock:
+            self.client.require_active()
+            name = tax_type+'.detail'
+            detail = _success(name, self.client.query(name, bill, send=True))
+            accounts = _success('accounts.payable', self.client.query('accounts.payable',
+                {'serviceCode': detail.get('serviceCode'), 'isReserve': 'N'}, send=True))
+            return {'detail': detail, 'accounts': accounts, 'tax_type': tax_type}
+
+    def prepare_selection(self, options_data, selected, *, amount=None, send=False):
+        """Continue the original detail→accounts→selection→datetime sequence.
+
+        options_data must be the private result of options(), from this session;
+        it must never be reconstructed from browser-supplied payment fields.
+        """
+        if not send:
+            raise GiroError('기관 통신에는 명시적인 전송 승인이 필요합니다.')
+        with self.client.session.lock:
+            self.client.require_active()
+            detail, accounts, tax_type = (options_data[k] for k in ('detail', 'accounts', 'tax_type'))
+            options = account_options(accounts)
             clock = _success('auth.datetime', self.client.query('auth.datetime', {}, send=True))
             fields = tax_payment_fields(detail, tax_type=tax_type, session_info=self.client.session.info,
                 current_datetime=clock.get('currentDateTime'), amount=amount)
@@ -159,6 +181,18 @@ class PaymentWorkflow:
                       'network_used': True, 'payment_sent': False}
             self._drafts[token] = _Draft(prepared, bill_id)
             return dict(review)
+
+    def export_draft(self, draft_id):
+        """Private state only: callers must protect it and bind it to the session."""
+        draft = self._drafts[draft_id]
+        if draft.used:
+            raise GiroError('이미 전송에 사용한 납부 확인 내역입니다.')
+        return {'draft_id': draft_id, 'payment': asdict(draft.payment), 'bill_id': draft.bill_id}
+
+    def restore_draft(self, value):
+        """Restore a caller-authenticated private draft; the durable journal still applies."""
+        self._drafts[value['draft_id']] = _Draft(AccountPayment(**value['payment']), value['bill_id'])
+        return value['draft_id']
 
     def pay(self, draft_id, *, account_password_provider, additional_pin_provider=None, send=False):
         if not send:

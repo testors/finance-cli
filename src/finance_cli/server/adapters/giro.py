@@ -130,18 +130,15 @@ class GiroReadiness(Adapter):
     steps = {'run': Step('run', sends=False)}
 
     def run(self, ctx, step):
-        from giro.protocol import auth_plan, request_plan
-        plan = auth_plan()
-        steps = [{k: s.get(k) for k in ('endpoint', 'operation', 'mode', 'effect')} for s in plan.get('steps', [])
-                 if isinstance(s, dict)]
-        requests = []
-        for name in ('national.list', 'local.list', 'customs.list'):
-            item = request_plan(name)
-            requests.append({'name': name, 'network_enabled': item.get('network_enabled'), 'stage': item.get('stage')})
-        return StepResult(service_verdict={'live_login_ready': plan.get('live_login_ready')},
-                          result={'live_login_ready': plan.get('live_login_ready'), 'steps': steps,
-                                  'blockers': list(plan.get('blockers') or []), 'requests': requests,
-                                  'network_used': False},
+        from finance_cli.core.paths import data_home
+        from finance_cli.cli.main import capabilities
+        root = data_home() / 'giro'
+        setup = {'device_identity_present': (root / 'enrollment' / 'identity.json').is_file(),
+                 'protection_profile_present': (root / 'protection.json').is_file(),
+                 'trust_cache_present': (root / 'public-trust').is_dir()}
+        return StepResult(result={'setup': setup, 'verification': capabilities()['services']['giro']['live_verification'],
+                                 'network_used': False, 'trust_validity_checked': False,
+                                 'web_live_verified': False, 'registration_location': 'cli'},
                           outcome='success')
 
 

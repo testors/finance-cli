@@ -4,6 +4,7 @@
 import {api, submit} from './api.js';
 import * as ui from './ui.js';
 import {certificateActions} from './certificates.js';
+import {giroActions, giroViews, giroLogin} from './giro.js';
 import {corporateActions, corporateViews, corporateLogin} from './corporate.js';
 import {applyRemember, askSecrets, bankSessionExpired, changeView, ensureBankSession, expiredBankLogin, jobState, login, onesignStore, profile, refreshModel, rememberField,
   render, scopeLogins, scopeTargets, SECRET_LABELS, secretFields, showJob, state, target} from './app.js';
@@ -475,14 +476,14 @@ function billsResult(job) {
 
 async function giroStatusView(ctx) {
   const job = await latest('giro.readiness');
-  const result = job?.result;
-  return heading('지로 연결 준비', '현재 지원하는 기능과 남은 연결 단계를 확인하세요.') +
-    `<section class="panel"><div class="panel-heading"><h2>모바일지로 지원 상태</h2>${tag('로그인 미지원', 'warning')}</div><div class="settings-body">${[['고지서 항목·납기 해석', '로컬 자료 해석 지원'], ['인증·조회 요청 계획', '오프라인 준비 지원'], ['인증서·암호 처리 점검', '서버에서 관리'], ['초기 연결 점검', '서버에서 관리 · 로그인·납부 기능 아님'], ['실제 로그인·실시간 조회·납부', '준비 중']].map(([l, v]) => `<div class="setting-row"><span>${l}</span><strong>${v}</strong></div>`).join('')}</div></section>` +
-    `<section class="panel"><div class="panel-heading"><h2>인증·조회 요청 계획</h2>${ui.button('계획 불러오기', 'data-action="giro-readiness"', 'secondary', 'refresh')}</div>${panel('job-panel', job)}<div id="results">${result ? giroPlan(result) : ''}</div></section>`;
+  return heading('지로 연결 준비', '등록한 CLI 기기로 웹에서도 로그인·조회·납부할 수 있어요.', ui.button('지로 로그인', 'data-action="giro-login"', 'primary')) +
+    `<section class="panel"><div class="panel-heading"><h2>모바일지로 지원 상태</h2>${tag('웹 연결 구현', 'info')}</div><div class="settings-body">${[['간편비밀번호 로그인', '웹 지원 · CLI 실사용 확인'], ['국세 고지 조회·등록계좌 납부', '웹 지원 · CLI 실사용 확인'], ['지방세·관세 조회·납부', '웹 지원 · 실사용 검증 미완료'], ['등록계좌·납부내역 상세', '웹 지원 · 실사용 검증 미완료'], ['기기 등록·보호 자료 설치', '서버에서 CLI로 준비'], ['인증서·FIDO 추가 인증', '미지원']].map(([l, v]) => `<div class="setting-row"><span>${l}</span><strong>${v}</strong></div>`).join('')}<p class="field-help">웹 경로는 합성 응답으로 검증했어요. 웹에서의 실제 로그인·납부 확인은 아직 남아 있어요. 최초 기기 등록은 서버에서 <span class="code">fin giro auth register --send</span>로 진행해요.</p></div></section>` +
+    `<section class="panel"><div class="panel-heading"><h2>서버 준비 상태</h2>${ui.button('준비 상태 확인', 'data-action="giro-readiness"', 'secondary', 'refresh')}</div>${panel('job-panel', job)}<div id="results">${job?.result ? giroPlan(job.result) : ''}</div></section>`;
 }
 
 function giroPlan(result) {
-  return `<div class="settings-body"><div class="setting-row"><span>실제 로그인 준비</span><strong>${result.live_login_ready ? '준비됨' : '아니요'}</strong></div>${(result.steps || []).map(s => `<div class="setting-row"><span>${esc(s.endpoint || s.operation)}</span><strong>${esc(s.mode || '')} ${esc(s.effect || '')}</strong></div>`).join('')}${(result.blockers || []).map(b => `<div class="setting-row"><span>남은 단계</span><strong>${esc(typeof b === 'string' ? b : JSON.stringify(b))}</strong></div>`).join('')}</div>`;
+  if (!result.setup) return note('준비 상태를 다시 확인하세요.');
+  return `<div class="settings-body">${[['device_identity_present', 'CLI 기기 등록 정보'], ['protection_profile_present', '보호 입력 자료'], ['trust_cache_present', '공개 인증서·CRL 자료']].map(([key, label]) => `<div class="setting-row"><span>${label}</span><strong>${result.setup[key] ? '보관됨' : '준비 필요'}</strong></div>`).join('')}<p class="field-help">파일의 존재만 확인해요. 인증서·CRL 유효성은 로그인할 때 검사하며, 이 확인은 기관에 접속하지 않아요.</p></div>`;
 }
 
 // Common -----------------------------------------------------------------------
@@ -512,6 +513,7 @@ function loginStatus(row) {
 }
 
 function verifyAction(row) {
+  if (row.institution === 'giro') return ['giro-bills-open', '고지 조회'];
   return row.institution === 'hometax' ? ['discover', '사용자·사업장 확인'] : [row.institution === 'hana_corporate' ? 'corporate-accounts-query' : 'accounts-query', '계좌 조회'];
 }
 
@@ -520,7 +522,7 @@ function primaryAction(row, targets) {
   if (row.disabled) return '';
   const attrs = `data-login="${esc(row.id)}"`;
   if (!canQuery(row)) return loginButton(row, true);
-  const relogin = ['hana', 'hana_corporate'].includes(row.institution) ? loginButton(row) : '';
+  const relogin = ['hana', 'hana_corporate', 'giro'].includes(row.institution) ? loginButton(row) : '';
   if (!targets.length) { const [action, label] = verifyAction(row); return ui.button(label, `data-action="${action}" ${attrs}`, 'primary') + relogin; }
   return relogin;
 }
@@ -558,7 +560,7 @@ function connectionCard(row) {
   return `<section class="panel connection-card ${row.disabled ? 'disabled' : ''}" aria-labelledby="login-${esc(row.id)}">
     <div class="connection-head"><div class="bank-symbol">${symbol}</div><div class="connection-title"><h2 id="login-${esc(row.id)}">${esc(row.display_name)}</h2><p class="meta">${esc(ui.INSTITUTION[row.institution])} · ${esc(ui.METHOD[row.method])}${row.credential?.ref ? ' · ' + esc(row.credential.ref) : ''}</p></div><div class="login-status">${loginStatus(row)}</div><div class="connection-actions">${primaryAction(row, targets)}<button type="button" class="icon-button" data-action="login-menu" data-login="${esc(row.id)}" aria-label="${esc(row.display_name)} 더보기">${icon('more')}</button></div></div>
     ${row.institution === 'hometax' ? setupNotice('hometax-login') : ''}
-    <div class="connection-targets"><div class="connection-subhead"><h3>${['hana', 'hana_corporate'].includes(row.institution) ? '계좌' : '대상'} ${targets.length ? `<span class="count">${targets.length}</span>` : ''}</h3>${addTarget}</div>${targets.length ? targets.map(targetRow).join('') : emptyTargets}</div>
+    ${row.institution === 'giro' ? '<p class="target-empty">등록된 지로 기기로 로그인해 본인 고지를 조회해요. 납부계좌는 납부할 때 선택하세요.</p>' : `<div class="connection-targets"><div class="connection-subhead"><h3>${['hana', 'hana_corporate'].includes(row.institution) ? '계좌' : '대상'} ${targets.length ? `<span class="count">${targets.length}</span>` : ''}</h3>${addTarget}</div>${targets.length ? targets.map(targetRow).join('') : emptyTargets}</div>`}
     ${signingLines(row) ? `<div class="connection-settings">${signingLines(row)}</div>` : ''}
     <div id="job-${esc(row.id)}"></div></section>`;
 }
@@ -601,7 +603,7 @@ function loginFormBody(institution, method) {
   const kind = chosen === 'onesign' ? 'onesign' : 'joint';
   const options = state.credentials.filter(c => c.type === kind);
   const help = options.length ? '' : `<p class="field-help">보관한 ${kind === 'onesign' ? '하나인증서 저장소' : '공동인증서'}가 없어요. 서버에서 <span class="code">${kind === 'onesign' ? 'fin hana onesign init' : 'fin cert joint import'}</span>으로 보관하거나 ${ui.button('발급·가져오기', 'data-action="certificate-add"')}를 선택하세요.</p>`;
-  return `<div class="field"><label for="login-institution">기관</label><select id="login-institution" name="institution" data-change="login-form-change"><option value="hometax" ${institution === 'hometax' ? 'selected' : ''}>홈택스</option><option value="hana" ${institution === 'hana' ? 'selected' : ''}>하나개인뱅킹</option><option value="hana_corporate">하나기업뱅킹</option></select></div>
+  return `<div class="field"><label for="login-institution">기관</label><select id="login-institution" name="institution" data-change="login-form-change"><option value="hometax" ${institution === 'hometax' ? 'selected' : ''}>홈택스</option><option value="hana" ${institution === 'hana' ? 'selected' : ''}>하나개인뱅킹</option><option value="hana_corporate">하나기업뱅킹</option><option value="giro">모바일지로</option></select></div>
     <div class="field"><label for="login-method">로그인 방법</label><select id="login-method" name="method" data-change="login-form-change">${methods.map(([v, l]) => `<option value="${v}" ${v === chosen ? 'selected' : ''}>${l}</option>`).join('')}</select></div>
     <div class="field"><label for="login-credential">${kind === 'onesign' ? '하나인증서 저장소' : '공동인증서'}</label><select id="login-credential" name="credential" ${options.length ? '' : 'disabled'}>${options.map(c => `<option value="${esc(c.ref)}">${esc(c.ref)}${c.fingerprint ? ' · ' + esc(c.fingerprint.slice(0, 8)) : ''}</option>`).join('')}</select>${help}</div>
     <div class="field"><label for="login-name">표시 이름</label><input id="login-name" name="name" required maxlength="60" value="${esc(ui.INSTITUTION[institution])} ${institution === 'hana' && chosen === 'onesign' ? '하나인증서' : '개인'}"></div><p class="dialog-note">저장만 하고 기관에는 접속하지 않아요. 명의·사업장은 로그인 후 확인 결과에서 등록해요.</p><div class="login-fields-end"></div>`;
@@ -619,6 +621,7 @@ async function coverageView(ctx) {
 
 export const views = {
   ...corporateViews,
+  ...giroViews,
   taxhome: taxHome, dues: ctx => taxList(ctx, 'dues'), payments: ctx => taxList(ctx, 'payments'),
   refunds: ctx => taxList(ctx, 'refunds'), notices: ctx => taxList(ctx, 'notices'), returns: returnsView,
   reports: reportsView, invoices: invoicesView, invoiceform: invoiceFormView,
@@ -663,6 +666,7 @@ function approvalIn(row) {
 export const actions = {
   ...certificateActions,
   ...corporateActions,
+  ...giroActions,
   'choose-tax-target': (ctx, select) => {
     try { sessionStorage.setItem('finance.taxTarget:' + state.profileId, select.value); } catch (error) { /* per-tab only */ }
     render();
@@ -720,6 +724,7 @@ export const actions = {
   login: async (ctx, button) => {
     const row = login(button.dataset.login);
     if (row.institution === 'hana_corporate') return corporateLogin(ctx, row);
+    if (row.institution === 'giro') return giroLogin(ctx, row);
     const reason = button.dataset.reason === 'session_idle_expired' ? ui.message('session_idle_expired') + ' ' : '';
     const secrets = await askSecrets(`${row.display_name} 로그인`, loginSecrets(row), reason + (row.institution === 'hometax' ? '공동인증서로 홈택스에 로그인해요.' : row.method === 'onesign' ? '하나인증서로 새 로그인 세션을 만들어요.' : '앱 인증과 공동인증서 로그인을 진행해요.'), {store: onesignStore(row)});
     if (!secrets) return;
@@ -873,12 +878,14 @@ export const actions = {
   },
   'add-login-dialog': ctx => {
     if (state.mode === 'corporate') return corporateLogin(ctx);
+    if (state.mode === 'giro') return giroLogin(ctx);
     ui.showDialog('기관 연결 추가', `<form data-submit="add-login" autocomplete="off"><div class="login-fields">${loginFormBody('hometax', 'joint_certificate')}</div><div class="dialog-actions"><button type="button" class="button secondary" data-ui="close">취소</button><button class="button primary" type="submit">추가</button></div></form>`);
   },
   'login-form-change': (ctx, select) => {
     const form = select.closest('form');
     const data = new FormData(form);
     if (data.get('institution') === 'hana_corporate') return corporateLogin(ctx);
+    if (data.get('institution') === 'giro') return giroLogin(ctx);
     form.querySelector('.login-fields').innerHTML = loginFormBody(data.get('institution'), data.get('method'));
   },
   'add-login': async (ctx, form) => {

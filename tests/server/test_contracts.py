@@ -17,7 +17,8 @@ class CapabilityTests(ServerCase):
                 self.assertEqual(jobs, (), feature_id)
         self.enroll()
         states = {f['id']: f for f in self.get('/capabilities').json()['features']}
-        self.assertEqual(states['giro-live']['status'], 'planned')
+        self.assertEqual(states['giro-live']['status'], 'available')
+        self.assertEqual(states['giro-live']['verification'], 'live_untested')
         self.assertEqual(states['hana-issuance']['status'], 'available')
         self.assertEqual(states['hometax-tax']['verification'], 'live_untested')
         self.assertEqual(states['giro-bills']['verification'], 'offline')
@@ -65,7 +66,7 @@ class CapabilityTests(ServerCase):
             self.assertEqual(adapters.get(name).verification, evidence['verification'])
         self.assertFalse(cli_capabilities()['services']['hana']['live_tested'])
         self.assertEqual(states['hometax-login']['verification'], 'live_untested')
-        for feature in ('giro-live', 'joint-issuance', 'financial-issuance', 'hana-otp-limit'):
+        for feature in ('joint-issuance', 'financial-issuance', 'hana-otp-limit'):
             self.assertEqual(states[feature]['status'], 'planned')
         self.assertEqual(self.get('/jobs').json()['jobs'], [])
 

@@ -13,10 +13,13 @@ export const AREAS = {
     ['corporate-accounts', '기업 계좌', '계좌', 'accounts', 'corporate-accounts'],
     ['corporate-history', '기업 거래내역', '거래', 'history', 'corporate-history'],
     ['corporate-transfer', '기업 이체', '이체', 'transfer', 'corporate-transfer']]},
-  giro: {name: '지로', service: '모바일지로', home: 'bills', icon: 'bill', items: [
-    ['bills', '고지서 자료', '고지서', 'bill', 'giro-bills'], ['deadlines', '납부 기한', '기한', 'calendar', 'giro-bills'],
-    ['girostatus', '연결 준비', '연결', 'shield', 'giro-readiness'], ['giro-live', '실시간 고지 조회', '실시간 조회', 'refresh', 'giro-live'],
-    ['giro-pay', '지로 납부', '납부', 'transfer', 'giro-live']]},
+  giro: {name: '지로', service: '모바일지로', home: 'giro-live', icon: 'bill', items: [
+    ['giro-live', '고지 조회', '고지 조회', 'bill', 'giro-live'],
+    ['giro-pay', '지로 납부', '납부', 'transfer', 'giro-pay'],
+    ['giro-receipts', '납부내역', '납부내역', 'history', 'giro-receipts'],
+    ['giro-accounts', '등록계좌', '등록계좌', 'accounts', 'giro-accounts'],
+    ['bills', '고지서 자료', '자료 해석', 'bill', 'giro-bills'], ['deadlines', '납부 기한', '기한', 'calendar', 'giro-bills'],
+    ['girostatus', '연결 준비', '연결', 'shield', 'giro-readiness']]},
   tax: {name: '세금', service: '홈택스', home: 'taxhome', icon: 'tax', items: [
     ['taxhome', '세금 요약', '요약', 'tax', 'hometax-tax'], ['invoices', '전자세금계산서', '계산서', 'invoice', 'hometax-invoice-query'],
     ['returns', '신고 내역', '신고 내역', 'history', 'hometax-returns'], ['dues', '납부할 세액', '납부할 세액', 'accounts', 'hometax-tax'],
@@ -338,11 +341,11 @@ export async function showJob(id) {
   const artifacts = (job.artifacts || []).map(a => `<div class="setting-row"><span>${ui.esc(a.filename)}${a.complete === 0 ? ' · 확인 필요' : a.complete === 1 ? ' · 완전' : ''}</span><span class="row-actions">${a.media_type.startsWith('text/html') ? `<button class="text-button" data-action="preview-artifact" data-artifact="${ui.esc(a.id)}">보기</button>` : ''}<a class="text-button" href="/api/v1/artifacts/${encodeURIComponent(a.id)}">${ui.icon('download')}저장</a></span></div>`).join('');
   const cancellable = (job.status === 'queued' || job.status === 'awaiting_input') && !job.attempt?.sent;
   const reconcile = job.name === 'hana.transfer.prepare' && job.status === 'finished' && job.attempt?.sent && ['execute', 'execute_pin'].includes(job.step);
-  ui.showDialog('작업 상세', `<div class="summary-lines">${lines.map(([k, v]) => `<div class="summary-line"><span>${ui.esc(k)}</span><strong>${ui.esc(v)}</strong></div>`).join('')}</div>${job.local?.stopped ? `<p class="dialog-note">${ui.message(job.local.stopped)}</p>` : ''}${ui.verification(job.verification)}${ui.details('기관 판정 (원문 필드)', job.service_verdict)}${ui.details('결과 재조회', job.reconciliation)}${ui.details('로컬 처리 상태', job.local)}${ui.details('처리 순서', job.events?.map(e => ({시각: ui.time(e.at), 단계: e.kind, ...e.detail})))}${artifacts ? `<div class="settings-body">${artifacts}</div>` : ''}<div class="dialog-actions">${cancellable ? `<button class="button secondary" data-action="cancel-job" data-job="${ui.esc(job.id)}">작업 취소</button>` : ''}${job.name === 'hana.corporate.transfer.prepare' ? `<button class="button secondary" data-action="corporate-transfer-open" data-job="${ui.esc(job.id)}">${job.status === 'awaiting_input' ? '이체 이어하기' : '이체 결과 보기'}</button>` : ''}${reconcile ? `<button class="button secondary" data-action="reconcile" data-job="${ui.esc(job.id)}">이체 결과 조회</button>` : ''}<button class="button primary" data-ui="close">닫기</button></div>`, {wide: true});
+  ui.showDialog('작업 상세', `<div class="summary-lines">${lines.map(([k, v]) => `<div class="summary-line"><span>${ui.esc(k)}</span><strong>${ui.esc(v)}</strong></div>`).join('')}</div>${job.local?.stopped ? `<p class="dialog-note">${ui.message(job.local.stopped)}</p>` : ''}${ui.verification(job.verification)}${ui.details('기관 판정 (원문 필드)', job.service_verdict)}${ui.details('결과 재조회', job.reconciliation)}${ui.details('로컬 처리 상태', job.local)}${ui.details('처리 순서', job.events?.map(e => ({시각: ui.time(e.at), 단계: e.kind, ...e.detail})))}${artifacts ? `<div class="settings-body">${artifacts}</div>` : ''}<div class="dialog-actions">${cancellable ? `<button class="button secondary" data-action="cancel-job" data-job="${ui.esc(job.id)}">작업 취소</button>` : ''}${job.name === 'giro.payment.prepare' ? `<button class="button secondary" data-action="giro-payment-open" data-job="${ui.esc(job.id)}">${job.status === 'awaiting_input' ? '납부 내용 확인' : '납부 결과 보기'}</button>` : ''}${job.name === 'hana.corporate.transfer.prepare' ? `<button class="button secondary" data-action="corporate-transfer-open" data-job="${ui.esc(job.id)}">${job.status === 'awaiting_input' ? '이체 이어하기' : '이체 결과 보기'}</button>` : ''}${reconcile ? `<button class="button secondary" data-action="reconcile" data-job="${ui.esc(job.id)}">이체 결과 조회</button>` : ''}<button class="button primary" data-ui="close">닫기</button></div>`, {wide: true});
 }
 
 function chooseMode() {
-  ui.showDialog('어떤 업무를 볼까요?', `<div class="mode-options">${Object.entries(AREAS).map(([key, mode]) => `<button data-mode="${key}" class="mode-option ${key === state.mode ? 'selected' : ''}"><span class="workspace-icon">${ui.icon(mode.icon)}</span><span><strong>${mode.name}</strong><small>${mode.service}${key === 'giro' ? ' · 자료 해석 지원' : ''}</small></span>${key === state.mode ? ui.icon('check') : ui.icon('arrow')}</button>`).join('')}</div><p class="dialog-note">영역을 바꿔도 프로필별로 각 영역에서 보던 화면을 유지해요.</p>`);
+  ui.showDialog('어떤 업무를 볼까요?', `<div class="mode-options">${Object.entries(AREAS).map(([key, mode]) => `<button data-mode="${key}" class="mode-option ${key === state.mode ? 'selected' : ''}"><span class="workspace-icon">${ui.icon(mode.icon)}</span><span><strong>${mode.name}</strong><small>${mode.service}</small></span>${key === state.mode ? ui.icon('check') : ui.icon('arrow')}</button>`).join('')}</div><p class="dialog-note">영역을 바꿔도 프로필별로 각 영역에서 보던 화면을 유지해요.</p>`);
 }
 
 function chooseProfile() {
