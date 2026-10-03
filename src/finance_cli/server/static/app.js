@@ -5,31 +5,32 @@ import * as ui from './ui.js';
 import {actions, views} from './views.js';
 
 export const AREAS = {
-  banking: {name: '하나개인뱅킹', service: '개인 계좌·거래·이체', home: 'accounts', icon: 'accounts', items: [
+  banking: {name: '하나개인뱅킹', short: '개인뱅킹', institution: 'hana', service: '개인 계좌·거래·이체', home: 'accounts', icon: 'accounts', items: [
     ['accounts', '내 계좌', '계좌', 'accounts', 'hana-accounts'], ['history', '거래 내역', '거래', 'history', 'hana-history'],
     ['transfer', '이체', '이체', 'transfer', 'hana-transfer'], ['inquiry', '이체 내역', '이체 내역', 'history', 'hana-inquiry'],
     ['security', '보안매체·한도', '보안', 'shield', 'hana-security']]},
-  corporate: {name: '하나기업뱅킹', service: '기업 계좌·거래·이체', home: 'corporate-accounts', icon: 'business', items: [
+  corporate: {name: '하나기업뱅킹', short: '기업뱅킹', institution: 'hana_corporate', service: '기업 계좌·거래·이체', home: 'corporate-accounts', icon: 'business', items: [
     ['corporate-accounts', '기업 계좌', '계좌', 'accounts', 'corporate-accounts'],
     ['corporate-history', '기업 거래내역', '거래', 'history', 'corporate-history'],
     ['corporate-transfer', '기업 이체', '이체', 'transfer', 'corporate-transfer']]},
-  giro: {name: '지로', service: '모바일지로', home: 'giro-live', icon: 'bill', items: [
-    ['giro-live', '고지 조회', '고지 조회', 'bill', 'giro-live'],
-    ['giro-pay', '지로 납부', '납부', 'transfer', 'giro-pay'],
+  giro: {name: '지로', short: '지로', institution: 'giro', service: '모바일지로', home: 'giro-live', icon: 'bill', items: [
+    ['giro-live', '고지·납부', '고지·납부', 'bill', 'giro-live'],
     ['giro-receipts', '납부내역', '납부내역', 'history', 'giro-receipts'],
     ['giro-accounts', '등록계좌', '등록계좌', 'accounts', 'giro-accounts'],
-    ['bills', '고지서 자료', '자료 해석', 'bill', 'giro-bills'], ['deadlines', '납부 기한', '기한', 'calendar', 'giro-bills'],
-    ['girostatus', '연결 준비', '연결', 'shield', 'giro-readiness']]},
-  tax: {name: '세금', service: '홈택스', home: 'taxhome', icon: 'tax', items: [
+    ['girostatus', '도구·상태', '도구', 'shield', 'giro-readiness']]},
+  tax: {name: '세금', short: '세금', institution: 'hometax', service: '홈택스', home: 'taxhome', icon: 'tax', items: [
     ['taxhome', '세금 요약', '요약', 'tax', 'hometax-tax'], ['invoices', '전자세금계산서', '계산서', 'invoice', 'hometax-invoice-query'],
-    ['returns', '신고 내역', '신고 내역', 'history', 'hometax-returns'], ['dues', '납부할 세액', '납부할 세액', 'accounts', 'hometax-tax'],
-    ['payments', '납부 내역', '납부 내역', 'check', 'hometax-tax'], ['refunds', '환급금', '환급금', 'transfer', 'hometax-tax'],
-    ['notices', '전자고지', '전자고지', 'bill', 'hometax-tax'], ['reports', '보고서·접수증', '보고서', 'report', 'hometax-reports'],
-    ['tax-file', '세금 신고', '신고', 'invoice', 'hometax-file-pay'], ['tax-pay', '세금 납부', '납부', 'transfer', 'hometax-file-pay']]},
+    ['returns', '신고·증빙', '신고', 'history', 'hometax-returns'], ['dues', '납부·환급', '납부·환급', 'accounts', 'hometax-tax'],
+    ['notices', '전자고지', '전자고지', 'bill', 'hometax-tax']]},
 };
 const COMMON = [['activity', '전체 작업 기록', '작업', 'activity'], ['settings', '연결·인증서', '설정', 'shield'],
   ['coverage', '전체 기능·지원 상태', '전체 기능', 'grid']];
-const HIDDEN = {invoiceform: 'tax'};
+/* Screens opened from another screen's tabs or buttons: [area, the menu entry they sit under, title]. */
+const NESTED = {invoiceform: ['tax', 'invoices', '계산서 작성'], payments: ['tax', 'dues', '납부 내역'], refunds: ['tax', 'dues', '환급금'],
+  reports: ['tax', 'returns', '저장한 문서'], bills: ['giro', 'girostatus', '고지서 자료'], deadlines: ['giro', 'girostatus', '납부 기한'],
+  'giro-pay': ['giro', 'giro-receipts', '납부내역']};
+const common = view => COMMON.some(([id]) => id === view);
+const known = view => common(view) || view in NESTED || Object.values(AREAS).some(a => a.items.some(i => i[0] === view));
 
 function stored(key, fallback) {
   try { return JSON.parse(sessionStorage.getItem('finance.' + key)) ?? fallback; } catch (error) { return fallback; }
@@ -91,14 +92,45 @@ async function refreshLogins() {
   const value = await api.get('/logins');
   state.logins = value.logins;
   state.sessionClock = {server: value.server_time, local: Date.now() / 1000};
+  renderTabs();
   return value;
+}
+
+function serverNow() {
+  const clock = state.sessionClock;
+  return clock?.server === undefined ? Date.now() / 1000 : clock.server + Date.now() / 1000 - clock.local;
 }
 
 export function bankSessionExpired(row) {
   if (row?.institution !== 'hana' || !row.session?.idle_expires_at) return false;
-  const clock = state.sessionClock;
-  const at = clock?.server === undefined ? Date.now() / 1000 : clock.server + Date.now() / 1000 - clock.local;
-  return at >= row.session.idle_expires_at;
+  return serverNow() >= row.session.idle_expires_at;
+}
+
+/* Logins of an area whose recorded session is usable (or query-only) and inside the local
+   bank idle limit. This reads local metadata only; the institution is not asked. */
+function liveLogins(mode) {
+  const institution = AREAS[mode].institution;
+  const rows = institution === 'giro' ? state.logins.filter(l => l.institution === 'giro' && !l.disabled) : scopeLogins(institution);
+  return rows.filter(l => ['ready', 'query_only'].includes(l.readiness) && !bankSessionExpired(l));
+}
+
+let tabTimer = null;
+
+/* Area tabs at the top of the main page; an area with a live login has a lit icon
+   with a check, a state of the tab itself rather than a notification badge. */
+export function renderTabs() {
+  const target = document.querySelector('.area-tabs');
+  if (!target) return;
+  const expiries = [];
+  target.innerHTML = Object.entries(AREAS).map(([key, area]) => {
+    const rows = liveLogins(key);
+    rows.forEach(l => { if (l.institution === 'hana' && l.session?.idle_expires_at) expiries.push(l.session.idle_expires_at); });
+    const live = rows.length ? ' · 로그인됨' : '';
+    return `<button class="area-tab${rows.length ? ' live' : ''}" data-mode="${key}" ${key === state.mode && !common(state.view) ? 'aria-current="true"' : ''} aria-label="${ui.esc(area.name + live)}" title="${ui.esc(area.service + live)}"><span class="workspace-icon">${ui.icon(area.icon)}${rows.length ? `<i class="session-mark">${ui.icon('check')}</i>` : ''}</span><span class="full">${ui.esc(area.name)}</span><span class="short">${ui.esc(area.short)}</span></button>`;
+  }).join('');
+  clearTimeout(tabTimer);
+  // The bank idle limit passes without any request; drop the mark when it does.
+  if (expiries.length) tabTimer = setTimeout(renderTabs, Math.max(0, Math.min(...expiries) - serverNow()) * 1000 + 500);
 }
 
 export async function expiredBankLogin(ctx, id) {
@@ -128,24 +160,20 @@ export function setProfile(id) {
 
 function title() {
   const entry = [...Object.values(AREAS).flatMap(a => a.items), ...COMMON].find(i => i[0] === state.view);
-  return entry ? entry[1] : state.view === 'invoiceform' ? '계산서 작성' : 'Finance';
+  return entry ? entry[1] : NESTED[state.view]?.[2] || 'Finance';
 }
 
 function renderChrome() {
   const area = AREAS[state.mode];
   const items = navigation(state.mode);
-  document.querySelectorAll('.mode-control').forEach(target => {
-    target.innerHTML = `<button class="workspace-switch" data-ui="choose-mode" aria-label="업무 영역 변경: ${ui.esc(area.name)}" aria-haspopup="dialog"><span class="workspace-icon">${ui.icon(area.icon)}</span><span><strong>${ui.esc(area.name)}</strong><small>${ui.esc(area.service)}</small></span>${ui.icon('chevrons')}</button>`;
-  });
+  renderTabs();
   document.querySelector('.workspace-label').textContent = area.service;
-  const item = (entry, mobile = false) => `<button class="nav-item ${state.view === entry.id ? 'active' : ''} ${entry.available ? '' : 'unavailable'}" ${entry.available ? `data-view="${entry.id}"` : 'disabled aria-disabled="true"'} ${state.view === entry.id ? 'aria-current="page"' : ''}>${ui.icon(entry.icon)}<span>${ui.esc(mobile ? entry.short : entry.name)}</span>${entry.available ? '' : '<small class="soon-label">준비 중</small>'}</button>`;
+  const here = entry => state.view === entry.id || NESTED[state.view]?.[1] === entry.id;
+  const item = (entry, mobile = false) => `<button class="nav-item ${here(entry) ? 'active' : ''} ${entry.available ? '' : 'unavailable'}" ${entry.available ? `data-view="${entry.id}"` : 'disabled aria-disabled="true"'} ${here(entry) ? 'aria-current="page"' : ''}>${ui.icon(entry.icon)}<span>${ui.esc(mobile ? entry.short : entry.name)}</span>${entry.available ? '' : '<small class="soon-label">준비 중</small>'}</button>`;
   document.querySelector('.main-nav').innerHTML = items.map(e => item(e)).join('');
   document.querySelector('.common-nav').innerHTML = COMMON.map(([id, name, , iconName]) => item({id, name, icon: iconName, available: true})).join('');
   document.querySelector('.bottom-nav').innerHTML = items.filter(e => e.available).slice(0, 3).map(e => item(e, true)).join('')
     + `<button class="nav-item" data-ui="more" aria-haspopup="dialog">${ui.icon('grid')}<span>전체 메뉴</span></button>`;
-  const common = COMMON.some(([id]) => id === state.view);
-  document.querySelector('#breadcrumb-mode').textContent = common ? '공통' : area.name;
-  document.querySelector('#breadcrumb-title').textContent = title();
   document.querySelector('#stage').dataset.workspace = state.mode;
   const current = profile();
   const name = current ? current.name : '전체';
@@ -174,17 +202,19 @@ export async function render() {
   }
 }
 
-export function changeView(view, params = {}) {
-  const owner = Object.keys(AREAS).find(mode => AREAS[mode].items.some(i => i[0] === view)) || HIDDEN[view];
+export function changeView(view, params = {}, {push = true} = {}) {
+  const owner = Object.keys(AREAS).find(mode => AREAS[mode].items.some(i => i[0] === view)) || NESTED[view]?.[0];
   const entry = navigation(owner || state.mode).find(i => i.id === view);
   if (entry && !entry.available) return;
-  if (!owner && !COMMON.some(([id]) => id === view)) return;
+  if (!owner && !common(view)) return;
   if (owner) {
     state.mode = owner;
     store('mode', owner);
     state.lastViews[viewKey()] = view;
     store('views', state.lastViews);
   }
+  // The browser's back button returns to the previous screen instead of leaving the app.
+  if (push && view !== state.view) history.pushState({view}, '', '#' + view);
   state.view = view;
   state.params = params;
   ui.closeDialog();
@@ -301,7 +331,7 @@ function makeContext(token) {
       };
       update(job);
       const final = await follow(job.id, update, () => true).catch(error => {
-        ui.toast(ui.message(error.code));
+        ui.fail(ui.message(error.code));
         return null;
       });
       if (final?.name?.startsWith('hana.') && final.login_id) {
@@ -324,28 +354,30 @@ export function jobState(job, error = '') {
   const fixed = job.fixed?.target ? `${ui.esc(job.fixed.target.display_name)} · ` : '';
   const stopped = job.local?.stopped ? ` · ${ui.message(job.local.stopped)}` : '';
   const saved = job.local && job.local.session_saved === false ? ' · 세션 저장 확인 안 됨' : '';
-  return `<div class="job-state">${busy ? '<span class="spinner" aria-hidden="true"></span>' : ''}${ui.statusTags(job)}${ui.verification(job.verification)}<span>${fixed}${ui.ORIGIN[job.origin] || ''} 요청 · ${job.observed_at ? '조회 ' + ui.time(job.observed_at) : '접수 ' + ui.time(job.created_at)}${stopped}${saved}</span><button class="text-button" data-action="job-detail" data-job="${ui.esc(job.id)}">작업 상세 ${ui.icon('arrow')}</button></div>`;
+  // A plain success needs no badge. Every other status or verdict stays in view; the
+  // support level and the request origin are in the job detail.
+  const plain = job.status === 'finished' && job.outcome === 'success';
+  const when = job.observed_at ? ui.time(job.observed_at) + ' 조회' : ui.time(job.created_at) + ' 접수';
+  const origin = job.origin && job.origin !== 'web' ? ` · ${ui.ORIGIN[job.origin] || ui.esc(job.origin)} 요청` : '';
+  return `<div class="job-state">${busy ? '<span class="spinner" aria-hidden="true"></span>' : ''}${plain ? '' : ui.statusTags(job)}<span>${fixed}${when}${origin}${stopped}${saved}</span><button class="text-button" data-action="job-detail" data-job="${ui.esc(job.id)}">작업 상세 ${ui.icon('arrow')}</button></div>`;
 }
 
 /* Job detail with the institution verdict, reconciliation and local state kept apart. */
 export async function showJob(id) {
   let job;
-  try { job = await api.get('/jobs/' + encodeURIComponent(id)); } catch (error) { ui.toast(ui.message(error.code)); return; }
+  try { job = await api.get('/jobs/' + encodeURIComponent(id)); } catch (error) { ui.fail(ui.message(error.code)); return; }
   const fixed = job.fixed || {};
   const lines = [
-    ['작업', job.title], ['상태', ui.STATUS[job.status]?.[0] || job.status],
-    ['업무 결과 요약', ui.OUTCOME[job.outcome]?.[0] || job.outcome], ['요청 출처', ui.ORIGIN[job.origin] || job.origin],
+    ['작업', job.title], ['진행 상태', ui.STATUS[job.status]?.[0] || job.status],
+    ['업무 결과', ui.OUTCOME[job.outcome]?.[0] || job.outcome], ['요청한 곳', ui.ORIGIN[job.origin] || job.origin],
     ['로그인', fixed.login?.display_name], ['대상', fixed.target ? `${fixed.target.display_name} (${ui.KIND[fixed.target.kind] || fixed.target.kind})` : null],
-    ['프로필', fixed.profile?.name], ['접수', ui.time(job.created_at)], ['관측', ui.time(job.observed_at)],
+    ['프로필', fixed.profile?.name], ['접수 시각', ui.time(job.created_at)], ['기관 응답 시각', ui.time(job.observed_at)],
+    ['지원 상태', ui.VERIFICATION[job.verification]?.[0]],
   ].filter(([, v]) => v);
   const artifacts = (job.artifacts || []).map(a => `<div class="setting-row"><span>${ui.esc(a.filename)}${a.complete === 0 ? ' · 확인 필요' : a.complete === 1 ? ' · 완전' : ''}</span><span class="row-actions">${a.media_type.startsWith('text/html') ? `<button class="text-button" data-action="preview-artifact" data-artifact="${ui.esc(a.id)}">보기</button>` : ''}<a class="text-button" href="/api/v1/artifacts/${encodeURIComponent(a.id)}">${ui.icon('download')}저장</a></span></div>`).join('');
   const cancellable = (job.status === 'queued' || job.status === 'awaiting_input') && !job.attempt?.sent;
   const reconcile = job.name === 'hana.transfer.prepare' && job.status === 'finished' && job.attempt?.sent && ['execute', 'execute_pin'].includes(job.step);
-  ui.showDialog('작업 상세', `<div class="summary-lines">${lines.map(([k, v]) => `<div class="summary-line"><span>${ui.esc(k)}</span><strong>${ui.esc(v)}</strong></div>`).join('')}</div>${job.local?.stopped ? `<p class="dialog-note">${ui.message(job.local.stopped)}</p>` : ''}${ui.verification(job.verification)}${ui.details('기관 판정 (원문 필드)', job.service_verdict)}${ui.details('결과 재조회', job.reconciliation)}${ui.details('로컬 처리 상태', job.local)}${ui.details('처리 순서', job.events?.map(e => ({시각: ui.time(e.at), 단계: e.kind, ...e.detail})))}${artifacts ? `<div class="settings-body">${artifacts}</div>` : ''}<div class="dialog-actions">${cancellable ? `<button class="button secondary" data-action="cancel-job" data-job="${ui.esc(job.id)}">작업 취소</button>` : ''}${job.name === 'giro.payment.prepare' ? `<button class="button secondary" data-action="giro-payment-open" data-job="${ui.esc(job.id)}">${job.status === 'awaiting_input' ? '납부 내용 확인' : '납부 결과 보기'}</button>` : ''}${job.name === 'hana.corporate.transfer.prepare' ? `<button class="button secondary" data-action="corporate-transfer-open" data-job="${ui.esc(job.id)}">${job.status === 'awaiting_input' ? '이체 이어하기' : '이체 결과 보기'}</button>` : ''}${reconcile ? `<button class="button secondary" data-action="reconcile" data-job="${ui.esc(job.id)}">이체 결과 조회</button>` : ''}<button class="button primary" data-ui="close">닫기</button></div>`, {wide: true});
-}
-
-function chooseMode() {
-  ui.showDialog('어떤 업무를 볼까요?', `<div class="mode-options">${Object.entries(AREAS).map(([key, mode]) => `<button data-mode="${key}" class="mode-option ${key === state.mode ? 'selected' : ''}"><span class="workspace-icon">${ui.icon(mode.icon)}</span><span><strong>${mode.name}</strong><small>${mode.service}</small></span>${key === state.mode ? ui.icon('check') : ui.icon('arrow')}</button>`).join('')}</div><p class="dialog-note">영역을 바꿔도 프로필별로 각 영역에서 보던 화면을 유지해요.</p>`);
+  ui.showDialog('작업 상세', `<div class="summary-lines">${lines.map(([k, v]) => `<div class="summary-line"><span>${ui.esc(k)}</span><strong>${ui.esc(v)}</strong></div>`).join('')}</div>${job.local?.stopped ? `<p class="dialog-note">${ui.message(job.local.stopped)}</p>` : ''}${ui.details('기관 판정 (원문 필드)', job.service_verdict)}${ui.details('결과 재조회', job.reconciliation)}${ui.details('로컬 처리 상태', job.local)}${ui.details('처리 순서', job.events?.map(e => ({시각: ui.time(e.at), 단계: e.kind, ...e.detail})))}${artifacts ? `<div class="settings-body">${artifacts}</div>` : ''}<div class="dialog-actions">${cancellable ? `<button class="button secondary" data-action="cancel-job" data-job="${ui.esc(job.id)}">작업 취소</button>` : ''}${job.name === 'giro.payment.prepare' ? `<button class="button secondary" data-action="giro-payment-open" data-job="${ui.esc(job.id)}">${job.status === 'awaiting_input' ? '납부 내용 확인' : '납부 결과 보기'}</button>` : ''}${job.name === 'hana.corporate.transfer.prepare' ? `<button class="button secondary" data-action="corporate-transfer-open" data-job="${ui.esc(job.id)}">${job.status === 'awaiting_input' ? '이체 이어하기' : '이체 결과 보기'}</button>` : ''}${reconcile ? `<button class="button secondary" data-action="reconcile" data-job="${ui.esc(job.id)}">이체 결과 조회</button>` : ''}<button class="button primary" data-ui="close">닫기</button></div>`, {wide: true});
 }
 
 function chooseProfile() {
@@ -380,9 +412,19 @@ async function boot() {
     throw error;
   }
   if (!AREAS[state.mode]) state.mode = 'tax';
-  const start = state.lastViews[viewKey()] || AREAS[state.mode].home;
-  changeView(navigation(state.mode).find(i => i.id === start)?.available === false ? 'coverage' : start);
+  // An address with a screen name opens that screen. With nothing connected yet, start at the
+  // connection screen and its first-time steps rather than an empty work screen.
+  const asked = decodeURIComponent(location.hash.slice(1));
+  const start = known(asked) ? asked : !state.logins.length ? 'settings' : state.lastViews[viewKey()] || AREAS[state.mode].home;
+  const first = navigation(state.mode).find(i => i.id === start)?.available === false ? 'coverage' : start;
+  history.replaceState({view: first}, '', '#' + first);
+  changeView(first, {}, {push: false});
 }
+
+window.addEventListener('popstate', event => {
+  const view = event.state?.view || decodeURIComponent(location.hash.slice(1));
+  if (known(view) && document.querySelector('#stage') && !document.querySelector('#stage').hidden) changeView(view, {}, {push: false});
+});
 
 document.addEventListener('click', async event => {
   const target = event.target.closest('button,a,tr[data-row]');
@@ -392,7 +434,8 @@ document.addEventListener('click', async event => {
     changeView(target.dataset.view === 'home' ? AREAS[state.mode].home : target.dataset.view);
     return;
   }
-  if (target.dataset.mode) { changeMode(target.dataset.mode); return; }
+  // Only an area tab switches area; other buttons may carry their own mode value for an action.
+  if (target.matches('.area-tab') && AREAS[target.dataset.mode]) { changeMode(target.dataset.mode); return; }
   if (target.dataset.profile) {
     setProfile(target.dataset.profile);
     ui.closeDialog();
@@ -401,7 +444,6 @@ document.addEventListener('click', async event => {
   }
   switch (target.dataset.ui) {
     case 'close': ui.closeDialog(); return;
-    case 'choose-mode': chooseMode(); return;
     case 'choose-profile': chooseProfile(); return;
     case 'more': moreMenu(); return;
   }
@@ -452,7 +494,9 @@ document.addEventListener('change', event => {
 
 document.querySelector('#detail-dialog').addEventListener('click', event => {
   const dialog = event.currentTarget;
-  if (event.target === dialog) {
+  // A dialog that holds a form closes only through its own buttons, so a stray click outside
+  // cannot throw away what was typed.
+  if (event.target === dialog && !dialog.querySelector('form')) {
     const rect = dialog.getBoundingClientRect();
     if (event.clientX < rect.left || event.clientX > rect.right || event.clientY < rect.top || event.clientY > rect.bottom) ui.closeDialog();
   }

@@ -7,7 +7,7 @@ import {JSDOM} from 'jsdom';
 const root = new URL('../../src/finance_cli/server/static/', import.meta.url);
 
 async function setup(t, method = 'onesign', readiness = 'query_only', secret = {}) {
-  const dom = new JSDOM('<main></main><div id="results"></div><dialog id="detail-dialog"><div id="dialog-content"></div></dialog><div id="toast"></div>',
+  const dom = new JSDOM('<main id="main"></main><div id="results"></div><dialog id="detail-dialog"><div id="dialog-content"></div></dialog><div id="toast"></div>',
     {url: 'http://127.0.0.1:8740', runScripts: 'outside-only'});
   t.after(() => dom.window.close());
   dom.window.HTMLDialogElement.prototype.close = function () { this.open = false; };
@@ -19,7 +19,7 @@ async function setup(t, method = 'onesign', readiness = 'query_only', secret = {
   const target = {id: 'target', login_id: row.id, kind: 'account', display_name: '합성 계좌', identity: {account_number: '12345678901234'}};
   const state = {logins: [row], targets: [target], cache: new Map(), rows: {}, capabilities: {features: []},
     vaults: {synthetic: true}, credentials: [], profiles: []};
-  const calls = [], asked = [], checked = [], apiCalls = [];
+  const calls = [], asked = [], checked = [], apiCalls = [], changed = [];
   const ctx = {run: async (name, fields, options) => { calls.push({name, fields, options}); }};
   const values = {
     state, login: id => state.logins.find(r => r.id === id), target: id => state.targets.find(r => r.id === id), profile: () => null,
@@ -28,7 +28,7 @@ async function setup(t, method = 'onesign', readiness = 'query_only', secret = {
     askSecrets: async (...args) => { asked.push(args); return secret; },
     SECRET_LABELS: {vault_passphrase: ['vault_passphrase', '저장소 암호'], pin: ['pin', 'PIN'],
       certificate_password: ['certificate_password', '인증서 비밀번호']},
-    applyRemember: () => {}, changeView: () => {}, jobState: () => '', refreshModel: async () => {},
+    applyRemember: () => {}, changeView: (...args) => { changed.push(args); }, jobState: () => '', refreshModel: async () => {},
     bankSessionExpired: () => state.idleExpired || false,
     ensureBankSession: async (ctx, id) => { checked.push(id); return !state.idleExpired; }, expiredBankLogin: async () => {},
     rememberField: () => '', render: () => {}, secretFields: () => [], showJob: () => {},
@@ -42,7 +42,7 @@ async function setup(t, method = 'onesign', readiness = 'query_only', secret = {
       if (state.failJobList && path.startsWith('/jobs?')) throw new Error('synthetic list error');
       if (path.startsWith('/jobs?')) return {jobs: []};
       return {credentials: [], devices: [], id_cards: []};
-    }});
+    }, post: async () => { throw {code: 'job_not_cancellable'}; }, patch: async () => { throw {code: 'revision_conflict'}; }});
     this.setExport('submit', () => { throw new Error('unexpected submission'); });
   }, {context});
   const certificates = new SyntheticModule(['certificateActions'], function () {
@@ -54,7 +54,7 @@ async function setup(t, method = 'onesign', readiness = 'query_only', secret = {
   const views = new SourceTextModule(await readFile(new URL('views.js', root), 'utf8'), {context});
   await views.link(name => ({'./app.js': app, './api.js': api, './ui.js': ui, './corporate.js': corporate, './giro.js': giro, './certificates.js': certificates}[name]));
   await views.evaluate();
-  return {ctx, state, calls, asked, checked, apiCalls, row, document: dom.window.document, ...views.namespace};
+  return {ctx, state, calls, asked, checked, apiCalls, changed, row, document: dom.window.document, ...views.namespace};
 }
 
 test('a completed tax query stays current when returning to its screen', async t => {
@@ -128,12 +128,12 @@ const syntheticDue = {authCommonNm: null, chrgNm: null, applcEndDt: null, adtTxa
   itrfNm: '합성 세목', pmtDdt: '20261025', romAmt: 123456, nromAmt: 900000, pmtAmt: 700000,
   txhfOgzNm: '합성 세무서', txtnClNm: '합성 과세구분', bankElctPmtPblNo: 'synthetic-payment'};
 
-async function showDues(t, items, {outcome = 'success', complete = true, itemCount} = {}) {
+async function showDues(t, items, {outcome = 'success', complete = true, itemCount, extra = {}} = {}) {
   const ui = await setup(t, 'joint_certificate', 'ready');
   ui.row.institution = 'hometax';
   ui.state.targets[0].kind = 'personal';
   const job = {id: 'dues-job', name: 'hometax.tax.dues', status: 'finished', outcome,
-    login_id: 'login', target_id: 'target', result: {items, item_count: itemCount, pagination: {complete}}};
+    login_id: 'login', target_id: 'target', result: {items, item_count: itemCount, pagination: {complete}, ...extra}};
   ui.state.cache.set('hometax.tax.dues||target|', job);
   ui.document.querySelector('main').innerHTML = await ui.views.dues(ui.ctx);
   return ui;
@@ -182,7 +182,20 @@ test('dues distinguishes an empty completed query from missing or incomplete res
   }
   const missing = await showDues(t, null);
   missing.document.querySelector('main').innerHTML = await missing.views.taxhome(missing.ctx);
-  assert.equal(missing.document.querySelector('[data-view="dues"] .number').textContent, '결과 확인 필요');
+  assert.equal(missing.document.querySelector('[data-open="dues"] .number').textContent, '결과 확인 필요');
+});
+
+test('dues counts a list the service omitted as zero only for a completed success without a sum', async t => {
+  const omitted = await showDues(t, null, {extra: {list_omitted: true, amount_sum: 0}});
+  assert.match(omitted.document.querySelector('#results').textContent, /조회된 납부할 세액이 없어요/);
+  assert.match(omitted.document.querySelector('#results .list-footer').textContent, /조회 결과 0건 · 조회 완료 · 홈택스가 목록 없이/);
+  omitted.document.querySelector('main').innerHTML = await omitted.views.taxhome(omitted.ctx);
+  assert.equal(omitted.document.querySelector('[data-open="dues"] .number').textContent, '0건');
+  for (const options of [{extra: {list_omitted: true, amount_sum: 1000}}, {extra: {list_omitted: true}, complete: false},
+    {extra: {list_omitted: true}, outcome: 'unknown'}, {extra: {list_omitted: false}}]) {
+    const ui = await showDues(t, null, options);
+    assert.match(ui.document.querySelector('#results').textContent, /조회 항목을 확인하지 못했어요/);
+  }
 });
 
 test('dues explains display limits and preserves partially returned items', async t => {
@@ -331,9 +344,17 @@ test('after transfer, accounts and settings offer queries and optional manual lo
   }
   ui.document.querySelector('main').innerHTML = await ui.views.transfer(ui.ctx);
   assert.match(ui.document.body.textContent, /다음 이체.*새 로그인/);
-  await ui.actions['transfer-prepare'](ui.ctx, ui.document.querySelector('form'));
-  assert.equal(ui.calls.length, 0);
-  assert.equal(ui.asked.length, 0);
+  const form = ui.document.querySelector('form');
+  form.elements.account.value = '00012345678'; form.elements.amount.value = '12,000';
+  await ui.actions['transfer-prepare'](ui.ctx, form);
+  assert.deepEqual(ui.calls.map(c => c.name), ['hana.onesign.login'], 'only the login is requested, never the transfer');
+  assert.equal(ui.asked.length, 1);
+  assert.match(ui.asked[0][2], /새 이체에는 새 로그인이 필요해요/);
+  await ui.calls[0].options.onDone({outcome: 'success'});
+  assert.equal(ui.calls.length, 1, 'logging in must not send the kept transfer');
+  ui.document.querySelector('main').innerHTML = await ui.views.transfer(ui.ctx);
+  assert.equal(ui.document.querySelector('[name="account"]').value, '00012345678');
+  assert.equal(ui.document.querySelector('[name="amount"]').value, '12,000');
 });
 
 test('expired login still asks for login in accounts', async t => {
@@ -474,8 +495,7 @@ test('coverage explains partial live evidence and distinguishes login paths with
   assert.match(dialog, /최근 성공 근거 없음/);
   assert.match(dialog, /실서버 미검증/);
   ui.document.querySelector('main').innerHTML = await ui.views.accounts(ui.ctx);
-  assert.match(ui.document.querySelector('main').textContent, /실사용 확인/);
-  assert.doesNotMatch(ui.document.querySelector('main').textContent, /실서버 미검증/);
+  assert.doesNotMatch(ui.document.querySelector('main').textContent, /실사용 확인|실서버 미검증/);
   assert.equal(ui.calls.length, 0);
   assert.equal(ui.asked.length, 0);
 });
@@ -494,5 +514,205 @@ test('Giro readiness uses reviewed capability levels instead of hardcoded untest
   assert.match(text, /웹 납부내역 목록·상세 조회 성공 확인/);
   assert.match(text, /일부 실사용 확인/);
   assert.doesNotMatch(text, /실서버 미검증|웹에서의 실제 로그인·납부 확인은 아직/);
+  assert.equal(ui.calls.length, 0);
+});
+
+test('a page notice before an invoice query is not described as service hours and hints at the target kind', async t => {
+  const ui = await setup(t, 'joint_certificate', 'ready');
+  ui.row.institution = 'hometax';
+  const job = {id: 'notice', name: 'hometax.invoice.list', login_id: 'login', target_id: 'target', status: 'finished',
+    outcome: 'unknown', service_verdict: {branch: 'no_action', reason: 'original_action_not_observed', original_dialog_observed: true},
+    result: {items: null, pagination: null}};
+  ui.state.params = {};
+  ui.state.cache.set('hometax.invoice.list||target|sales', job);
+  const main = ui.document.querySelector('main');
+  for (const [kind, hinted] of [['personal', true], ['business', false]]) {
+    ui.state.targets[0].kind = kind;
+    main.innerHTML = await ui.views.invoices(ui.ctx);
+    assert.match(main.textContent, /홈택스 화면이 안내창을 띄우고 조회를 진행하지 않았어요/);
+    assert.doesNotMatch(main.textContent, /이용 불가 시간대/);
+    assert.equal(/조회 대상을 사업장으로 바꿔/.test(main.textContent), hinted);
+  }
+  job.service_verdict = {branch: 'no_action', reason: 'original_action_not_observed'};
+  main.innerHTML = await ui.views.invoices(ui.ctx);
+  assert.match(main.textContent, /이용 불가 시간대/);
+});
+
+function hometax(ui, kind = 'business') {
+  ui.row.institution = 'hometax'; ui.state.targets[0].kind = kind; ui.state.params = {};
+  return ui.document.querySelector('main');
+}
+
+test('each invoice tab shows only its own direction, with known field names in Korean', async t => {
+  const ui = await setup(t, 'joint_certificate', 'ready');
+  const main = hometax(ui);
+  ui.state.cache.set('hometax.invoice.list||target|sales', {id: 'sales', name: 'hometax.invoice.list', login_id: 'login',
+    target_id: 'target', status: 'finished', outcome: 'success', input: {direction: 'sales'},
+    result: {items: [{dmnrTnmNm: '합성 매출처', wrtDt: '2026-10-01', syntheticUnknown: '원문'}], pagination: {complete: true}}});
+  ui.state.params = {direction: 'purchases'};
+  main.innerHTML = await ui.views.invoices(ui.ctx);
+  assert.doesNotMatch(main.textContent, /합성 매출처/, 'the purchases tab never shows sales rows');
+  assert.match(main.textContent, /아직 조회하지 않았어요/);
+  await ui.actions['invoice-query'](ui.ctx, main.querySelector('form'));
+  assert.equal(ui.calls[0].fields.input.direction, 'purchases');
+  assert.equal(ui.calls[0].options.key, 'hometax.invoice.list||target|purchases');
+  ui.state.params = {};
+  main.innerHTML = await ui.views.invoices(ui.ctx);
+  assert.deepEqual([...main.querySelectorAll('#results th')].map(n => n.textContent), ['공급받는 자 상호', '작성일', 'syntheticUnknown']);
+  assert.equal(main.querySelector('#results td').dataset.label, '공급받는 자 상호');
+  await ui.actions.row(ui.ctx, main.querySelector('#results tbody tr'));
+  const detail = ui.document.querySelector('#dialog-content');
+  assert.match(detail.querySelector('.summary-lines').textContent, /공급받는 자 상호합성 매출처/);
+  assert.match(detail.querySelector('details summary').textContent, /그 밖의 항목 1개/);
+  assert.match(detail.querySelector('details').textContent, /syntheticUnknown원문/);
+  assert.equal(ui.calls.length, 1);
+});
+
+test('an error stays on the screen or in the open dialog after its toast is gone', async t => {
+  const ui = await setup(t);
+  const main = ui.document.querySelector('main');
+  main.innerHTML = '<div class="page-heading"></div><section class="panel"></section>';
+  await ui.actions['cancel-job'](ui.ctx, {dataset: {job: 'synthetic'}});
+  assert.match(main.querySelector('.page-heading + .page-error').textContent, /이미 시작한 작업은 취소할 수 없어요/);
+  await ui.actions['cancel-job'](ui.ctx, {dataset: {job: 'synthetic'}});
+  assert.equal(main.querySelectorAll('.page-error').length, 1, 'a repeated error replaces the previous one');
+  ui.actions['rename-login'](ui.ctx, {dataset: {login: 'login'}});
+  const form = ui.document.querySelector('#dialog-content form');
+  await ui.actions['save-login-name'](ui.ctx, form);
+  assert.match(ui.document.querySelector('#dialog-content .form-error').textContent, /다른 곳에서 설정이 바뀌었어요/);
+  assert.ok(ui.document.querySelector('#detail-dialog').open, 'the dialog and its input stay');
+});
+
+test('the balance total adds won accounts only and an account row opens its history', async t => {
+  const ui = await setup(t, 'onesign', 'ready');
+  ui.state.cache.set('hana.onesign.accounts|login||', {id: 'saved', status: 'finished', outcome: 'success', result: {
+    accounts: [{ref: 'account-1', label: '합성 원화', account_number: '12345678901234', currency: 'KRW', balance: 1000},
+      {ref: 'account-2', label: '합성 통화 미표시', account_number: '22345678901234', balance: 500},
+      {ref: 'account-3', label: '합성 외화', account_number: '32345678901234', currency: 'USD', balance: 70}],
+    candidate_targets: {'account-1': 'target'}}});
+  const main = ui.document.querySelector('main');
+  main.innerHTML = await ui.views.accounts(ui.ctx);
+  assert.equal(main.querySelector('.total-balance').textContent, '1,500원');
+  assert.match(main.querySelector('.balance-meta').textContent, /2개 계좌 합산.*외화 1개 계좌는 합계에서 제외/);
+  const linked = main.querySelectorAll('tr[data-action="account-history"]');
+  assert.equal(linked.length, 1, 'only an account linked to this login is a link');
+  ui.actions['account-history'](ui.ctx, linked[0]);
+  assert.equal(JSON.stringify(ui.changed), JSON.stringify([['history', {target: 'target'}]]));
+  assert.equal(ui.calls.length, 0);
+});
+
+test('return queries send a named tax item as its code and nothing for the default', async t => {
+  const ui = await setup(t, 'joint_certificate', 'ready');
+  const main = hometax(ui);
+  main.innerHTML = await ui.views.returns(ui.ctx);
+  const form = main.querySelector('form');
+  await ui.actions['returns-query'](ui.ctx, form);
+  assert.equal('tax_code' in ui.calls[0].fields.input, false);
+  form.elements.tax_code_choice.value = '41';
+  await ui.actions['returns-query'](ui.ctx, form);
+  assert.equal(ui.calls[1].fields.input.tax_code, '41');
+  assert.equal('tax_code_choice' in ui.calls[1].fields.input, false);
+  form.elements.tax_code_choice.value = 'custom';
+  ui.actions['tax-code-choice'](ui.ctx, form.elements.tax_code_choice);
+  assert.equal(form.elements.tax_code.disabled, false);
+  form.elements.tax_code.value = '99';
+  await ui.actions['returns-query'](ui.ctx, form);
+  assert.equal(ui.calls[2].fields.input.tax_code, '99');
+});
+
+test('a summary card without a result asks for its query once; one with a result only opens it', async t => {
+  const ui = await setup(t, 'joint_certificate', 'ready');
+  const main = hometax(ui, 'personal');
+  ui.state.cache.set('hometax.tax.dues||target|', {id: 'dues', name: 'hometax.tax.dues', status: 'finished', outcome: 'success',
+    login_id: 'login', target_id: 'target', observed_at: 1790000000,
+    result: {items: [{itrfNm: '합성 세목'}], item_count: 1, amount_sum: 1794500, pagination: {complete: true}}});
+  main.innerHTML = await ui.views.taxhome(ui.ctx);
+  const dues = main.querySelector('[data-open="dues"]'), refunds = main.querySelector('[data-open="refunds"]');
+  assert.equal(dues.dataset.run, undefined);
+  assert.equal(refunds.dataset.run, '1');
+  assert.match(dues.textContent, /홈택스 합계 1,794,500원/);
+  ui.actions['tax-open'](ui.ctx, refunds); ui.actions['tax-open'](ui.ctx, dues);
+  assert.equal(JSON.stringify(ui.changed), JSON.stringify([['refunds', {autorun: true}], ['dues', {}]]));
+  let submitted = 0;
+  const later = [];
+  ui.state.params = {autorun: true};
+  main.innerHTML = await ui.views.refunds({...ui.ctx, later: run => later.push(run)});
+  main.querySelector('form').requestSubmit = () => { submitted++; };
+  later.forEach(run => run());
+  main.innerHTML = await ui.views.refunds({...ui.ctx, later: run => later.push(run)});
+  assert.equal(submitted, 1);
+  assert.equal(later.length, 1, 'returning to the screen does not ask again');
+  assert.equal(ui.calls.length, 0, 'rendering alone never submits a job');
+});
+
+test('history returns with the account\'s last result and a period button sets Korea-time dates', async t => {
+  const ui = await setup(t, 'onesign', 'ready');
+  ui.state.cache.set('hana.onesign.history.list||target|', {id: 'list', name: 'hana.onesign.history.list', status: 'finished',
+    outcome: 'success', login_id: 'login', target_id: 'target',
+    result: {rows: [{date: '2026-09-30', time: '10:00', type: '입금', name: '합성 입금', amount: 1000, balance: 5000}], pagination_complete: true}});
+  ui.state.params = {target: 'target'};
+  const main = ui.document.querySelector('main');
+  main.innerHTML = await ui.views.history(ui.ctx);
+  assert.match(main.textContent, /합성 입금/);
+  assert.equal(ui.calls.length, 0, 'showing a saved result asks the bank for nothing');
+  assert.equal(ui.asked.length, 0);
+  ui.actions.period(ui.ctx, main.querySelector('[data-action="period"][data-days="30"]'));
+  assert.equal(main.querySelector('[name="start_date"]').value, '2026-09-01');
+  assert.equal(main.querySelector('[name="end_date"]').value, '2026-10-01');
+  await ui.actions['history-query'](ui.ctx, main.querySelector('form'));
+  assert.equal(ui.calls[0].options.key, 'hana.onesign.history.list||target|');
+  assert.equal(ui.calls[0].fields.input.start_date, '2026-09-01');
+});
+
+test('a first Hometax login goes on to the user and business check; a later login does not', async t => {
+  const ui = await setup(t, 'joint_certificate', 'login_required', {certificate_password: 'synthetic'});
+  ui.row.institution = 'hometax'; ui.state.targets = [];
+  await ui.actions.login(ui.ctx, {dataset: {login: 'login'}});
+  assert.match(ui.asked[0][2], /사용자·사업장을 이어서 확인/);
+  await ui.calls[0].options.onDone({outcome: 'rejected'});
+  assert.equal(ui.calls.length, 1, 'a login that did not succeed asks for nothing more');
+  await ui.calls[0].options.onDone({outcome: 'success'});
+  assert.deepEqual(ui.calls.map(c => c.name), ['hometax.login', 'hometax.targets.discover']);
+  ui.state.targets = [{id: 'target', login_id: 'login', kind: 'personal', display_name: '합성 대상'}];
+  await ui.actions.login(ui.ctx, {dataset: {login: 'login'}});
+  assert.doesNotMatch(ui.asked[1][2], /이어서 확인/);
+  await ui.calls[2].options.onDone({outcome: 'success'});
+  assert.equal(ui.calls.length, 3, 'a login with registered targets runs no extra check');
+});
+
+test('adding a connection always starts from the institution, whichever area was open', async t => {
+  const ui = await setup(t);
+  for (const mode of ['giro', 'corporate', 'tax']) {
+    ui.state.mode = mode;
+    await ui.actions['add-login-dialog'](ui.ctx);
+    assert.deepEqual([...ui.document.querySelectorAll('[data-action="add-login-pick"]')].map(b => b.dataset.institution),
+      ['hometax', 'hana', 'hana_corporate', 'giro']);
+    assert.equal(ui.document.querySelector('#dialog-content input'), null, 'no password is asked before an institution is chosen');
+  }
+  await ui.actions['add-login-pick'](ui.ctx, ui.document.querySelector('[data-institution="hometax"]'));
+  assert.equal(ui.document.querySelector('[name="institution"]').value, 'hometax');
+  assert.match(ui.document.querySelector('#dialog-content button[type="submit"]').textContent, /추가하고 로그인/);
+  assert.equal(ui.asked.length, 0);
+  assert.equal(ui.calls.length, 0);
+});
+
+test('invoice amounts are suggested from quantity and unit price without overwriting typed values', async t => {
+  const ui = await setup(t, 'joint_certificate', 'ready');
+  const main = hometax(ui);
+  main.innerHTML = ui.views.invoiceform(ui.ctx);
+  const form = main.querySelector('form');
+  assert.ok(main.querySelector('[data-action="signing"][data-login="login"]'), 'a missing issuing certificate can be set from here');
+  assert.equal(form.querySelectorAll('.item-editor:not([hidden])').length, 1);
+  ui.actions['invoice-add-item'](ui.ctx, form.querySelector('[data-action="invoice-add-item"]'));
+  assert.equal(form.querySelectorAll('.item-editor:not([hidden])').length, 2);
+  const field = name => form.querySelector(`[name="items.0.${name}"]`);
+  field('quantity').value = '3'; field('unit_price').value = '3335';
+  ui.actions['invoice-item-calc'](ui.ctx, field('unit_price'));
+  assert.equal(field('supply_amount').value, '10005');
+  assert.equal(field('tax_amount').value, '1000', 'a fraction of a won is dropped');
+  field('tax_amount').value = '1001'; field('quantity').value = '4';
+  ui.actions['invoice-item-calc'](ui.ctx, field('quantity'));
+  assert.equal(field('supply_amount').value, '13340');
+  assert.equal(field('tax_amount').value, '1001', 'a typed amount stays');
   assert.equal(ui.calls.length, 0);
 });

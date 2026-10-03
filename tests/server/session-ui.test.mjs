@@ -120,3 +120,59 @@ test('unavailable jobs show setup reasons without submitting again', async t => 
   await app.ctx.run('hometax.login', {login_id: 'selected'}, {panel: 'stage'});
   assert.match(app.document.querySelector('#stage').textContent, /이 기능은 지금 사용할 수 없어요/);
 });
+
+test('area tabs mark only areas with a live login and drop the mark at the idle limit', async t => {
+  const app = await setup(t);
+  app.document.querySelector('#stage').innerHTML = '<nav class="area-tabs"></nav>';
+  const live = () => Object.fromEntries([...app.document.querySelectorAll('.area-tab')]
+    .map(tab => [tab.dataset.mode, tab.classList.contains('live') && Boolean(tab.querySelector('.session-mark'))]));
+  app.state.mode = 'giro';
+  app.state.logins = [{...app.row, readiness: 'ready'},
+    {id: 'tax', institution: 'hometax', readiness: 'login_required', session: {state: 'expired'}},
+    {id: 'giro', institution: 'giro', readiness: 'ready', disabled: true}];
+  app.local = 5599;
+  app.renderTabs();
+  assert.deepEqual(live(), {banking: true, corporate: false, giro: false, tax: false});
+  assert.equal(app.document.querySelector('.area-tab[aria-current]').dataset.mode, 'giro');
+  assert.match(app.document.querySelector('[data-mode="banking"]').getAttribute('aria-label'), /로그인됨/);
+  app.local = 5600;
+  app.renderTabs();
+  assert.equal(live().banking, false);
+  assert.equal(app.gets.length, 0);
+});
+
+test('records, connections and coverage belong to no area tab', async t => {
+  const app = await setup(t);
+  app.document.querySelector('#stage').innerHTML = '<nav class="area-tabs"></nav>';
+  app.state.mode = 'giro';
+  for (const [view, current] of [['settings', null], ['activity', null], ['coverage', null], ['giro-live', 'giro'], ['bills', 'giro']]) {
+    app.state.view = view;
+    app.renderTabs();
+    assert.equal(app.document.querySelector('.area-tab[aria-current]')?.dataset.mode ?? null, current);
+  }
+});
+
+test('a plain success shows when it was read; every other state keeps its badge', async t => {
+  const app = await setup(t);
+  const done = {id: 'j', status: 'finished', outcome: 'success', origin: 'web', observed_at: 1790000000, verification: 'live_untested'};
+  assert.doesNotMatch(app.jobState(done), /status-pill|실서버 미검증|웹 요청/);
+  assert.match(app.jobState(done), /조회/);
+  assert.match(app.jobState({...done, outcome: 'rejected'}), /기관 거절/);
+  assert.match(app.jobState({...done, outcome: 'unknown'}), /결과 미확인/);
+  assert.match(app.jobState({...done, outcome: 'partial_success'}), /부분 성공/);
+  assert.match(app.jobState({...done, status: 'running', outcome: 'not_started'}), /실행 중/);
+  assert.match(app.jobState({...done, origin: 'cli'}), /CLI 요청/);
+  assert.match(app.jobState({...done, local: {session_saved: false}}), /세션 저장 확인 안 됨/);
+});
+
+test('only an area tab switches area; a button with its own mode value runs its action', async t => {
+  const app = await setup(t);
+  const button = app.document.querySelector('[data-action="capture"]');
+  button.dataset.mode = 'status';
+  app.state.mode = 'tax';
+  app.ctx = null;
+  button.click();
+  await new Promise(resolve => setTimeout(resolve));
+  assert.ok(app.ctx, 'the action ran');
+  assert.equal(app.state.mode, 'tax');
+});

@@ -37,6 +37,8 @@ const nameField = () => field('name', '보관할 이름', 'maxlength="64" patter
 const controls = title => `<p class="form-error" id="certificate-error" role="alert"></p><div class="dialog-actions"><button type="button" class="button secondary" data-ui="close">취소</button><button type="submit" class="button primary">${esc(title)}</button></div>`;
 const terms = rows => `<ul>${rows.map(row => `<li>${esc(row.title)}${row.urls.map((url, i) => ` <a href="${esc(url)}" target="_blank" rel="noopener noreferrer">약관 ${i + 1}</a>`).join('')}</li>`).join('')}</ul>`;
 const agree = () => '<label class="check"><input type="checkbox" name="agree" required> 위 필수 약관을 읽고 동의합니다</label>';
+// The reviewed support level of issuance, as the coverage screen shows it.
+const issuanceLevel = () => ui.VERIFICATION[state.capabilities?.features?.find(f => f.id === 'hana-issuance')?.verification]?.[0] || '';
 
 const IMAGE_LIMIT = 8 * 1024 * 1024;
 const KIND_LABEL = {resident: '주민등록증', driver: '운전면허증'};
@@ -189,7 +191,7 @@ async function stageDialog(name, stage, progress = {}, warning = '') {
     : stage === 'list-accounts' ? '본인 계좌 불러오기를 누르면 은행에 발급용 계좌 목록을 요청해요.'
     : SCREEN[stage] === 2 ? '은행에서 제공한 본인계좌를 선택하세요. 계좌 확인을 누르면 선택한 계좌의 비밀번호를 은행에 보내 확인해요.'
     : stage === 'complete' ? '가입 완료를 누르면 이미 발급한 인증서의 가입 절차를 마무리해요.' : '하나인증서 발급을 누르면 인증서를 새로 발급하고 가입 완료까지 진행해요.';
-  ui.showDialog('하나인증서 발급', `${stage === 'inspect' ? '' : steps(stage)}${before}${warning ? note(esc(warning)) : ''}<form data-submit="certificate-hana-submit" data-name="${esc(name)}" data-stage="${esc(stage)}" data-digest="${esc(digest)}" autocomplete="off"><h3>${stage === 'inspect' ? '발급 이어하기' : SCREENS[SCREEN[stage]]}</h3><p class="meta">실서버 미검증</p>${fields}<p class="field-help">${approval}</p>${controls(label)}</form>`, {wide: stage !== 'inspect'});
+  ui.showDialog('하나인증서 발급', `${stage === 'inspect' ? '' : steps(stage)}${before}${warning ? note(esc(warning)) : ''}<form data-submit="certificate-hana-submit" data-name="${esc(name)}" data-stage="${esc(stage)}" data-digest="${esc(digest)}" autocomplete="off"><h3>${stage === 'inspect' ? '발급 이어하기' : SCREENS[SCREEN[stage]]}</h3>${issuanceLevel() ? `<p class="meta">지원 상태: ${esc(issuanceLevel())}</p>` : ''}${fields}<p class="field-help">${approval}</p>${controls(label)}</form>`, {wide: stage !== 'inspect'});
   const form = document.querySelector('[data-submit="certificate-hana-submit"]');
   if (stage === 'account' && !progress.accounts?.length) form.querySelector('button[type="submit"]').disabled = true;
   if (stage === 'init') {
@@ -272,7 +274,7 @@ async function submitWizard(form) {
 
 export const certificateActions = {
   'certificate-add': async () => {
-    ui.showDialog('인증서 발급·가져오기', `<div class="settings-body"><div class="setting-row"><span><strong>공동인증서</strong><span class="meta">신규 발급은 미지원이에요. 발급기관에서 받은 NPKI/PFX를 가져올 수 있어요.</span></span>${button('가져오기', 'data-action="certificate-joint"')}</div><div class="setting-row"><span><strong>금융인증서</strong><span class="meta">신규 발급·클라우드 연결은 아직 미지원이에요.</span></span>${ui.tag('미지원', 'neutral')}</div><div class="setting-row"><span><strong>하나인증서</strong><span class="meta">국내 성인 기존 하나은행 고객 · SMS·신분증·본인 계좌 확인 · 실서버 미검증</span></span>${button('신규 발급·진행 확인', 'data-action="certificate-hana"', 'primary')}</div></div><p class="dialog-note">인증서 비밀과 파일은 브라우저 저장소·작업 기록에 남기지 않아요. 기관 로그인은 발급·가져오기 후 별도로 추가하세요.</p>`);
+    ui.showDialog('인증서 발급·가져오기', `<div class="settings-body"><div class="setting-row"><span><strong>공동인증서</strong><span class="meta">신규 발급은 미지원이에요. 발급기관에서 받은 NPKI/PFX를 가져올 수 있어요.</span></span>${button('가져오기', 'data-action="certificate-joint"')}</div><div class="setting-row"><span><strong>금융인증서</strong><span class="meta">신규 발급·클라우드 연결은 아직 미지원이에요.</span></span>${ui.tag('미지원', 'neutral')}</div><div class="setting-row"><span><strong>하나인증서</strong><span class="meta">국내 성인 기존 하나은행 고객 · SMS·신분증·본인 계좌 확인${issuanceLevel() ? ' · ' + esc(issuanceLevel()) : ''}</span></span>${button('신규 발급·진행 확인', 'data-action="certificate-hana"', 'primary')}</div></div><p class="dialog-note">인증서 비밀과 파일은 브라우저 저장소·작업 기록에 남기지 않아요. 기관 로그인은 발급·가져오기 후 별도로 추가하세요.</p>`);
   },
   'certificate-joint': () => {
     ui.showDialog('공동인증서 가져오기', `<form data-submit="certificate-import" autocomplete="off">${nameField()}<div class="field"><label for="cert-format">파일 형식</label><select id="cert-format" name="format" data-change="certificate-format"><option value="pfx">PFX / P12</option><option value="npki">NPKI (signCert.der + signPri.key)</option></select></div>${field('certificate_file', 'PFX 또는 signCert.der 파일 (2 MiB 이하)', 'type="file" accept=".pfx,.p12,.der"')}<div id="certificate-npki" hidden>${field('private_key_file', 'signPri.key (2 MiB 이하)', 'type="file" accept=".key" disabled')}<div class="field"><label for="cert-compatibility">암호 호환 규칙</label><select id="cert-compatibility" name="compatibility"><option value="hana">하나은행 (기본)</option><option value="hometax">홈택스</option></select></div></div><div id="certificate-pfx-index">${field('pfx_index', 'PFX 인증서 순번 (여럿이면 지정, 0부터)', 'type="number" min="0"')}</div>${field('certificate_password', '인증서 비밀번호', 'type="password"')}<p class="dialog-note">새로 발급하지 않고 원본 파일을 암호화 보관해요. 기관에는 접속하지 않아요.</p>${controls('가져오기')}</form>`);

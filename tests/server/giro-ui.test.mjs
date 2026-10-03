@@ -120,3 +120,38 @@ test('payment confirmation names the same login PIN, sends fixed digest once and
   assert.equal(a.calls.length, 0);
   assert.equal(JSON.stringify(a.state).includes('654321'), false);
 });
+
+test('a logged-out screen asks for the login instead of offering a query', async t => {
+  const a = await setup(t);
+  a.row.readiness = 'login_required';
+  const main = a.document.querySelector('main');
+  for (const view of ['giro-live', 'giro-receipts', 'giro-accounts']) {
+    main.innerHTML = await a.giroViews[view](a.ctx);
+    assert.ok(main.querySelector('.empty-state [data-action="giro-login"]'));
+    assert.equal(main.querySelector('button[type="submit"]'), null);
+    assert.equal(main.querySelector('[data-action="giro-accounts-query"]'), null);
+  }
+  assert.equal(a.calls.length, 0);
+});
+
+test('receipts default to the last month, paging keeps the shown period, and waiting payments are listed', async t => {
+  const a = await setup(t);
+  const main = a.document.querySelector('main');
+  const day = ago => new Date(Date.now() + 9 * 3600000 - ago * 86400000).toISOString().slice(0, 10);
+  main.innerHTML = await a.giroViews['giro-receipts'](a.ctx);
+  assert.equal(main.querySelector('[name="start_date"]').value, day(30));
+  assert.equal(main.querySelector('[name="end_date"]').value, day(0));
+  assert.equal(main.querySelector('[name="page"]').type, 'hidden');
+  a.add({id: 'receipts', name: 'giro.receipts.list', login_id: 'giro', outcome: 'success',
+    input: {start_date: '2026-08-01', end_date: '2026-08-31', page: 2},
+    result: {complete: true, page_navi: {currentPage: 2, totalPage: 3}, receipts: [{ref: '0', issuer: '합성기관', paid_date: '2026-08-10', amount_raw: '1,000'}]}});
+  a.add({id: 'pay', name: 'giro.payment.prepare', login_id: 'giro', status: 'awaiting_input', created_at: 1790000000});
+  main.innerHTML = await a.giroViews['giro-receipts'](a.ctx);
+  const [previous, next] = main.querySelectorAll('[data-action="giro-receipts-page"]');
+  assert.equal(previous.dataset.page, '1');
+  assert.equal(next.dataset.page, '3');
+  assert.equal(main.querySelector('[data-action="giro-payment-open"]').dataset.job, 'pay');
+  main.querySelector('[name="start_date"]').value = '2026-01-01';
+  await a.giroActions['giro-receipts-page'](a.ctx, next);
+  assert.equal(JSON.stringify(a.calls[0].fields.input), JSON.stringify({start_date: '2026-08-01', end_date: '2026-08-31', page: 3}));
+});

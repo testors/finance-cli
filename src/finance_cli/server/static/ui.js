@@ -78,7 +78,15 @@ export function transferLimits(observation) {
 export function time(value) {
   if (!value) return '—';
   const date = new Date(value * 1000);
-  return date.toLocaleString('ko-KR', {month: 'numeric', day: 'numeric', hour: '2-digit', minute: '2-digit', hour12: false});
+  return date.toLocaleString('ko-KR', {month: 'long', day: 'numeric', hour: '2-digit', minute: '2-digit', hour12: false});
+}
+
+// Institution dates follow Korea time even before 09:00 KST or from an overseas browser.
+export const kstDate = (daysAgo = 0) => new Date(Date.now() + 9 * 3600000 - daysAgo * 86400000).toISOString().slice(0, 10);
+
+/* Quick period buttons for a form whose first two date inputs are its start and end. */
+export function periodPresets(options) {
+  return `<div class="period-presets" role="group" aria-label="기간 빠른 선택">${options.map(([text, days]) => `<button type="button" data-action="period" data-days="${days}">${esc(text)}</button>`).join('')}</div>`;
 }
 
 export function heading(title, sub, actions = '') {
@@ -101,12 +109,11 @@ export const ORIGIN = {web: '웹', cli: 'CLI', agent: '에이전트'};
 
 export function statusTags(job) {
   if (job.name?.startsWith('cli.')) return `<span class="pill-row">${tag('CLI 실행 기록', 'neutral')}${tag('종료코드 ' + (job.local?.exit_code ?? '—'), 'neutral')}</span>`;
-  const [label, tone] = STATUS[job.status] || [job.status, 'neutral'];
-  let html = tag(label, tone);
-  if (job.status === 'finished' || job.status === 'running' && job.outcome !== 'not_started') {
-    const [outcome, outcomeTone] = OUTCOME[job.outcome] || [job.outcome, 'neutral'];
-    html += tag(outcome, outcomeTone);
-  }
+  const [status, tone] = STATUS[job.status] || [job.status, 'neutral'];
+  const [outcome, outcomeTone] = OUTCOME[job.outcome] || [job.outcome, 'neutral'];
+  // The service verdict of a finished job says more than "완료"; a verdict seen while running keeps both.
+  const html = job.status === 'finished' ? tag(outcome, outcomeTone)
+    : tag(status, tone) + (job.status === 'running' && job.outcome !== 'not_started' ? tag(outcome, outcomeTone) : '');
   return `<span class="pill-row">${html}</span>`;
 }
 
@@ -232,7 +239,33 @@ export function toast(text) {
   target.textContent = text;
   target.classList.add('show');
   clearTimeout(toastTimer);
-  toastTimer = setTimeout(() => target.classList.remove('show'), 3500);
+  toastTimer = setTimeout(() => target.classList.remove('show'), Math.min(10000, 3500 + String(text).length * 70));
+}
+
+/* An error stays where the user is looking: in the open dialog, else at the top of the
+   screen until it is drawn again. The toast still announces it. */
+export function fail(text) {
+  toast(text);
+  const box = dialog();
+  const node = document.createElement(box?.open ? 'p' : 'div');
+  node.setAttribute('role', 'alert');
+  if (box?.open) {
+    const slot = box.querySelector('.form-error');
+    if (slot) { slot.textContent = text; return; }
+    node.className = 'form-error';
+    node.textContent = text;
+    const actions = box.querySelector('.dialog-actions');
+    if (actions) actions.before(node); else box.querySelector('.dialog-body')?.append(node);
+    return;
+  }
+  const main = document.querySelector('#main');
+  if (!main) return;
+  main.querySelector('.page-error')?.remove();
+  node.className = 'scope-note page-error';
+  node.innerHTML = icon('info') + '<p></p>';
+  node.querySelector('p').textContent = text;
+  const heading = main.querySelector('.page-heading');
+  if (heading) heading.after(node); else main.prepend(node);
 }
 
 export function json(value) {
@@ -243,6 +276,25 @@ export function details(summary, value) {
   if (value === null || value === undefined || (typeof value === 'object' && !Object.keys(value).length)) return '';
   return `<details class="verdict"><summary>${esc(summary)}</summary>${json(value)}</details>`;
 }
+
+/* Korean names for institution fields this project already reads by name (dues rows,
+   invoice drafts, return and form ids). A name that is not listed stays exactly as the
+   institution sent it; nothing here guesses the meaning of an unknown field. */
+export const FIELD_LABELS = {
+  itrfNm: '세목', itrfCd: '세목 코드', pmtDdt: '납부기한', romAmt: '납부할 세액', txhfOgzNm: '관서명', txtnClNm: '과세구분',
+  bankElctPmtPblNo: '전자납부번호', rtnCvaId: '신고 ID', tnmNm: '상호', txprNm: '납세자명', txprDscmNo: '사업자등록번호',
+  userNm: '이름', frmlNm: '서식명', frmlCd: '서식 코드',
+  splrTxprDscmNo: '공급자 사업자번호', splrTnmNm: '공급자 상호', splrRprsFnm: '공급자 대표자', splrPfbAdr: '공급자 주소',
+  splrBcNm: '공급자 업태', splrItmNm: '공급자 종목', splrChrgEmlAdr: '공급자 이메일',
+  dmnrTxprDscmNo: '공급받는 자 사업자번호', dmnrTnmNm: '공급받는 자 상호', dmnrRprsFnm: '공급받는 자 대표자',
+  dmnrPfbAdr: '공급받는 자 주소', dmnrBcNm: '공급받는 자 업태', dmnrItmNm: '공급받는 자 종목',
+  dmnrMchrgEmlAdr: '공급받는 자 이메일', dmnrSchrgEmlAdr: '공급받는 자 이메일 2',
+  lsatSplDt: '공급일자', lsatSplMm: '월', lsatSplDd: '일', lsatNm: '품목', lsatRszeNm: '규격', lsatQty: '수량',
+  lsatUtprc: '단가', lsatSplCft: '공급가액', lsatTxamt: '세액', lsatRmrkCntn: '품목 비고',
+  wrtDt: '작성일', sumAmt: '합계', splCft: '공급가액', txamt: '세액', rmrkCntn: '비고',
+  recApeClCd: '청구·영수 코드', etxivClsfCd: '계산서 분류 코드', etxivKndCd: '계산서 종류 코드',
+};
+export const label = key => FIELD_LABELS[key] || key;
 
 /* Service rows arrive as the institution's own field names. Column choice is a
    display heuristic only; the detail view shows every allowlisted field. */
@@ -256,16 +308,27 @@ export function columns(rows, limit = 4) {
   return chosen.slice(0, limit);
 }
 
-export function rowsTable(rows, {group = 'rows', limit = 200, keys: fixed = null} = {}) {
+export function rowsTable(rows, {group = 'rows', limit = 200, keys: fixed = null, num = []} = {}) {
   if (!rows) return '';
   if (!rows.length) return '<div class="empty-state">조회 결과가 0건이에요.</div>';
   const keys = fixed || columns(rows);
-  const numeric = key => rows.every(r => r?.[key] === null || r?.[key] === undefined || typeof r[key] === 'number');
-  return `<div class="table-wrap"><table class="table data"><thead><tr>${keys.map(k => `<th scope="col" class="${numeric(k) ? 'num' : ''}">${esc(k)}</th>`).join('')}</tr></thead><tbody>${rows.slice(0, limit).map((row, index) => `<tr data-row="${group}:${index}" tabindex="0">${keys.map(k => `<td class="${numeric(k) ? 'num' : ''}">${typeof row?.[k] === 'number' ? money(row[k]) : esc(row?.[k] ?? '')}</td>`).join('')}</tr>`).join('')}</tbody></table></div>${rows.length > limit ? `<div class="list-footer">${rows.length}건 중 ${limit}건 표시</div>` : ''}`;
+  const numeric = key => num.includes(key) || rows.every(r => r?.[key] === null || r?.[key] === undefined || typeof r[key] === 'number');
+  // data-label lets a narrow screen show each cell as "label: value" without a header row.
+  return `<div class="table-wrap"><table class="table data"><thead><tr>${keys.map(k => `<th scope="col" class="${numeric(k) ? 'num' : ''}">${esc(label(k))}</th>`).join('')}</tr></thead><tbody>${rows.slice(0, limit).map((row, index) => `<tr data-row="${group}:${index}" tabindex="0">${keys.map(k => `<td class="${numeric(k) ? 'num' : ''}" data-label="${esc(label(k))}">${typeof row?.[k] === 'number' ? money(row[k]) : esc(row?.[k] ?? '')}</td>`).join('')}</tr>`).join('')}</tbody></table></div>${rows.length > limit ? `<div class="list-footer">${rows.length}건 중 ${limit}건 표시</div>` : ''}`;
 }
 
 export function fieldsList(row) {
-  return `<div class="summary-lines">${Object.entries(row || {}).map(([k, v]) => `<div class="summary-line"><span>${esc(k)}</span><strong>${typeof v === 'number' ? money(v) : esc(v)}</strong></div>`).join('')}</div>`;
+  return `<div class="summary-lines">${Object.entries(row || {}).map(([k, v]) => `<div class="summary-line"><span>${esc(label(k))}</span><strong>${typeof v === 'number' ? money(v) : esc(v)}</strong></div>`).join('')}</div>`;
+}
+
+/* Row detail: fields with a known name first; names only the institution uses are folded. */
+export function detailFields(row) {
+  const entries = Object.entries(row || {});
+  const named = entries.filter(([k]) => k in FIELD_LABELS || /[^\x00-\x7F]/.test(k));
+  const raw = entries.filter(([k]) => !named.some(([n]) => n === k));
+  if (!named.length || !raw.length) return fieldsList(row);
+  return fieldsList(Object.fromEntries(named)) +
+    `<details class="verdict"><summary>그 밖의 항목 ${raw.length}개 (기관 필드명 그대로)</summary><div class="folded-fields">${fieldsList(Object.fromEntries(raw))}</div></details>`;
 }
 
 export const KIND = {personal: '개인', sole_proprietor: '개인사업자', corporation: '법인', business: '사업장', account: '계좌'};

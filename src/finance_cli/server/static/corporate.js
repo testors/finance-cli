@@ -22,11 +22,13 @@ const STATUS = {prepared: '준비 완료', submitted: '이체 요청 접수', co
   delayed: '지연이체', partial: '일부 성공', rejected: '은행 거절', unconfirmed: '결과 미확인', preparation_cancelled: '준비 취소'};
 const options = (rows, selected) => rows.map(([v, label]) => `<option value="${esc(v)}" ${v === selected ? 'selected' : ''}>${esc(label)}</option>`).join('');
 const field = (name, label, attrs = '') => `<div class="field"><label for="corp-${name}">${esc(label)}</label><input id="corp-${name}" name="${name}" ${attrs}></div>`;
-const select = (name, label, rows, selected = '') => `<div class="field field-inline"><label for="corp-${name}">${esc(label)}</label><select id="corp-${name}" name="${name}">${options(rows, selected)}</select></div>`;
+const select = (name, label, rows, selected = '', attrs = '') => `<div class="field field-inline"><label for="corp-${name}">${esc(label)}</label><select id="corp-${name}" name="${name}" ${attrs}>${options(rows, selected)}</select></div>`;
 const accounts = () => scopeTargets(['account']).filter(t => login(t.login_id)?.institution === 'hana_corporate');
 const accountOptions = rows => rows.map(t => [t.id, `${t.display_name} · ${t.identity?.account_number} (${login(t.login_id)?.display_name})`]);
 const cacheKey = (name, id) => 'corporate:' + name + ':' + id;
 const panel = () => '<div id="job-panel" class="job-panel"></div>';
+const close = (kind = 'primary') => `<div class="dialog-actions">${button('닫기', 'data-ui="close"', kind)}</div>`;
+const AMOUNTS = ['금액', '입금액', '출금액', '잔액'];
 
 function notices(job) {
   const messages = [];
@@ -69,7 +71,7 @@ export async function corporateLogin(ctx, row = null, method = 'id_password', se
   const settingChoice = settings && !settings.selected && settings.settings.length > 1
     ? select('settings', '키패드 설정', settings.settings.map(s => [s, s])) : '';
   const unavailable = method === 'id_password' ? !settings.settings.length : !row && !available.length;
-  ui.showDialog('하나기업뱅킹 로그인', `<form data-submit="corporate-login" data-login="${esc(row?.id || '')}" data-method="${method}" autocomplete="off">${selection}${credential}${settingChoice}${fields.map(([name, label, pattern]) => field(name, label, `type="password" required ${pattern ? `pattern="${pattern}" inputmode="numeric"` : ''}`)).join('')}${rememberField(fields, store)}${unavailable && method === 'id_password' ? note('서버에 하나은행 키패드 설정을 먼저 설치해야 해요. 이미 설치한 개인뱅킹 설정도 공유해요.') : ''}<p class="dialog-note">${method === 'id_password' ? '기업 ID와 비밀번호로 로그인해요. 인증서 등록은 필요 없어요.' : method === 'onesign' ? '기업 ID에 연결된 기존 하나인증서를 사용해요.' : '기존 공동인증서로 기업뱅킹에 로그인해요.'} 로그인 후 계좌를 조회해 바로 연결해요.</p><p class="form-error" role="alert"></p><div class="dialog-actions">${button('닫기', 'data-ui="close"')}<button class="button primary" type="submit" ${unavailable ? 'disabled' : ''}>로그인하고 계좌 보기</button></div></form>`);
+  ui.showDialog('하나기업뱅킹 로그인', `<form data-submit="corporate-login" data-login="${esc(row?.id || '')}" data-method="${method}" autocomplete="off">${selection}${credential}${settingChoice}${fields.map(([name, label, pattern]) => field(name, label, `type="password" required ${pattern ? `pattern="${pattern}" inputmode="numeric"` : ''}`)).join('')}${rememberField(fields, store)}${unavailable && method === 'id_password' ? note('서버에 하나은행 키패드 설정을 먼저 설치해야 해요. 이미 설치한 개인뱅킹 설정도 공유해요.') : ''}<p class="dialog-note">${method === 'id_password' ? '기업 ID와 비밀번호로 로그인해요. 인증서 등록은 필요 없어요.' : method === 'onesign' ? '기업 ID에 연결된 기존 하나인증서를 사용해요.' : '기존 공동인증서로 기업뱅킹에 로그인해요.'} 로그인 후 계좌를 조회해 바로 연결해요.</p><p class="form-error" role="alert"></p><div class="dialog-actions">${button('취소', 'data-ui="close"')}<button class="button primary" type="submit" ${unavailable ? 'disabled' : ''}>로그인하고 계좌 보기</button></div></form>`);
 }
 
 async function queryAccounts(ctx, row, category = 'withdrawal') {
@@ -79,15 +81,22 @@ async function queryAccounts(ctx, row, category = 'withdrawal') {
 
 async function accountsView(ctx) {
   const logins = scopeLogins('hana_corporate');
-  const add = button('기업뱅킹 로그인', 'data-action="corporate-login-add"', 'primary');
-  const intro = heading('기업 계좌', '하나기업뱅킹의 계좌와 잔액을 확인해요.', add);
-  if (!logins.length) return intro + `<section class="panel"><div class="empty-state">${profile() ? '이 프로필에 기업 계좌가 없어요. 전체에서 로그인하고 조회한 계좌를 선택하세요.' : 'ID/PW 또는 보관한 인증서로 바로 로그인하세요.'}</div></section>`;
+  const intro = heading('기업 계좌', '계좌를 누르면 거래내역으로 이동해요.',
+    logins.length ? button('다른 ID·인증서로 로그인', 'data-action="corporate-login-add"') : '');
+  if (!logins.length) return intro + `<section class="panel"><div class="empty-state">${profile() ? '이 프로필에 기업 계좌가 없어요. 전체에서 로그인하고 조회한 계좌를 선택하세요.' : 'ID/PW 또는 보관한 인증서로 바로 로그인하세요.'}<div class="section-actions">${button('기업뱅킹 로그인', 'data-action="corporate-login-add"', 'primary')}</div></div></section>`;
   const listing = await api.get('/jobs?limit=200&area=corporate');
   const panels = await Promise.all(logins.map(async row => {
     const job = await latest('accounts', row.id, listing);
     const allowed = new Set(accounts().map(t => t.id));
-    const rows = (job?.result?.accounts || []).filter(a => !profile() || allowed.has(job.result?.candidate_targets?.[a.ref]));
-    return `<section class="panel"><div class="panel-heading"><div><h2>${esc(row.display_name)}</h2><p class="meta">${esc(ui.METHOD[row.method])} · ${job?.observed_at ? ui.time(job.observed_at) + ' 조회' : '미조회'}</p></div>${tag(row.readiness === 'ready' ? '로그인됨' : '로그인 필요', row.readiness === 'ready' ? '' : 'warning')}</div>${job ? notices(job) : ''}${rows.length ? `<div class="table-wrap"><table class="table data"><thead><tr><th>계좌</th><th>번호</th><th>통화</th><th class="num">잔액</th></tr></thead><tbody>${rows.map(a => `<tr><td>${esc(a.label)}</td><td>${esc(a.account_number)}</td><td>${esc(a.currency)}</td><td class="num">${money(a.balance)}</td></tr>`).join('')}</tbody></table></div>` : `<div class="empty-state">${job?.result?.complete ? '조회한 분류에 계좌가 없어요.' : '아직 확인한 계좌가 없어요.'}</div>`}<form class="filter-bar" data-submit="corporate-accounts" data-login="${esc(row.id)}">${select('category', '계좌 분류', CATEGORIES, job?.input?.category)}${row.readiness === 'ready' ? '<button class="button primary" type="submit">계좌 조회</button>' : ''}${button(row.readiness === 'ready' ? '다시 로그인' : '로그인', `data-action="corporate-relogin" data-login="${esc(row.id)}"`)}</form></section>`;
+    const mapping = job?.result?.candidate_targets || {};
+    const rows = (job?.result?.accounts || []).filter(a => !profile() || allowed.has(mapping[a.ref]));
+    const live = row.readiness === 'ready';
+    // A linked account opens its transaction history; the row itself is the control.
+    const line = a => {
+      const id = mapping[a.ref];
+      return `<tr ${id ? `data-row="account" data-action="corporate-account-history" data-target="${esc(id)}" tabindex="0" title="거래내역 보기"` : ''}><td data-label="계좌">${esc(a.label)}</td><td data-label="번호">${esc(a.account_number)}</td><td data-label="통화">${esc(a.currency)}</td><td class="num" data-label="잔액">${money(a.balance)}</td><td class="row-go">${id ? ui.icon('arrow') : ''}</td></tr>`;
+    };
+    return `<section class="panel"><div class="panel-heading"><div><h2>${esc(row.display_name)}</h2><p class="meta">${esc(ui.METHOD[row.method])} · ${job?.observed_at ? ui.time(job.observed_at) + ' 조회' : '미조회'}</p></div>${tag(live ? '로그인됨' : '로그인 필요', live ? '' : 'warning')}</div><form class="filter-bar" data-submit="corporate-accounts" data-login="${esc(row.id)}">${select('category', '계좌 분류', CATEGORIES, job?.input?.category)}${live ? '<button class="button primary" type="submit">계좌 조회</button>' : ''}${button(live ? '다시 로그인' : '로그인', `data-action="corporate-relogin" data-login="${esc(row.id)}"`, live ? 'secondary' : 'primary')}</form>${job ? notices(job) : ''}${rows.length ? `<div class="table-wrap"><table class="table data"><thead><tr><th>계좌</th><th>번호</th><th>통화</th><th class="num">잔액</th><th></th></tr></thead><tbody>${rows.map(line).join('')}</tbody></table></div>` : `<div class="empty-state">${job?.result?.complete ? '조회한 분류에 계좌가 없어요.' : '아직 확인한 계좌가 없어요.'}</div>`}</section>`;
   }));
   return intro + panel() + `<div class="stack">${panels.join('')}</div>`;
 }
@@ -104,18 +113,18 @@ function historyRows(job) {
   const amountKeys = raw.some(r => r.RCV_AMT_CTT !== undefined || r.PAYM_AMT_CTT !== undefined)
     ? ['금액', '입금액', '출금액'] : ['금액'];
   return notices(job) + (Array.isArray(job.result?.transactions) ? (!rows.length && !job.result?.complete ? note('확인한 거래내역이 아직 없어요. 조회가 완료된 것은 아니에요.') : ui.rowsTable(rows, {group: 'corporate-history', limit: rows.length,
-    keys: ['일자', '시각', '구분', '내용', ...amountKeys, '잔액', '통화', '메모']})) : note('거래내역을 확인하지 못했어요.')) +
+    keys: ['일자', '시각', '구분', '내용', ...amountKeys, '잔액', '통화', '메모'], num: AMOUNTS})) : note('거래내역을 확인하지 못했어요.')) +
     `<div class="list-footer">${rows.length}건 · ${job.result?.complete ? '조회 완료' : '조회 범위 미완료'}</div>`;
 }
 
 async function historyView() {
   const rows = accounts();
-  if (!rows.length) return heading('기업 거래내역', '계좌별 거래내역을 조회해요.') + note('기업 계좌를 먼저 조회하세요.') + button('기업 계좌', 'data-view="corporate-accounts"');
+  if (!rows.length) return heading('기업 거래내역', '계좌별 거래내역을 조회해요.') + `<section class="panel"><div class="empty-state">기업 계좌를 먼저 조회하면 여기서 거래내역을 볼 수 있어요.<div class="section-actions">${button('기업 계좌', 'data-view="corporate-accounts"', 'primary')}</div></div></section>`;
   const chosen = rows.find(r => r.id === state.params.target) || rows[0];
   const job = await latest('history', chosen.id, await api.get('/jobs?limit=200&area=corporate'));
   const previous = job?.input || {};
-  return heading('기업 거래내역', '기본 기간은 최근 7일이에요. 다음 페이지도 자동으로 조회해요.') +
-    `<section class="panel"><form class="filter-bar corporate-history-filter" data-submit="corporate-history">${select('target_id', '계좌', accountOptions(rows), chosen.id)}${field('start', '시작일', `type="date" value="${esc(previous.start || '')}"`)}${field('end', '종료일', `type="date" value="${esc(previous.end || '')}"`)}${select('direction', '구분', [['', '전체'], ['1', '입금'], ['2', '출금']], previous.direction)}${select('order', '정렬', [['latest', '최신순'], ['oldest', '과거순']], previous.order)}<details class="advanced-block"><summary>검색·외화·대출 옵션</summary>${select('search_type', '원화 검색', [['', '선택 안 함'], ['04', '적요'], ['03', '금액'], ['05', '받는 분'], ['02', '메모']])}${field('search', '검색어', 'maxlength="100"')}${field('currency', '외화 통화 (예: USD, ALL)', 'maxlength="3" pattern="[A-Za-z]{3}"')}${field('sequence', '대출 실행번호 (필요할 때만)', 'inputmode="numeric" pattern="[0-9]+"')}<p class="field-help">대출은 입출금 구분 없이 조회해요.</p></details><button class="button primary" type="submit">조회</button></form>${panel()}<div id="corporate-results">${job ? jobState(job) + historyRows(job) : '<div class="empty-state">계좌와 기간을 선택해 조회하세요.</div>'}</div></section>`;
+  return heading('기업 거래내역', '기간을 비우면 최근 7일을 조회해요. 다음 페이지도 자동으로 이어서 조회해요.') +
+    `<section class="panel"><form class="filter-bar corporate-history-filter" data-submit="corporate-history">${select('target_id', '계좌', accountOptions(rows), chosen.id, 'data-change="corporate-history-target"')}${field('start', '시작일', `type="date" value="${esc(previous.start || '')}"`)}${field('end', '종료일', `type="date" value="${esc(previous.end || '')}"`)}${ui.periodPresets([['1주', 6], ['1개월', 30], ['3개월', 90]])}${select('direction', '구분', [['', '전체'], ['1', '입금'], ['2', '출금']], previous.direction)}${select('order', '정렬', [['latest', '최신순'], ['oldest', '과거순']], previous.order)}<button class="button primary" type="submit">조회</button><details class="advanced-block"><summary>검색·외화·대출 옵션</summary>${select('search_type', '원화 검색', [['', '선택 안 함'], ['04', '적요'], ['03', '금액'], ['05', '받는 분'], ['02', '메모']])}${field('search', '검색어', 'maxlength="100"')}${field('currency', '외화 통화 (예: USD, ALL)', 'maxlength="3" pattern="[A-Za-z]{3}"')}${field('sequence', '대출 실행번호 (필요할 때만)', 'inputmode="numeric" pattern="[0-9]+"')}<p class="field-help">대출은 입출금 구분 없이 조회해요.</p></details></form>${panel()}<div id="corporate-results">${job ? jobState(job) + historyRows(job) : '<div class="empty-state">계좌와 기간을 선택해 조회하세요.</div>'}</div></section>`;
 }
 
 function preview(value = {}) {
@@ -163,9 +172,10 @@ async function transferView() {
   const allowed = new Set(scopeLogins('hana_corporate').map(r => r.id));
   const listing = await api.get('/jobs?limit=200&area=corporate');
   const previous = listing.jobs.filter(j => j.name === PREFIX + 'transfer.prepare' && allowed.has(j.login_id));
-  const recent = `<section class="panel"><div class="panel-heading"><h2>기업 이체 작업</h2></div>${previous.map(j => `<div class="setting-row"><span>${esc(j.fixed?.login?.display_name)} · ${ui.time(j.created_at)} ${ui.statusTags(j)}</span>${button(j.status === 'awaiting_input' ? '이어하기' : '결과 보기', `data-action="corporate-transfer-open" data-job="${esc(j.id)}"`)}</div>`).join('') || '<div class="empty-state">이체 작업이 없어요.</div>'}</section>`;
+  // Past and waiting transfers appear only once there are any.
+  const recent = previous.length ? `<section class="panel"><div class="panel-heading"><h2>진행한 이체</h2></div><div class="settings-body">${previous.map(j => `<div class="setting-row"><span>${esc(j.fixed?.login?.display_name)} · ${ui.time(j.created_at)} ${ui.statusTags(j)}</span>${button(j.status === 'awaiting_input' ? '이어하기' : '결과 보기', `data-action="corporate-transfer-open" data-job="${esc(j.id)}"`)}</div>`).join('')}</div></section>` : '';
   const intro = heading('기업 이체', '일반 원화 이체의 수취인과 금액을 확인하고 진행해요.');
-  if (!rows.length) return intro + note('기업 계좌를 조회하면 출금 계좌를 선택할 수 있어요.') + button('기업 계좌', 'data-view="corporate-accounts"') + recent;
+  if (!rows.length) return intro + `<section class="panel"><div class="empty-state">기업 계좌를 조회하면 출금 계좌를 선택할 수 있어요.<div class="section-actions">${button('기업 계좌', 'data-view="corporate-accounts"', 'primary')}</div></div></section>` + recent;
   return intro + `<form class="panel form-panel corporate-transfer-form" data-submit="corporate-transfer">${select('target_id', '출금 계좌', accountOptions(rows))}<div class="field-row">${select('bank', '받는 은행', ui.BANKS, '081')}${field('recipient', '받는 계좌', 'required inputmode="numeric" pattern="[0-9- ]+" maxlength="24"')}</div>${field('amount', '이체 금액 (원)', 'required inputmode="numeric" pattern="[0-9,]+"')}<details class="advanced-block"><summary>통장 표시·메모·지연이체</summary>${field('sender_text', '입금 통장 표시', 'maxlength="100"')}${field('recipient_text', '출금 통장 표시', 'maxlength="100"')}${field('memo', '메모', 'maxlength="100"')}${field('cms_code', 'CMS 코드', 'pattern="[A-Za-z0-9-]+" maxlength="100"')}<label><input name="delayed" type="checkbox">지연이체</label></details><div class="form-actions"><button class="button primary" type="submit">받는 분·금액 확인</button><p class="field-help">이 단계에서는 이체하지 않아요. 은행이 요구하는 인증은 내용 확인 후 입력해요.</p></div></form>${panel()}${recent}`;
 }
 
@@ -194,13 +204,16 @@ export const corporateActions = {
       if (job) {
         await refreshModel();
         if (job.result?.session_id) { await queryAccounts(ctx, login(row.id)); changeView('corporate-accounts'); }
-        else ui.showDialog('기업 로그인 결과', jobState(job) + notices(job) + button('닫기', 'data-ui="close"'));
+        else ui.showDialog('기업 로그인 결과', jobState(job) + notices(job) + close());
       }
       await render();
-    } catch (error) { ui.toast(ui.message(error.code)); }
+    } catch (error) { ui.fail(ui.message(error.code)); }
   },
   'corporate-accounts': (ctx, form) => queryAccounts(ctx, login(form.dataset.login), new FormData(form).get('category')),
   'corporate-accounts-query': (ctx, el) => queryAccounts(ctx, login(el.dataset.login)),
+  'corporate-account-history': (ctx, el) => changeView('corporate-history', {target: el.dataset.target}),
+  // Another account shows its own last result; nothing is requested from the bank.
+  'corporate-history-target': (ctx, el) => changeView('corporate-history', {target: el.value}),
   'corporate-history': async (ctx, form) => {
     const data = Object.fromEntries(new FormData(form)), chosen = target(data.target_id); delete data.target_id;
     for (const k of Object.keys(data)) if (!data[k]) delete data[k];
