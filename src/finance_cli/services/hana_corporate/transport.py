@@ -16,7 +16,8 @@ class Client:
         self.saved = saved if saved is not None else {'channel': 'corporate', 'cookies': [], 'login_verified': False}
         self.cookies = self.saved.get('cookies', [])
 
-    def request(self, stage, body=None, *, native=False, observe=None, assessor=protocol.assess, redact=(), attempt_name=None):
+    def request(self, stage, body=None, *, native=False, observe=None, assessor=protocol.assess,
+                decoder=json.loads, redact=(), attempt_name=None):
         protocol.require(stage in protocol.PATHS, 'corporate_endpoint_not_allowed')
         raw = (b'' if body is None else protocol.native_form(body)) if native else protocol.form(
             {**(body or {}), 'COMM_HEAD': (body or {}).get('COMM_HEAD', {})})
@@ -57,7 +58,7 @@ class Client:
         receipt.update(http_status=status, processing_status='received')
         try:
             decoded = gzip.decompress(data) if dict((k.lower(), v) for k, v in head).get('content-encoding', '').lower() == 'gzip' else data
-            value = json.loads(decoded)
+            value = decoder(decoded)
         except (ValueError, OSError, EOFError):
             raise protocol.Stop('response_decode_failed') from None
         receipt.update(assessor(status, value))

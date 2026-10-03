@@ -13,6 +13,7 @@ PATHS = {
     'keypad-key': '/CCOM/COM01/NFILTER_KEY.do',
     'login-idpw': '/CLGN/LGN01/CLGN010100101.do',
     'logout': '/CLGN/LGN02/CLGN020100101.do',
+    'extend': '/CCOM/COM01/RESTART_TIMER.do',
     'onesign-request': '/CCOM/COM01/HANA_ONESIGN_REQUEST.do',
     'onesign-confirm': '/CCOM/COM01/HANA_ONESIGN_CONFIRM.do',
     'withdrawal-info': '/CCOM/COM03/WDRW_ACCT_INFO_PTCL.do',

@@ -120,7 +120,7 @@ def select(session=None):
         for item in root().glob('*/session.json'):
             try:
                 value = storage.read_json(item)
-                if value.get('channel') == 'corporate' and value.get('login_verified') is True:
+                if value.get('channel') == 'corporate' and value.get('login_verified') is True and not value.get('session_ended'):
                     # Login reservation is stable across later queries and cookie saves.
                     stamp = (item.parent / 'login-attempt.json').stat().st_mtime_ns
                     candidates.append((stamp, item.parent.name))
@@ -130,4 +130,5 @@ def select(session=None):
         path = session_path(max(candidates)[1])
     saved = storage.read_json(path / 'session.json')
     require(saved.get('channel') == 'corporate' and saved.get('login_verified') is True, 'corporate_login_required')
+    require(not saved.get('session_ended'), 'corporate_session_ended')
     return path

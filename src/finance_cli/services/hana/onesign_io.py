@@ -6,7 +6,7 @@ import time
 import urllib.error
 import urllib.request
 
-from . import auth, hana_protocol, onesign_crypto as pin, onesign_issue_protocol as issue, request_activity
+from . import auth, extend, hana_protocol, onesign_crypto as pin, onesign_issue_protocol as issue, request_activity
 from . import onesign_signup_protocol as signup, onesign_compat as compat
 from .onesign_codec import encode
 from .transport import NoRedirect, USER_AGENT
@@ -48,14 +48,15 @@ class Client:
         self.transfer_paths = set()
         self.query_paths = set()
 
-    def request(self, scope, method, path, headers, body, *, web=False, auth_stage=None, observe=None):
+    def request(self, scope, method, path, headers, body, *, web=False, auth_stage=None, observe=None,
+                assessor=None, ignore_body=False):
         if not self.send:
             raise ValueError('explicit_send_required')
         allowed = {issue.PATHS[name] for name in ('instant-number','application','image','identity',
             'signup-accounts','signup-account','keypad','clock','pin-check','registration','complete-signup')} | {
             signup.WEB_PATHS[name] for name in ('clear','phone-pre','sms-send','sms-verify','eligibility',
                                               'customer','terms-status','terms-save')} | {
-            pin.BANK_NONCE_PATH, pin.LOGIN_PATH, ACCOUNTS} | self.transfer_paths | self.query_paths
+            pin.BANK_NONCE_PATH, pin.LOGIN_PATH, ACCOUNTS, extend.PATH} | self.transfer_paths | self.query_paths
         if scope == 'bank':
             if auth_stage:
                 expected = {'register':'/public/app_public_key', 'first-access':'/public/app_first_access',
@@ -97,7 +98,12 @@ class Client:
             raise pin.ProtocolError('transport_interrupted_no_automatic_retry') from None
         self.last.update(http_status=status, processing_status='response_received')
         try:
-            if auth_stage:
+            if assessor is not None:
+                assessed = assessor(status, head, raw)
+                self.last.update(assessed)
+                self.last['service_status'] = ('accepted' if assessed['accepted'] is True else
+                                               'rejected' if assessed['accepted'] is False else 'unconfirmed')
+            elif auth_stage:
                 result = auth.classify(auth_stage, status, head, status not in (204, 205))
                 self.last['service_status'] = 'accepted' if result['accepted'] else 'rejected'
             elif not (200 <= status < 300 if web else status == 200):
@@ -118,6 +124,8 @@ class Client:
             if scope == 'bank':
                 with self.state.transaction() as value:
                     value['sessions'][self.session]['cookies'] = cookies
+                if assessor is not None:
+                    self.last['cookies_saved'] = True
             else:
                 self.cookies[scope] = cookies
         except OSError:
@@ -127,7 +135,7 @@ class Client:
             raise pin.ProtocolError('service_rejected')
         if scope == 'bank' and self.last['service_status'] != 'accepted':
             raise pin.ProtocolError('service_verdict_unconfirmed')
-        if dict((k.lower(), v) for k,v in head).get('content-encoding','').lower() == 'gzip':
+        if not ignore_body and dict((k.lower(), v) for k,v in head).get('content-encoding','').lower() == 'gzip':
             raw = gzip.decompress(raw)
         self.response_headers = head
         return raw

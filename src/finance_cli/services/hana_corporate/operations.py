@@ -30,6 +30,7 @@ def operation(output, session=None, *, exchange=send_http):
         output['session'] = path.name
         with storage.lock(path / 'operation.lock'):
             saved = storage.read_json(path / 'session.json')
+            protocol.require(not saved.get('session_ended'), 'corporate_session_ended')
             profile = store.device(storage.read_json(path / 'device.json'))
             parent = storage.directory(path / 'operations')
             directory = parent / uuid.uuid4().hex

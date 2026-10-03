@@ -19,6 +19,9 @@ def add_parser(sub):
     item.add_argument('--device-file', type=Path, required=True)
     item = session.add_parser('show', help='로그인 관측 요약; 서버 유효성 확인 없음')
     item.add_argument('--session', required=True)
+    item = session.add_parser('extend', help='기존 기업 로그인 연장 1회; 재로그인 없음')
+    item.add_argument('--session', help='선택: 다른 기업 로그인 기록 사용')
+    item.add_argument('--send', action='store_true')
     item = commands.add_parser('login', help='공통 공동인증서로 기업 로그인')
     item.add_argument('--session', required=True)
     add_selection(item)
@@ -152,6 +155,9 @@ def dispatch(args):
         if args.corporate_action == 'setup':
             return keypad.install(args.package, args.settings)
         if args.corporate_action == 'session':
+            if args.corporate_session_action == 'extend':
+                from . import session
+                return session.extend(session=args.session, send=args.send)
             if args.corporate_session_action == 'show':
                 return store.inspect(args.session)
             return store.create(args.session, json.loads(args.device_file.read_text(encoding='utf-8')))

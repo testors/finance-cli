@@ -61,6 +61,8 @@ fin hana onesign inspect --name main
 
 ## 3. 새 세션 로그인과 계좌 확인
 
+로그인한 세션은 `fin hana onesign extend --name main --send`로 한 번 연장할 수 있습니다. 저장소 암호만 사용하고 PIN을 다시 요구하지 않습니다. 세션이 여럿이면 `--session`으로 선택합니다. [명령·결과·검증 범위](session-extension.md)를 참고하세요.
+
 가입 완료와 일반 서명 로그인은 별개입니다. 발급을 마친 뒤 새 세션에서 PIN으로 서명 로그인합니다.
 
 ```sh

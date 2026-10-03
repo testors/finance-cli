@@ -124,6 +124,11 @@ def add_parsers(sub,onesign_sub):
     item=onesign_sub.add_parser('rename',help='인증서 저장소 이름 변경; 참조 중이면 거절, 복호화·접속 없음')
     item.add_argument('--name',required=True)
     item.add_argument('--new-name',required=True)
+    item=onesign_sub.add_parser('extend',help='기존 하나인증서 로그인 연장 1회; PIN·재로그인 없음')
+    common(item)
+    item.add_argument('--session',help='선택: 로그인 세션이 여럿이면 지정')
+    item.add_argument('--run',help='선택: 새 실행 이름; 기본 자동 생성')
+    item.add_argument('--send',action='store_true')
     for action in ('enroll','issue','login','accounts','new-session','inspect','export-identity','activate'):
         item=onesign_sub.add_parser(action,help={'enroll':'SMS·신분증·계좌 확인부터 신규 발급까지 순서대로 진행',
             'issue':'신규 발급의 한 단계 실행','login':'새 세션에서 앱 인증과 하나인증서 서명 로그인',
@@ -171,6 +176,9 @@ def dispatch(args):
         value=onesign_setup.load(args.name)
         return {'settings':args.name,'version':value['version'],'configured':'service_profile' in value,'network_used':False}
     # Planning does not open stores, prompt for secrets or create attempts.
+    if args.operation=='onesign' and args.action=='extend' and not args.send:
+        from . import onesign_session
+        return onesign_session.extend()
     if args.operation=='transfer' and args.action!='show' and not args.send:
         return {'operation':'transfer-'+args.action,'network_used':False,'next':'same_command_with_send'}
     if args.operation=='onesign' and args.action in ('enroll','issue','login','accounts') and not args.send:
@@ -191,6 +199,9 @@ def dispatch(args):
     if args.operation=='onesign' and args.action=='activate':
         return onesign_bundle.activate(args.name,args.bundle,secret,args.settings)
     with State(args.name,secret) as state:
+        if args.operation=='onesign' and args.action=='extend':
+            from . import onesign_session
+            return onesign_session.extend(state,session=args.session,run=args.run,send=True)
         if args.operation=='transfer':
             intent=json.loads(args.input.read_text()) if args.action=='prepare' else None
             return onesign_transfer.operate(state,args.action,args.transaction,getattr(args,'run',None),getattr(args,'session',None),
