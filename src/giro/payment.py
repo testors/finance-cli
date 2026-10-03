@@ -109,6 +109,7 @@ def account_options(document):
             continue
         rows.append({'index': len(rows) + 1, 'bank_code': account.get('bankCode'),
                      'bank_name': account.get('bankName'),
+                     'account_alias': account.get('manageName'),
                      'account_masked': _mask_account(account.get('accountNo')),
                      'availability': _bank_status(query.get('bankServiceList'), account.get('bankCode'))})
     result.update(accounts=rows, loaded_count=len(rows), list_state='list')

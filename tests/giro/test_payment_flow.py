@@ -26,7 +26,8 @@ DETAIL = {'responseCode': '000', 'serviceCode': 'SYNTHETIC', 'paymentData': {
     **BILL, 'key': 'SYNTHETIC-LOOKUP-KEY', 'companyName': '합성세무서',
     'payMny': '900000', 'taxName': '합성세', 'when': '1', 'mnyEditYn': 'N'}}
 ACCOUNTS = {'responseCode': '000', 'myValidAccountList': [None, {
-    'bankCode': '001', 'bankName': '합성은행', 'accountNo': 'SYNTHETIC-ACCOUNT-1234'}],
+    'bankCode': '001', 'bankName': '합성은행', 'accountNo': 'SYNTHETIC-ACCOUNT-1234',
+    'manageName': '생활비(합성)'}],
     'bankServiceList': [{'bankCode': '001', 'bankStatus': 'true'}]}
 
 
@@ -108,6 +109,7 @@ class PaymentFlowTests(unittest.TestCase):
         draft = self.prepare()
         self.assertEqual(draft['amount'], 900000)
         self.assertEqual(draft['bank_name'], '합성은행')
+        self.assertEqual(draft['account_alias'], '생활비(합성)')
         self.assertEqual(draft['issuer'], '합성세무서')
         self.assertEqual(draft['tax_name'], '합성세')
         self.assertNotIn('SYNTHETIC-BILL', json.dumps(draft))
@@ -136,10 +138,10 @@ class PaymentFlowTests(unittest.TestCase):
             self.assertEqual(_cbc(KEY, PIN_IV, cipher, decrypt=True), bytes((5, position)) + bytes(14))
         saved = next(self.journal.root.iterdir())
         self.assertEqual(saved.stat().st_mode & 0o777, 0o600)
-        for secret in ('SYNTHETIC', 'PRIVATE-COOKIE', '1234', 'acntPwd', '합성납부자'):
+        for secret in ('SYNTHETIC', 'PRIVATE-COOKIE', '1234', 'acntPwd', '합성납부자', '생활비(합성)'):
             self.assertNotIn(secret, saved.read_text())
         self.assertNotIn('SYNTHETIC', repr(self.client.session))
-        for secret in ('SYNTHETIC', 'PRIVATE-COOKIE', 'acntPwd', '합성납부자'):
+        for secret in ('SYNTHETIC', 'PRIVATE-COOKIE', 'acntPwd', '합성납부자', '생활비(합성)'):
             self.assertNotIn(secret, json.dumps(self.client.events))
         self.assertEqual([event['endpoint'] for event in self.client.events],
                          [call[0] for call in self.server.calls])

@@ -163,10 +163,14 @@ class LiveWorkflowTests(unittest.TestCase):
         return result, approval, secret
 
     def test_cancelled_review_never_collects_password_or_sends_payment(self):
+        accounts = self.server.responses['accounts.payable'][1]['myValidAccountList']
+        next(row for row in accounts if row is not None)['manageName'] = '생활비(합성)'
         (result, code), approval, secret = self.payment('취소')
         self.assertEqual(code, 0)
         self.assertFalse(result['payment_attempted'])
         self.assertIn('900,000', approval.call_args[0][0])
+        self.assertIn('생활비(합성) · ', approval.call_args[0][0])
+        self.assertEqual(result['review']['account_alias'], '생활비(합성)')
         secret.assert_not_called()
         self.assertNotIn('national.payment', self.server.steps)
 

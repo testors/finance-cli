@@ -152,6 +152,7 @@ class PaymentWorkflow:
                       'tax_name': detail['paymentData'].get('taxName'),
                       'bill_number_masked': _mask_account(fields['거래번호']),
                       'bank_name': prepared.fields.get('납부은행'), 'account_masked': prepared.account_masked,
+                      'account_alias': options['accounts'][selected-1].get('account_alias'),
                       'authentication': prepared.authentication,
                       'additional_pin_required': prepared.authentication == 'additional'
                           and prepared.fields.get('addCertMethod') == '2',

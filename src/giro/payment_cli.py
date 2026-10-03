@@ -7,6 +7,12 @@ from .query_flow import collect_bills, response_report
 from .session_store import SessionStore
 
 
+def account_label(account):
+    label = f"{account['bank_name']} {account['account_masked']}"
+    alias = (account.get('account_alias') or '').strip()
+    return f'{alias} · {label}' if alias else label
+
+
 def _choose(rows, label, display):
     if not rows: raise GiroError(label+' 항목을 확인하지 못했습니다.')
     choices = [(index, row) for index, row in enumerate(rows, 1) if row is not None]
@@ -48,8 +54,7 @@ def run_payment(args):
                 f"{row['issuer']} · {row['amount_raw']}원 · 기한 {row['due_date_raw']}")
             workflow = PaymentWorkflow(client)
             def account(options):
-                return _choose(options['accounts'], '납부계좌', lambda row:
-                    f"{row['bank_name']} {row['account_masked']}")
+                return _choose(options['accounts'], '납부계좌', account_label)
             review = workflow.prepare(rows[selected-1]['identifiers'], account_selector=account,
                                       amount=args.amount, tax_type=tax_type, send=True)
             result['review'] = review
@@ -61,7 +66,7 @@ def run_payment(args):
                 result['next_action'] = 'additional_auth_not_supported'
                 return result, 4
             prompt = (f"{review['issuer']} / {review['tax_name'] or tax_type} / 고지 {review['bill_number_masked']}\n"
-                      f"납부액 {review['amount']:,}원\n{review['bank_name']} {review['account_masked']}\n"
+                      f"납부액 {review['amount']:,}원\n{account_label(review)}\n"
                       '이 금액을 납부하려면 "납부"를 입력하세요:')
             if answer(prompt).strip() != '납부':
                 result['next_action'] = 'payment_cancelled'

@@ -19,7 +19,7 @@ from giro.response import receive, transport_failure
 def accounts():
     return {'responseCode': '000', 'myValidAccountList': [
         {'bankCode': '001', 'bankName': '합성은행', 'accountNo': 'SYNTHETIC-ACCOUNT-1234',
-         'manageName': 'PRIVATE-NICKNAME', 'bankStatus': 'false'}],
+         'manageName': '생활비(합성)', 'bankStatus': 'false'}],
         'bankServiceList': [{'bankCode': '001', 'bankStatus': True, 'disableCode': ''}]}
 
 
@@ -35,7 +35,7 @@ class AccountTests(unittest.TestCase):
         self.assertTrue(result['app_success'])
         self.assertEqual(result['accounts'][0]['availability'], 'available')
         self.assertNotIn('SYNTHETIC-ACCOUNT', json.dumps(result))
-        self.assertNotIn('PRIVATE-NICKNAME', json.dumps(result))
+        self.assertEqual(result['accounts'][0]['account_alias'], '생활비(합성)')
 
     def test_bank_conditions_do_not_erase_success(self):
         for status, disabled, expected in (
