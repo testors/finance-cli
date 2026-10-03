@@ -134,6 +134,12 @@ class GiroTests(ServerCase):
         self.assertEqual(detail['result']['items'], [{'name': '세목', 'value': '합성세'}])
         accounts = self.run_job(self.submit('giro.accounts.list'))
         self.assertEqual(accounts['result']['accounts'][0]['name'], '합성 생활비')
+        for verified in (receipts, detail, accounts):
+            self.assertEqual(verified['verification'], 'live_verified')
+            self.assertIn('웹', verified['verification_note'])
+        # Existing stored jobs also project the current review on listing.
+        listed = {j['id']: j for j in self.get('/jobs').json()['jobs']}
+        self.assertEqual(listed[accounts['id']]['verification'], 'live_verified')
         self.assert_private(accounts)
         self.assertEqual(reservation.read_bytes(), before)
 
@@ -160,6 +166,7 @@ class GiroTests(ServerCase):
         job = self.run_job(self.submit('giro.bills.list'))
         self.assertEqual(job['outcome'], 'rejected', job)
         self.assertTrue(job['result']['no_bills_reported'])
+        self.assertEqual(job['verification'], 'live_partial')
         self.assertIsNone(job['result']['bills'])
         self.assertNotIn('total_count', job['result'])
         self.responses['national.list']['errorInfo']['errorName'] = '다른 오류'
@@ -263,4 +270,4 @@ class GiroTests(ServerCase):
         row = self.get('/capabilities').json()
         features = {f['id']: f for f in row['features']}
         self.assertEqual(features['giro-pay']['status'], 'available')
-        self.assertEqual(features['giro-pay']['verification'], 'live_untested')
+        self.assertEqual(features['giro-pay']['verification'], 'live_partial')

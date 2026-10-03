@@ -317,6 +317,9 @@ def public(con, job, *, listing=False):
     if adapter and adapter.service == 'hana':
         from finance_cli.core.live_verification import hana_job
         value.update(hana_job(job['name']))
+    if adapter and adapter.service == 'giro':
+        from finance_cli.core.live_verification import giro_job
+        value.update(giro_job(job['name']))
     if job['name'].startswith('cli.'):
         value['command'] = snapshot.get('command')
     attempt = loads(job['attempt'], {})

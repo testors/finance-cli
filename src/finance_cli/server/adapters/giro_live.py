@@ -68,7 +68,11 @@ def unseal(session, job_id):
 
 class Giro(Adapter):
     area = service = 'giro'
-    verification = 'live_untested'  # CLI evidence is shown separately in capabilities.
+
+    @property
+    def verification(self):
+        from finance_cli.core.live_verification import giro_job
+        return giro_job(self.name)['verification']
 
     def ready(self, login):
         if login['method'] != 'pin':

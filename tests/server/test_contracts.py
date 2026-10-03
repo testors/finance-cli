@@ -18,10 +18,23 @@ class CapabilityTests(ServerCase):
         self.enroll()
         states = {f['id']: f for f in self.get('/capabilities').json()['features']}
         self.assertEqual(states['giro-live']['status'], 'available')
-        self.assertEqual(states['giro-live']['verification'], 'live_untested')
+        self.assertEqual(states['giro-live']['verification'], 'live_partial')
         self.assertEqual(states['hana-issuance']['status'], 'available')
         self.assertEqual(states['hometax-tax']['verification'], 'live_untested')
         self.assertEqual(states['giro-bills']['verification'], 'offline')
+        from finance_cli.cli.main import capabilities as cli_capabilities
+        from finance_cli.core.live_verification import giro_job
+        report = cli_capabilities()['services']['giro']['live_verification']
+        for feature in ('giro-login', 'giro-accounts', 'giro-receipts'):
+            self.assertEqual(states[feature]['verification'], 'live_verified')
+            for job in states[feature]['jobs']:
+                self.assertEqual(job['verification'], report['jobs'][job['name']]['verification'])
+                self.assertEqual(job['verification_note'], giro_job(job['name'])['verification_note'])
+                self.assertEqual(adapters.get(job['name']).verification, job['verification'])
+        self.assertEqual(states['giro-pay']['verification'], 'live_partial')
+        self.assertIn('웹 납부 실행', states['giro-pay']['verification_note'])
+        self.assertIn('311', states['giro-live']['verification_note'])
+        self.assertEqual(self.get('/jobs').json()['jobs'], [])
         unknown = self.post('/jobs', {'name': 'giro.live.pay'})
         self.assertEqual((unknown.status_code, unknown.json()['error']), (404, 'job_name_not_registered'))
 

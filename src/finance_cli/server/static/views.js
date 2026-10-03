@@ -476,8 +476,10 @@ function billsResult(job) {
 
 async function giroStatusView(ctx) {
   const job = await latest('giro.readiness');
+  const features = ['giro-login', 'giro-live', 'giro-pay', 'giro-accounts', 'giro-receipts']
+    .map(id => state.capabilities.features.find(f => f.id === id)).filter(Boolean);
   return heading('지로 연결 준비', '등록한 CLI 기기로 웹에서도 로그인·조회·납부할 수 있어요.', ui.button('지로 로그인', 'data-action="giro-login"', 'primary')) +
-    `<section class="panel"><div class="panel-heading"><h2>모바일지로 지원 상태</h2>${tag('웹 연결 구현', 'info')}</div><div class="settings-body">${[['간편비밀번호 로그인', '웹 지원 · CLI 실사용 확인'], ['국세 고지 조회·등록계좌 납부', '웹 지원 · CLI 실사용 확인'], ['지방세·관세 조회·납부', '웹 지원 · 실사용 검증 미완료'], ['등록계좌·납부내역 상세', '웹 지원 · 실사용 검증 미완료'], ['기기 등록·보호 자료 설치', '서버에서 CLI로 준비'], ['인증서·FIDO 추가 인증', '미지원']].map(([l, v]) => `<div class="setting-row"><span>${l}</span><strong>${v}</strong></div>`).join('')}<p class="field-help">웹 경로는 합성 응답으로 검증했어요. 웹에서의 실제 로그인·납부 확인은 아직 남아 있어요. 최초 기기 등록은 서버에서 <span class="code">fin giro auth register --send</span>로 진행해요.</p></div></section>` +
+    `<section class="panel"><div class="panel-heading"><h2>모바일지로 지원 상태</h2>${tag('웹 연결 구현', 'info')}</div><div class="settings-body">${features.map(f => `<div class="setting-row"><span>${esc(f.title)}<small class="meta">${esc(f.verification_note)}</small></span><strong>${ui.verification(f.verification)}</strong></div>`).join('')}<div class="setting-row"><span>기기 등록·보호 자료 설치</span><strong>서버에서 CLI로 준비</strong></div><div class="setting-row"><span>인증서·FIDO 추가 인증</span><strong>미지원</strong></div><p class="field-help">확인한 실사용 경로를 기능별로 표시해요. 최초 기기 등록은 서버에서 <span class="code">fin giro auth register --send</span>로 진행해요.</p></div></section>` +
     `<section class="panel"><div class="panel-heading"><h2>서버 준비 상태</h2>${ui.button('준비 상태 확인', 'data-action="giro-readiness"', 'secondary', 'refresh')}</div>${panel('job-panel', job)}<div id="results">${job?.result ? giroPlan(job.result) : ''}</div></section>`;
 }
 

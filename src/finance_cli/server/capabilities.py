@@ -5,7 +5,7 @@ server-managed local tool, or as planned. ``available`` never promises a live
 login or a verified target; the server re-checks readiness when a job runs.
 """
 from . import adapters, model
-from finance_cli.core.live_verification import HANA_FEATURE_NOTES, REVIEWED_ON, combined_level, hana_job
+from finance_cli.core.live_verification import HANA_FEATURE_NOTES, REVIEWED_ON, GIRO_REVIEWED_ON, combined_level, hana_job, giro_job
 
 FEATURES = (
     # area, id, title, placement, jobs
@@ -122,6 +122,7 @@ def feature_state(feature, levels, cache):
                 else cache[adapter.service]
             row['jobs'].append({**adapter.describe(), 'status': 'setup_required' if reasons else 'available',
                                 'reasons': reasons, **(hana_job(adapter.name) if adapter.service == 'hana'
+                                                      else giro_job(adapter.name) if adapter.service == 'giro'
                                                       else {'verification': adapter.verification or levels.get(adapter.service)})})
             if reasons:
                 row['status'] = 'setup_required'
@@ -132,10 +133,9 @@ def feature_state(feature, levels, cache):
         row['verification'] = combined_level(j['verification'] for j in row['jobs'])
         row['verification_note'] = '웹 경로는 합성 검증했습니다. ID/PW의 실사용 확인은 기존 CLI 로그인 기록 기준이며 인증서 로그인·이체의 웹 실사용은 미확인입니다.'
     if service == 'giro':
-        row['verification'] = 'offline' if placement == 'local' or feature_id in ('giro-bills', 'giro-readiness') else 'live_untested'
-        row['verification_reviewed_at'] = '2026-10-03'
-        row['verification_note'] = ('CLI에서 기기 등록·PIN 로그인·세션 재사용·국세 조회·등록계좌 단건 납부와 추가 PIN 인증을 확인했습니다. '
-            '웹 경로는 합성 검증했으며 웹 실사용은 미확인입니다. 지방세·관세 납부와 별도 계좌·납부내역 조회의 실사용 검증은 남아 있습니다.')
+        row['verification'] = combined_level(j['verification'] for j in row['jobs'])
+        row['verification_reviewed_at'] = GIRO_REVIEWED_ON
+        row['verification_note'] = ' '.join(dict.fromkeys(j['verification_note'] for j in row['jobs']))
     if service == 'hana':
         row['verification'] = (None if placement == 'planned' else 'offline' if placement == 'local' else
                                combined_level(j['verification'] for j in row['jobs']))
@@ -150,7 +150,7 @@ def global_capabilities():
     levels = verification_levels()
     cache = {}
     return {'features': [feature_state(f, levels, cache) for f in FEATURES], 'verification': levels,
-            'verification_reviewed_at': REVIEWED_ON,
+            'verification_reviewed_at': max(REVIEWED_ON, GIRO_REVIEWED_ON),
             'jobs': adapters.names(), 'states': ['available', 'setup_required', 'planned', 'local_only'],
             'readiness': ['ready', 'query_only', 'login_required', 'input_required', 'target_unverified']}
 

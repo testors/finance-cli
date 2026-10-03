@@ -138,7 +138,7 @@ class GiroReadiness(Adapter):
                  'trust_cache_present': (root / 'public-trust').is_dir()}
         return StepResult(result={'setup': setup, 'verification': capabilities()['services']['giro']['live_verification'],
                                  'network_used': False, 'trust_validity_checked': False,
-                                 'web_live_verified': False, 'registration_location': 'cli'},
+                                 'web_verification': capabilities()['web']['giro']['verification'], 'registration_location': 'cli'},
                           outcome='success')
 
 

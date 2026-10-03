@@ -479,3 +479,20 @@ test('coverage explains partial live evidence and distinguishes login paths with
   assert.equal(ui.calls.length, 0);
   assert.equal(ui.asked.length, 0);
 });
+
+
+test('Giro readiness uses reviewed capability levels instead of hardcoded untested labels', async t => {
+  const ui = await setup(t);
+  ui.state.capabilities.features = [
+    {id: 'giro-login', title: '간편비밀번호 로그인', verification: 'live_verified', verification_note: '웹 PIN 로그인 성공 확인.'},
+    {id: 'giro-receipts', title: '납부내역', verification: 'live_verified', verification_note: '웹 납부내역 목록·상세 조회 성공 확인.'},
+    {id: 'giro-pay', title: '지로 납부', verification: 'live_partial', verification_note: 'CLI 국세 납부 성공. 웹 납부 실행은 미확인.'},
+  ];
+  ui.document.querySelector('main').innerHTML = await ui.views.girostatus(ui.ctx);
+  const text = ui.document.querySelector('main').textContent;
+  assert.match(text, /웹 PIN 로그인 성공 확인/);
+  assert.match(text, /웹 납부내역 목록·상세 조회 성공 확인/);
+  assert.match(text, /일부 실사용 확인/);
+  assert.doesNotMatch(text, /실서버 미검증|웹에서의 실제 로그인·납부 확인은 아직/);
+  assert.equal(ui.calls.length, 0);
+});

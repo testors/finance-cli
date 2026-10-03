@@ -13,7 +13,7 @@ def output(value):
 
 
 def capabilities():
-    from finance_cli.core.live_verification import HANA_LEVEL, REVIEWED_ON, hana_report
+    from finance_cli.core.live_verification import HANA_LEVEL, REVIEWED_ON, hana_report, giro_report
     return {'schema_version': 1, 'services': {
         'hana': {'offline': ['protocol', 'shared-certificate-login-signature', 'onesign-vault-bundle',
                             'user-package-settings-extraction', 'onesign-identity-initialization', 'onesign-identity-removal', 'onesign-identity-rename'],
@@ -57,14 +57,7 @@ def capabilities():
                           'single-local-account-payment', 'single-customs-account-payment', 'payment-review',
                           'registered-account-list', 'receipt-list', 'receipt-detail'],
                  'live_login': True, 'live_tested': False, 'verification': 'live_partial',
-                 'live_verification': {'reviewed_at': '2026-10-03', 'source': 'observed_cli_service_verdicts',
-                    'verified': ['device-registration', 'pin-login', 'encrypted-session-save',
-                                 'saved-session-reuse', 'own-national-tax-query', 'payment-review',
-                                 'single-national-account-payment'],
-                    'unverified': ['own-local-tax-query', 'own-customs-query',
-                                   'single-local-account-payment', 'single-customs-account-payment',
-                                   'registered-account-list', 'receipt-list', 'receipt-detail'],
-                    'note': '기기 등록·PIN 로그인·세션 재사용·국세 조회·납부 준비 성공 확인. 사용자가 실행한 국세 단건 계좌 납부와 추가 PIN 인증 성공, 영수증의 고지·금액 일치 확인. 사후 국세 조회는 고지내용 없음(311) 응답. 지방세·관세 납부와 별도 납부내역 조회는 미확인.'},
+                 'live_verification': giro_report(),
                  'requirements': ['private prepared protection profile', 'current recipient trust and CRLs',
                                   'existing personal member; SKT/SKM/LGT/LGM for registration',
                                   'own UID already registered for tax lists', 'explicit --send'],
@@ -80,7 +73,8 @@ def capabilities():
                           'onesign-staged-issuance', 'onesign-shared-session-queries', 'onesign-security-inquiry'],
                 'server_managed': ['certificate-export', 'onesign-settings-and-bundle-transfer', 'runtime-install',
                                    'device-registration-files', 'giro-device-registration-and-protection-setup'],
-                'giro': {'implemented': True, 'verification': 'live_untested',
+                'giro': {'implemented': True, 'verification': 'live_partial',
+                         'live_verification': giro_report()['jobs'],
                          'registration': 'reuse existing CLI device',
                          'session_storage': 'isolated encrypted web sessions',
                          'payment_reservation': 'shared with CLI', 'automatic_login_or_retry': False},

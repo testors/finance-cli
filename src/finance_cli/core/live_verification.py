@@ -61,3 +61,36 @@ def hana_report():
                            'transfer-history-detail', 'security-queries-other-than-onesign-limits',
                            'final-transfer-confirmation', 'fresh-session-account-preflight',
                            'all-issuance-and-transfer-authentication-branches']}
+
+
+# Reviewed CLI and web service verdicts, not an automatic promotion based on
+# local job completion. No account, bill, session or receipt contents belong here.
+GIRO_REVIEWED_ON = '2026-10-03'
+GIRO_JOBS = {
+    'giro.login': ('live_verified', '웹 PIN 로그인·암호화 세션 저장 성공 확인.'),
+    'giro.bills.list': ('live_partial', '국세 목록·상세는 CLI에서 성공 확인. 웹 국세·지방세·관세 조회는 “고지내용 없음”(311) 응답 확인. 고지가 있는 웹 목록은 미확인.'),
+    'giro.payment.options': ('live_partial', '국세 상세·납부 가능 계좌 조회는 CLI에서 성공 확인. 웹 납부계좌 선택과 지방세·관세 상세는 미확인.'),
+    'giro.payment.prepare': ('live_partial', '국세 단건 계좌 납부·추가 PIN 인증은 CLI에서 성공 확인. 웹 납부 실행과 지방세·관세 납부는 미확인.'),
+    'giro.accounts.list': ('live_verified', '웹 등록계좌 목록·계좌 별칭 조회 성공 확인.'),
+    'giro.receipts.list': ('live_verified', '웹 납부내역 목록 조회 성공 확인. 관측한 기간·페이지 기준.'),
+    'giro.receipts.detail': ('live_verified', '웹 납부내역 상세 조회 성공 확인. 관측한 납부내역 기준.'),
+}
+
+
+def giro_job(name):
+    default = ('offline', '기관 통신 없는 로컬 자료 처리.') if name in ('giro.bills.parse', 'giro.readiness') \
+        else ('live_untested', '해당 경로의 실사용 확인 기록이 없습니다.')
+    level, note = GIRO_JOBS.get(name, default)
+    return {'verification': level, 'verification_note': note, 'verification_reviewed_at': GIRO_REVIEWED_ON}
+
+
+def giro_report():
+    return {'reviewed_at': GIRO_REVIEWED_ON, 'source': 'observed_cli_and_web_service_verdicts',
+            'verified': ['device-registration', 'pin-login', 'encrypted-session-save', 'saved-session-reuse',
+                         'own-national-tax-query', 'payment-review', 'single-national-account-payment',
+                         'registered-account-list', 'receipt-list', 'receipt-detail'],
+            'unverified': ['own-local-tax-query', 'own-customs-query',
+                           'single-local-account-payment', 'single-customs-account-payment',
+                           'web-query-with-bills', 'web-payment-execution'],
+            'jobs': {name: giro_job(name) for name in GIRO_JOBS},
+            'note': 'CLI 기기 등록·국세 조회·단건 계좌 납부·추가 PIN 인증 성공 확인. 웹 PIN 로그인·세션 저장·등록계좌·납부내역 목록/상세 조회 성공 확인. 웹 세금 목록은 고지내용 없음(311) 응답 확인. 웹 납부 실행과 지방세·관세 납부는 미확인.'}
