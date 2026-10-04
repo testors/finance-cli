@@ -22,4 +22,6 @@ fin giro session extend --send
 
 세 경로는 합성 검증을 마쳤으며 실서버 연장 수락은 아직 확인하지 않았습니다. 만료된 세션을 복구하거나 자동으로 재로그인하지 않습니다. 주기 실행이나 오류 후 자동 재시도도 하지 않습니다. `server_expires_at=null`이며 로컬 타이머 값으로 서버 만료시각을 추정하지 않습니다.
 
+웹앱은 같은 요청을 `hana.session.extend`, `hana.onesign.session.extend`, `hana.corporate.session.extend`, `giro.session.extend` 작업으로 실행합니다. **자동 로그인 연장**을 켠 브라우저에서 웹앱을 열어 둔 동안에만, 세션의 10분 유휴 제한 1분 30초 전에 한 번 보냅니다. 연장이 성공하지 않으면 다시 보내지 않으며 세션은 제한 시각에 로그아웃 처리됩니다. 자세한 동작은 [가이드의 작업과 결과 읽기](guide.md#작업과-결과-읽기)를 참고하세요.
+
 기관 수락과 저장·출력 처리는 별개입니다. 은행이 수락한 뒤 파일 저장이 실패해도 `accepted`/`login_extension_accepted`는 유지하고 `processing_status`, `cookies_saved`, `session_saved` 또는 `processing_issues`에 처리 상태를 표시합니다. 지로는 `app_success`와 `session_processing_issues`를 따로 봅니다. 자동화에서는 `fin --format json-v1 ...`을 사용할 수 있습니다.

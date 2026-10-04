@@ -446,3 +446,9 @@ label.check input{margin-top:4px}
 .switch.on .switch-track i{transform:translateX(16px)}
 .switch.on{color:#067b68}
 @container finance (max-width:700px){.tab-countdown{font-size:10px;min-width:26px}}
+@container finance (max-width:700px){
+  /* The countdown sits under the area name so four tabs still fit one row. */
+  .area-tab{display:grid;grid-template-columns:auto auto;column-gap:5px;align-items:center;justify-content:center}
+  .area-tab .workspace-icon{grid-row:1 / span 2}
+  .area-tab .tab-countdown{grid-column:2;min-width:0;line-height:1;text-align:left;margin-top:-3px}
+}

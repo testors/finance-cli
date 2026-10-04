@@ -111,8 +111,12 @@ function serverNow() {
   return clock?.server === undefined ? Date.now() / 1000 : clock.server + Date.now() / 1000 - clock.local;
 }
 
+/* Institutions whose sessions follow the local idle limit; the server sends each deadline. */
+const IDLE_INSTITUTIONS = ['hana', 'hana_corporate', 'giro'];
+const LISTS = ['accounts', 'settings', 'corporate-accounts', 'giro-live', 'giro-receipts', 'giro-accounts'];
+
 export function bankSessionExpired(row) {
-  if (row?.institution !== 'hana' || !row.session?.idle_expires_at) return false;
+  if (!IDLE_INSTITUTIONS.includes(row?.institution) || !row.session?.idle_expires_at) return false;
   return serverNow() >= row.session.idle_expires_at;
 }
 
@@ -142,9 +146,9 @@ function tick() {
 async function sessionLapsed() {
   renderTabs();
   await refreshLogins().catch(() => {});
-  ui.toast('10분 동안 은행 요청이 없어 로그아웃 처리됐어요. 계속하려면 다시 로그인하세요.');
+  ui.toast('10분 동안 요청이 없어 로그아웃 처리됐어요. 계속하려면 다시 로그인하세요.');
   // Screens that list sessions show it at once; a screen with a form or an open dialog is left as it is.
-  if (['accounts', 'settings'].includes(state.view) && !document.querySelector('#detail-dialog')?.open) render();
+  if (LISTS.includes(state.view) && !document.querySelector('#detail-dialog')?.open) render();
 }
 
 /* Area tabs at the top of the main page; an area with a live login has a lit icon
@@ -195,9 +199,12 @@ export function extensionState(row) {
   if (!extensionJob(row)) return 'unsupported';
   if (!state.autoExtend) return 'off';
   if (extendStopped.has(row.current_session_id)) return 'stopped';
-  if (row.method === 'onesign' && !state.vaults[onesignStore(row)]) return 'locked';
+  if (needsStore(row) && !state.vaults[onesignStore(row)]) return 'locked';
   return 'on';
 }
+
+/* Only a personal OneSign extension opens the sealed store; its passphrase must be remembered. */
+const needsStore = row => row.institution === 'hana' && row.method === 'onesign';
 
 export function setAutoExtend(on) {
   state.autoExtend = Boolean(on);
@@ -232,7 +239,7 @@ function claimExtension(row) {
 function stopExtension(row, reason) {
   extendStopped.set(row.current_session_id, reason);
   ui.toast(`${row.display_name}: 자동 로그인 연장이 되지 않았어요 (${reason}). 다시 시도하지 않으며, 이 세션은 만료 시각에 로그아웃 처리돼요.`);
-  if (['accounts', 'settings'].includes(state.view) && !document.querySelector('#detail-dialog')?.open) render();
+  if (LISTS.includes(state.view) && !document.querySelector('#detail-dialog')?.open) render();
 }
 
 export async function extendLogin(id) {
@@ -248,7 +255,7 @@ export async function extendLogin(id) {
     let job;
     try {
       // A remembered OneSign store passphrase is supplied by the server, never by the browser.
-      job = await submit(extensionJob(row), {login_id: id, ...(row.method === 'onesign' ? {secrets: {}} : {})});
+      job = await submit(extensionJob(row), {login_id: id, ...(needsStore(row) ? {secrets: {}} : {})});
     } catch (error) {
       // Busy: another job is using this session right now, and its own request moves the limit.
       if (error.code === 'resource_busy') extendAfter.set(id, Date.now() + 20000);
@@ -278,9 +285,12 @@ export async function ensureBankSession(ctx, id) {
   return false; // Logging in never replays the interrupted operation.
 }
 
+/* Jobs that send on an existing session of an idle-limited institution. A login makes a new
+   session and a local step sends nothing, so an expired session stops neither. */
 function usesBankSession(name) {
-  return name.startsWith('hana.') && !['hana.login', 'hana.onesign.login',
-    'hana.history.export', 'hana.onesign.history.export'].includes(name);
+  if (!/^(hana|giro)\./.test(name)) return false;
+  return !/(^|\.)login(-[a-z]+)?$/.test(name) && !name.endsWith('.history.export')
+    && !['giro.bills.parse', 'giro.readiness'].includes(name);
 }
 
 export function setProfile(id) {
@@ -465,7 +475,7 @@ function makeContext(token) {
         ui.fail(ui.message(error.code));
         return null;
       });
-      if (final?.name?.startsWith('hana.') && final.login_id) {
+      if (/^(hana|giro)\./.test(final?.name || '') && final.login_id) {
         await refreshLogins().catch(() => {}); // A display refresh cannot change the job's outcome.
         if (final.local?.stopped === 'session_idle_expired' && context.current()) {
           await expiredBankLogin(context, final.login_id);

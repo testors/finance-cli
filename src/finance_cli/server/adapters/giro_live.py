@@ -285,6 +285,24 @@ class Accounts(Session):
             return query_result(ctx, value, {'accounts': value.get('accounts')})
 
 
+class Extend(Session):
+    """One encrypted server-time query as session activity. Whether the server moves its own
+    timeout is not confirmed; the outcome is only that query's decision."""
+    name = 'giro.session.extend'
+    title = '지로 세션 유지'
+
+    def run(self, ctx, step):
+        from giro import session as service
+        with self.store(ctx) as store:
+            ctx.reserve()
+            value = service.extend(send=True, store=store)
+            if value.get('session_ended') is True and value.get('callback') != 'disconnected_session':
+                ctx.mark_session(ctx.session['id'], 'expired', 'institution_session_ended')
+            return query_result(ctx, value, pick(value, ('request_accepted', 'login_extension_accepted', 'extension_effect',
+                                                         'session_ended', 'server_expires_at',
+                                                         'session_current_validity')))
+
+
 def query_result(ctx, value, result):
     fields = observed(ctx, value, result)
     for event in value.get('events', []):
@@ -343,4 +361,4 @@ class ReceiptDetail(FromParent):
             return StepResult(**observed(ctx, query_flow.response_report(response), result))
 
 
-ADAPTERS = (Login(), Bills(), PaymentOptions(), Payment(), Accounts(), Receipts(), ReceiptDetail())
+ADAPTERS = (Login(), Bills(), PaymentOptions(), Payment(), Accounts(), Extend(), Receipts(), ReceiptDetail())

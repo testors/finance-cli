@@ -6,7 +6,7 @@ import * as ui from './ui.js';
 import {certificateActions} from './certificates.js';
 import {giroActions, giroViews, giroLogin} from './giro.js';
 import {corporateActions, corporateViews, corporateLogin} from './corporate.js';
-import {applyRemember, askSecrets, bankSessionExpired, changeView, ensureBankSession, expiredBankLogin, extensionState, jobState, login, onesignStore, profile, refreshModel, rememberField,
+import {applyRemember, askSecrets, bankSessionExpired, changeView, ensureBankSession, expiredBankLogin, extensionJob, extensionState, jobState, login, onesignStore, profile, refreshModel, rememberField,
   render, scopeLogins, scopeTargets, SECRET_LABELS, secretFields, setAutoExtend, showJob, state, target} from './app.js';
 
 const {esc, icon, tag, note, heading, money} = ui;
@@ -611,7 +611,7 @@ const SESSION_LABEL = {usable: '사용 가능', consumed: '세션 사용함', ex
 
 function loginStatus(row) {
   if (row.disabled) return tag('사용 중지', 'neutral');
-  if (bankSessionExpired(row)) return tag('로그아웃됨', 'warning') + '<span class="meta">10분 동안 은행 요청이 없었어요</span>';
+  if (bankSessionExpired(row)) return tag('로그아웃됨', 'warning') + '<span class="meta">10분 동안 요청이 없었어요</span>';
   if (row.readiness === 'query_only') return tag('조회용 세션 있음', '') + '<span class="meta">새 이체 시 로그인 필요</span>';
   if (row.readiness === 'ready') return tag('로그인됨', '') + (row.session?.checked_at ? `<span class="meta">확인 ${ui.time(row.session.checked_at)}</span>` : '');
   const session = row.session;
@@ -647,8 +647,8 @@ function signingLines(row) {
     const reg = row.registration || {};
     lines.push(['앱 등록 정보', reg.app_profile?.configured && reg.login_input?.configured ? '연결됨' : '서버에서 연결 필요', null]);
   }
-  // One switch for this browser; each bank connection shows what it does for its own session.
-  if (row.institution === 'hana') lines.push(['로그인 자동 연장', state.autoExtend ? extensionNote(row) || '켜짐 · 로그인해 있는 동안 만료 전에 연장' : '꺼짐', 'auto-extend-toggle']);
+  // One switch for this browser; each connection with an idle limit shows what it does for its own session.
+  if (['hana', 'hana_corporate', 'giro'].includes(row.institution)) lines.push(['로그인 자동 연장', state.autoExtend ? extensionNote(row) || '켜짐 · 로그인해 있는 동안 만료 전에 연장' : '꺼짐', 'auto-extend-toggle']);
   return lines.map(([label, value, action, store]) => `<div class="connection-setting"><span>${esc(label)}</span><strong>${value ? esc(value) : '<em>미지정</em>'}</strong>${action ? `<button type="button" class="text-button" data-action="${action}" data-login="${esc(row.id)}" ${store ? `data-store="${esc(store)}"` : ''}>${action === 'unlock-vault' ? '잠금 해제' : action === 'lock-vault' ? '잠그기' : action === 'auto-extend-toggle' ? (state.autoExtend ? '끄기' : '켜기') : '변경'}</button>` : ''}</div>`).join('');
 }
 
@@ -939,9 +939,17 @@ export const actions = {
     }
     await runForLogin(ctx, name, row, {}, {secrets, onDone: async job => { linking(job); await afterModel(ctx); }});
   },
+  // One extension with the login's own job; only a personal OneSign login opens its store for it.
   extend: async (ctx, button) => {
     const row = login(button.dataset.login);
-    await runForLogin(ctx, 'hana.session.extend', row, {}, {onDone: job => ui.toast(job.outcome === 'success' ? '로그인 연장 요청이 접수되었어요. 현재 세션 상태는 다음 조회에서 확인해요.' : ui.OUTCOME[job.outcome]?.[0])});
+    const name = extensionJob(row);
+    if (!name) return;
+    let secrets;
+    if (row.institution === 'hana' && row.method === 'onesign') {
+      secrets = await askSecrets('로그인 연장', [SECRET_LABELS.vault_passphrase], '로그인한 세션을 한 번 연장해요.', {store: onesignStore(row)});
+      if (!secrets) return;
+    }
+    await runForLogin(ctx, name, row, {}, {secrets, onDone: job => ui.toast(job.outcome === 'success' ? '로그인 연장 요청이 접수되었어요. 현재 세션 상태는 다음 조회에서 확인해요.' : `로그인 연장: ${ui.OUTCOME[job.outcome]?.[0] || job.status}`)});
   },
   'register-candidate': async (ctx, button) => {
     try {
@@ -1073,7 +1081,7 @@ export const actions = {
   'auto-extend-toggle': async () => {
     setAutoExtend(!state.autoExtend);
     ui.toast(state.autoExtend ? '자동 로그인 연장을 켰어요. 이 브라우저에서 앱을 열어 둔 동안 만료 전에 연장해요.'
-      : '자동 로그인 연장을 껐어요. 세션은 마지막 은행 요청 10분 뒤 로그아웃 처리돼요.');
+      : '자동 로그인 연장을 껐어요. 세션은 마지막 요청 10분 뒤 로그아웃 처리돼요.');
     await render();
   },
   'cancel-job': async (ctx, button) => {
@@ -1126,7 +1134,7 @@ export const actions = {
       item('login', row.current_session_id ? '다시 로그인' : '로그인', onesign ? '새 세션을 만들어요' : '');
       if (hometax) { item('session-check', '세션 확인', '저장된 세션이 아직 유효한지 확인해요'); item('discover', '사용자·사업장 확인', '대상을 추가로 등록해요'); }
       if (['hana', 'hana_corporate'].includes(row.institution)) item(row.institution === 'hana_corporate' ? 'corporate-accounts-query' : 'accounts-query', '계좌 조회', '조회된 계좌는 자동으로 연결돼요');
-      if (row.institution === 'hana' && !onesign) item('extend', '로그인 연장');
+      if (extensionJob(row)) item('extend', '로그인 연장', '지금 한 번 연장해요');
       if (hometax) item('signing', '계산서 발급 인증서');
       if (onesign && row.signing?.transfer_sign?.ref && row.signing.transfer_sign.ref !== row.credential?.ref)
         item('signing', '별도 이체 인증서', '로그인 인증서 사용으로 되돌릴 수 있어요');

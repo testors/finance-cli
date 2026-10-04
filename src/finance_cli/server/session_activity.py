@@ -1,8 +1,13 @@
-"""Local Hana web idle policy; never changes an institution's session verdict."""
+"""Local web idle policy for bank-like sessions; never changes an institution's session verdict."""
 from .db import now
 
 IDLE_SECONDS = 600
 EXPIRED = 'session_idle_expired'
+# A session of these services counts as logged out after IDLE_SECONDS without a request, unless it
+# is extended. Hana personal requests are observed one by one at the HTTP boundary; the other
+# services have no such observer and count a job's request reservation as their activity.
+SERVICES = ('hana', 'hana_corporate', 'giro')
+OBSERVED = ('hana',)
 
 
 def metadata(con, session, at=None):
@@ -17,7 +22,7 @@ def metadata(con, session, at=None):
 
 
 def refusal(con, adapter, session, step=None):
-    if adapter.service == 'hana' and adapter.uses_session and session is not None \
+    if adapter.service in SERVICES and adapter.uses_session and session is not None \
             and adapter.steps[step or adapter.first_step].sends and metadata(con, session)['idle_expired']:
         return EXPIRED
     return None

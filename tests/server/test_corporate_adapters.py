@@ -246,8 +246,38 @@ class CorporateTests(HanaCase):
         self.assertEqual(self.client.get('/static/corporate.js').status_code, 200)
         features = self.get('/capabilities').json()['features']
         self.assertEqual({f['id'] for f in features if f['area'] == 'corporate'},
-                         {'corporate-login', 'corporate-accounts', 'corporate-history', 'corporate-transfer'})
+                         {'corporate-login', 'corporate-extend', 'corporate-accounts', 'corporate-history',
+                          'corporate-transfer'})
         self.assertTrue(all(f['status'] == 'available' for f in features if f['area'] == 'corporate'))
+
+    def test_login_extension_keeps_the_bank_verdict_and_ten_idle_minutes_count_as_logged_out(self):
+        import time
+        from finance_cli.server import session_activity
+        from finance_cli.services.hana_corporate import session as extension
+        self.adopt(self.session())
+        row = lambda: next(r for r in self.get('/logins').json()['logins'] if r['id'] == self.connection['id'])
+        self.assertGreater(row()['session']['idle_expires_at'], time.time() + 590)
+        value = {'operation': 'session-extend', 'network_used': True, 'accepted': True, 'login_extension_accepted': True,
+                 'session_ended': False, 'service_status': 'accepted', 'reason': 'login_extension_accepted',
+                 'processing_status': 'completed', 'server_expires_at': None, 'warnings': [], 'stages': []}
+        with patch.object(extension, 'extend', return_value=value) as sent:
+            job = self.run_job(self.submit('hana.corporate.session.extend', login_id=self.connection['id'])['id'])
+        self.assertEqual((job['outcome'], job['result']['login_extension_accepted']), ('success', True), job)
+        self.assertEqual(sent.call_count, 1)
+        self.assertEqual(sent.call_args.kwargs['send'], True)
+        self.assertEqual(row()['readiness'], 'ready')
+        with patch.object(session_activity, 'now', return_value=time.time() + 601):
+            self.assertEqual(row()['readiness'], 'login_required')
+            with self.assertRaisesRegex(jobs.NotReady, '^session_idle_expired$'):
+                self.submit('hana.corporate.accounts', login_id=self.connection['id'])
+            with self.assertRaisesRegex(jobs.NotReady, '^session_idle_expired$'):
+                self.submit('hana.corporate.session.extend', login_id=self.connection['id'])
+        ended = {**value, 'accepted': False, 'login_extension_accepted': False, 'session_ended': True,
+                 'service_status': 'rejected', 'reason': 'session_ended', 'session_current_validity': 'ended'}
+        with patch.object(extension, 'extend', return_value=ended) as sent:
+            job = self.run_job(self.submit('hana.corporate.session.extend', login_id=self.connection['id'])['id'])
+        self.assertEqual((job['outcome'], sent.call_count), ('rejected', 1), job)
+        self.assertEqual(row()['readiness'], 'login_required', 'a session the bank ended is not used again')
 
     def certificate_login(self, method, bank, credential, inputs):
         from finance_cli.services.hana_corporate import login

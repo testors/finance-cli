@@ -716,6 +716,28 @@ class OneSignAccounts(OneSignReadAdapter):
                                   'session_current_validity': 'unverified'})
 
 
+class OneSignExtend(OneSignReadAdapter):
+    """One native login extension on the OneSign session; the outcome is the bank's own verdict."""
+    name = 'hana.onesign.session.extend'
+    title = '하나은행 로그인 연장'
+
+    def run(self, ctx, step):
+        from finance_cli.services.hana import onesign_session
+        state = self.state(ctx)
+        try:
+            ctx.reserve()
+            result = onesign_session.extend(state, session=self.session(ctx), run='web-' + ctx.job['id'] + '-extend',
+                                            send=True)
+        finally:
+            ctx.secrets = None
+            state.__exit__(None, None, None)
+        return StepResult(service_verdict=verdict(result, ('accepted', 'login_extension_accepted', 'reason',
+                                                           'service_status', 'processing_status', 'error', 'warnings')),
+                          outcome=outcome(result.get('accepted'), completed=result.get('processing_status') == 'completed'),
+                          result=pick(result, ('login_extension_accepted', 'native_client_timer_reset_ms',
+                                               'server_expires_at', 'session_current_validity', 'cookies_saved')))
+
+
 def transfer_preview(preview):
     """Stable confirmation payload. jobs.public projects the full source number
     from the fixed target without changing existing confirmation digests.
@@ -893,5 +915,5 @@ class TransferReconcile(OneSignAdapter):
 
 
 ADAPTERS = (Login(), Accounts(), History(), HistoryMore(), HistoryDetail(), HistoryExport(), TransferHistory(),
-            TransferHistoryDetail(), Security(), Extend(), OneSignLogin(), OneSignAccounts(), Transfer(),
+            TransferHistoryDetail(), Security(), Extend(), OneSignLogin(), OneSignAccounts(), OneSignExtend(), Transfer(),
             TransferReconcile())

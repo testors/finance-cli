@@ -391,7 +391,7 @@ def create_app(config, *, db=None, dispatcher=True, vaults=None):
                 # Display metadata only: no cookies, file locations or verdict payloads.
                 row['session'] = None if session is None else {
                     'state': session['state'], 'created_at': session['created_at'], 'checked_at': session['checked_at']}
-                if session is not None and row['institution'] == 'hana':
+                if session is not None and row['institution'] in session_activity.SERVICES:
                     row['session'].update(session_activity.metadata(con, session))
             return {'logins': rows, 'server_time': session_activity.now()}
 

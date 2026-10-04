@@ -73,6 +73,11 @@ class Context:
         with self.db.write() as con:
             con.execute('UPDATE jobs SET attempt=?, updated_at=? WHERE id=?', (dumps(self.attempt), now(), self.job['id']))
             self.db.event(con, self.job['id'], 'request_reserved', step=self.step)
+            if self.adapter.service in session_activity.SERVICES and self.adapter.service not in session_activity.OBSERVED:
+                # No per-request observer for this service: the reservation is its session activity.
+                self.last_bank_request_at = session_activity.now()
+                if self.session is not None:
+                    session_activity.record(con, self.session['id'], self.last_bank_request_at)
 
     def check_idle(self):
         with self.db.read() as con:

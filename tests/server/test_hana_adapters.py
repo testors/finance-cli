@@ -394,6 +394,35 @@ class OneSignPathTests(HanaCase):
                 self.security_job()
         self.assertEqual(len(self.services.calls), count + 2)
 
+    def test_onesign_login_extension_sends_one_native_request_and_keeps_the_bank_verdict(self):
+        from finance_cli.services.hana import extend as native, hana_protocol, onesign_session
+        self.signed_in()
+        calls = []
+        head = [('hana-sys-header', hana_protocol.encode_header({'CHNL_SYS_HDPT': {'PROC_RSLT_DV_CD': '0'}})),
+                ('hana-com-header', hana_protocol.encode_header({'CNL_HDPT': {}}))]
+
+        def bank(status):
+            def exchange(scope, method, url, headers, body, cookies, timeout):
+                calls.append((scope, method, url, body))
+                return status, head if status == 200 else [], b'', cookies
+            return functools.partial(onesign_session.extend, exchange=exchange)
+
+        def activity():
+            with self.db.read() as con:
+                return con.execute('SELECT last_request_at FROM session_activity').fetchone()[0]
+        before = activity()
+        time.sleep(0.02)
+        with patch.object(onesign_session, 'extend', bank(200)):
+            job = self.run_job(self.submit('hana.onesign.session.extend', login_id=self.login['id'])['id'], self.vault)
+        self.assertEqual((job['outcome'], job['service_verdict']['login_extension_accepted']), ('success', True), job)
+        self.assertEqual(calls, [('bank', 'POST', hana_protocol.API + native.PATH, b'')])
+        self.assertGreater(activity(), before, 'the request itself is the session activity')
+        self.assertNoLeak(job, onesign_fixture.PASSWORD)
+        with patch.object(onesign_session, 'extend', bank(500)):
+            job = self.run_job(self.submit('hana.onesign.session.extend', login_id=self.login['id'])['id'], self.vault)
+        self.assertEqual(job['outcome'], 'rejected', job)
+        self.assertEqual(len(calls), 2, 'a rejected extension is not sent again')
+
     def test_idle_boundary_polling_restart_and_new_login(self):
         from finance_cli.server.db import Database
         at = time.time()

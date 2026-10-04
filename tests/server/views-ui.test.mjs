@@ -33,6 +33,7 @@ async function setup(t, method = 'onesign', readiness = 'query_only', secret = {
     ensureBankSession: async (ctx, id) => { checked.push(id); return !state.idleExpired; }, expiredBankLogin: async () => {},
     rememberField: () => '', render: () => {}, secretFields: () => [], showJob: () => {},
     extensionState: () => state.extension || 'none', setAutoExtend: on => { state.autoExtend = on; },
+    extensionJob: () => state.extensionJob || null,
   };
   const app = new SyntheticModule(Object.keys(values), function () {
     for (const [k, v] of Object.entries(values)) this.setExport(k, v);
@@ -796,6 +797,13 @@ test('automatic login extension is one switch for the browser and says what it d
       assert.match(main.textContent, text);
     }
   }
+  for (const [institution, method] of [['hana_corporate', 'id_password'], ['giro', 'pin']]) {
+    Object.assign(ui.row, {institution, method});
+    ui.state.extension = 'on';
+    main.innerHTML = await ui.views.settings(ui.ctx);
+    assert.match(main.querySelector('.connection-settings').textContent, /로그인 자동 연장자동 연장 켜짐끄기/);
+  }
+  Object.assign(ui.row, {institution: 'hana', method: 'onesign'});
   main.innerHTML = await ui.views.accounts(ui.ctx);
   assert.equal(main.querySelector('[data-action="auto-extend-toggle"]').getAttribute('aria-checked'), 'true');
   await ui.actions['auto-extend-toggle'](ui.ctx, toggle);
@@ -816,4 +824,20 @@ test('the activity list leaves out login extensions unless asked', async t => {
   ui.state.params = {extensions: true};
   main.innerHTML = await ui.views.activity(ui.ctx);
   assert.equal(ui.apiCalls.at(-1), '/jobs?limit=200');
+});
+
+test('a login is extended by hand with its own job, and only where its module has one', async t => {
+  const ui = await setup(t, 'onesign', 'ready', {vault_passphrase: 'synthetic'});
+  await ui.actions['login-menu'](ui.ctx, {dataset: {login: 'login'}});
+  assert.equal(ui.document.querySelector('[data-run="extend"]'), null, 'no extension job, no menu item');
+  ui.state.extensionJob = 'hana.onesign.session.extend';
+  await ui.actions['login-menu'](ui.ctx, {dataset: {login: 'login'}});
+  await ui.actions.extend(ui.ctx, ui.document.querySelector('[data-run="extend"]'));
+  assert.deepEqual(ui.calls.map(c => c.name), ['hana.onesign.session.extend']);
+  assert.equal(ui.asked[0][3].store, 'synthetic', 'a personal OneSign extension opens its store');
+  Object.assign(ui.row, {institution: 'giro', method: 'pin'});
+  ui.state.extensionJob = 'giro.session.extend';
+  await ui.actions.extend(ui.ctx, {dataset: {login: 'login'}});
+  assert.equal(ui.calls[1].name, 'giro.session.extend');
+  assert.equal(ui.asked.length, 1, 'no passphrase for a module that needs none');
 });

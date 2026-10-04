@@ -173,6 +173,22 @@ class Accounts(Session):
                           local=local(value))
 
 
+class Extend(Session):
+    """One login extension on the corporate session. A session the bank reports as ended is marked so."""
+    name = 'hana.corporate.session.extend'
+    title = '기업뱅킹 로그인 연장'
+
+    def run(self, ctx, step):
+        from finance_cli.services.hana_corporate import session as service
+        ctx.reserve()
+        value = service.extend(session=self.session(ctx), send=True)
+        fields = observed(ctx, value)
+        if value.get('session_ended') is True:
+            ctx.mark_session(ctx.session['id'], 'expired', 'institution_session_ended')
+        return StepResult(**fields, result=pick(value, ('login_extension_accepted', 'session_ended', 'server_expires_at',
+                                                        'session_current_validity')), local=local(value))
+
+
 class History(Session):
     name = 'hana.corporate.history'
     title = '기업 계좌 거래내역 조회'
@@ -363,4 +379,4 @@ def ars_challenge(job, session):
     return {'code': code}
 
 
-ADAPTERS = [PasswordLogin(), JointLogin(), OneSignLogin(), Accounts(), History(), Transfer(), TransferResult(), TransferCancel()]
+ADAPTERS = [PasswordLogin(), JointLogin(), OneSignLogin(), Accounts(), Extend(), History(), Transfer(), TransferResult(), TransferCancel()]

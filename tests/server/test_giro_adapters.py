@@ -271,3 +271,23 @@ class GiroTests(ServerCase):
         features = {f['id']: f for f in row['features']}
         self.assertEqual(features['giro-pay']['status'], 'available')
         self.assertEqual(features['giro-pay']['verification'], 'live_partial')
+
+    def test_session_extension_is_one_time_query_and_ten_idle_minutes_count_as_logged_out(self):
+        import time
+        from finance_cli.server import session_activity
+        row = lambda: self.get('/logins').json()['logins'][0]
+        job = self.run_job(self.submit('giro.session.extend'))
+        self.assertEqual(job['outcome'], 'success', job)
+        self.assertEqual([name for name, _ in self.calls], ['auth.datetime'])
+        self.assertEqual((job['result']['request_accepted'], job['result']['login_extension_accepted'],
+                          job['result']['extension_effect']), (True, None, 'unverified'))
+        self.assertNotIn('20261003120000', json.dumps(job, ensure_ascii=False))
+        self.assertGreater(row()['session']['idle_expires_at'], time.time() + 590)
+        self.assertEqual(row()['readiness'], 'ready')
+        with patch.object(session_activity, 'now', return_value=time.time() + 601):
+            self.assertEqual(row()['readiness'], 'login_required')
+            with self.assertRaisesRegex(jobs.NotReady, '^session_idle_expired$'):
+                self.submit('giro.accounts.list')
+            with self.assertRaisesRegex(jobs.NotReady, '^session_idle_expired$'):
+                self.submit('giro.session.extend')
+        self.assertEqual(len(self.calls), 1, 'an idle session is neither queried nor revived')

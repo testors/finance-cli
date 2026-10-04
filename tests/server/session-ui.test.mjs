@@ -276,3 +276,37 @@ test('a busy session, a missing extension job or a locked store sends nothing an
   await expired.extendLogin('selected');
   assert.equal(expired.submissions, 0, 'a session past its limit is logged out, not revived');
 });
+
+test('idle limits also cover corporate and giro sessions, and never block the login that replaces one', async t => {
+  for (const [institution, method, login, query] of [['hana_corporate', 'id_password', 'hana.corporate.login-idpw', 'hana.corporate.accounts'],
+    ['giro', 'pin', 'giro.login', 'giro.accounts.list']]) {
+    const app = await setup(t);
+    Object.assign(app.row, {institution, method, readiness: 'ready'});
+    app.state.logins = [structuredClone(app.row)];
+    app.local = 5599; app.server = 1599;
+    assert.equal(app.bankSessionExpired(app.state.logins[0]), false);
+    app.local = 5600; app.server = 1600;
+    assert.equal(app.bankSessionExpired(app.state.logins[0]), true);
+    await app.ctx.run(login, {login_id: 'selected'});
+    assert.deepEqual(app.sent.map(j => j.name), [login], 'a new login is sent even though the old session is past its limit');
+    assert.equal(app.asked.length, 0);
+    assert.equal(await app.ctx.run(query, {login_id: 'selected'}), null);
+    assert.equal(app.sent.length, 1, 'a query on the expired session is not sent');
+    assert.equal(app.asked.length, 1);
+    assert.equal(app.asked[0].reason, 'session_idle_expired');
+  }
+});
+
+test('corporate and giro sessions are extended with their own job and need no store passphrase', async t => {
+  for (const [change, job] of [[{institution: 'hana_corporate', method: 'onesign', credential: {ref: 'store'}}, 'hana.corporate.session.extend'],
+    [{institution: 'giro', method: 'pin'}, 'giro.session.extend']]) {
+    const app = await nearLimit(t, change);
+    app.state.capabilities = {jobs: [job]};
+    app.local = 5000; app.server = 1000;
+    app.setAutoExtend(true);
+    assert.equal(app.extensionState(app.state.logins[0]), 'on');
+    app.local = 5520; app.server = 1520;
+    await app.extendLogin('selected');
+    assert.equal(JSON.stringify(app.sent.map(j => [j.name, j.login_id, j.secrets])), JSON.stringify([[job, 'selected', undefined]]));
+  }
+});
