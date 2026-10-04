@@ -57,3 +57,17 @@ class SessionActivityTests(ServerCase):
             session_activity.record(con, self.sessions[0]['id'], 1599)
             con.execute('DELETE FROM sessions WHERE id=?', (self.sessions[0]['id'],))
             self.assertEqual(con.execute('SELECT count(*) FROM session_activity').fetchone()[0], 0)
+
+    def test_listing_can_leave_out_login_extension_jobs_before_its_limit(self):
+        from finance_cli.server import jobs
+        with self.db.write() as con:
+            for index, name in enumerate(('hana.onesign.accounts', 'hana.session.extend', 'hana.session.extend')):
+                con.execute('INSERT INTO jobs(id,name,origin,request_digest,status,step,created_at,updated_at) '
+                            'VALUES (?,?,?,?,?,?,?,?)',
+                            (f'jb_{index}', name, 'web', 'synthetic', 'finished', 'run', 1000 + index, 1000 + index))
+        with self.db.read() as con:
+            self.assertEqual([j['name'] for j in jobs.listing(con, limit=1)], ['hana.session.extend'])
+            self.assertEqual([j['id'] for j in jobs.listing(con, limit=1, hide_extensions=True)], ['jb_0'])
+        self.enroll()
+        self.assertEqual(len(self.get('/jobs').json()['jobs']), 3)
+        self.assertEqual([j['id'] for j in self.get('/jobs?hide=session_extend&limit=1').json()['jobs']], ['jb_0'])

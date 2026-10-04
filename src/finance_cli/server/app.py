@@ -563,9 +563,10 @@ def create_app(config, *, db=None, dispatcher=True, vaults=None):
         raise ApiError(409, 'resource_busy' if status == 'busy' else 'worker_not_started')
 
     @app.get(API + '/jobs')
-    def get_jobs(profile_id: str = None, area: str = None, limit: int = 100):
+    def get_jobs(profile_id: str = None, area: str = None, limit: int = 100, hide: str = None):
         with db.read() as con:
-            return {'jobs': jobs.listing(con, profile_id=profile_id, area=area, limit=limit)}
+            return {'jobs': jobs.listing(con, profile_id=profile_id, area=area, limit=limit,
+                                         hide_extensions=hide == 'session_extend')}
 
     @app.get(API + '/jobs/{job_id}')
     def get_job(job_id: str):

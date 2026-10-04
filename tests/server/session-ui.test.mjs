@@ -26,8 +26,11 @@ async function setup(t) {
       if (data.error) throw {code: data.error, reasons: data.reasons};
       const job = {id: 'job', name, ...fields}; data.sent.push(job); return job;
     },
-    follow: async () => ({...data.sent.at(-1), status: 'finished', outcome: 'success',
-      local: data.stopped ? {stopped: data.stopped} : {}}),
+    follow: async () => {
+      data.onFollow?.();
+      return {...data.sent.at(-1), status: 'finished', outcome: data.outcome || 'success',
+        local: data.stopped ? {stopped: data.stopped} : {}};
+    },
   };
   const api = new SyntheticModule(Object.keys(values), function () {
     for (const [key, value] of Object.entries(values)) this.setExport(key, value);
@@ -175,4 +178,101 @@ test('only an area tab switches area; a button with its own mode value runs its 
   await new Promise(resolve => setTimeout(resolve));
   assert.ok(app.ctx, 'the action ran');
   assert.equal(app.state.mode, 'tax');
+});
+
+test('the area tab counts down to the nearest idle limit and stops at logout', async t => {
+  const app = await setup(t);
+  app.document.querySelector('#stage').innerHTML = '<nav class="area-tabs"></nav>';
+  app.state.logins = [{...app.row, readiness: 'ready'}, {id: 'tax', institution: 'hometax', readiness: 'ready', session: {state: 'usable'}}];
+  app.local = 5000;
+  app.renderTabs();
+  assert.equal(app.document.querySelector('[data-mode="banking"] .tab-countdown').textContent, '10:00');
+  assert.equal(app.document.querySelector('[data-mode="tax"] .tab-countdown'), null, 'no countdown without a known limit');
+  app.local = 5535;
+  app.renderTabs();
+  const soon = app.document.querySelector('[data-mode="banking"] .tab-countdown');
+  assert.equal(soon.textContent, '1:05');
+  assert.ok(soon.classList.contains('soon'));
+  app.local = 5600;
+  app.renderTabs();
+  assert.equal(app.document.querySelector('.tab-countdown'), null, 'a session past its limit is logged out');
+  assert.equal(app.gets.length, 0);
+});
+
+// A joint-certificate login whose module has an extension job, 80 seconds before its limit.
+async function nearLimit(t, change = {}) {
+  const app = await setup(t);
+  Object.assign(app.row, {method: 'joint_certificate', readiness: 'ready', display_name: '합성 연결'}, change);
+  app.state.capabilities = {jobs: ['hana.session.extend', 'hana.onesign.session.extend']};
+  app.state.vaults = {};
+  app.state.logins = [structuredClone(app.row)];
+  app.onFollow = () => { app.row.session.idle_expires_at = app.server + 600; };
+  app.local = 5520; app.server = 1520;
+  return app;
+}
+
+test('automatic extension is off until chosen, waits for the limit and sends the extension job once', async t => {
+  const app = await nearLimit(t);
+  await app.extendLogin('selected');
+  assert.equal(app.sent.length, 0, 'off by default');
+  app.local = 5000; app.server = 1000;
+  app.setAutoExtend(true);
+  assert.equal(app.document.defaultView.localStorage.getItem('finance.autoExtend'), 'true');
+  app.local = 5400; app.server = 1400;
+  await app.extendLogin('selected');
+  assert.equal(app.sent.length, 0, 'not while more than the lead time is left');
+  app.local = 5520; app.server = 1520;
+  await app.extendLogin('selected');
+  assert.deepEqual(app.sent.map(j => [j.name, j.login_id, j.secrets]), [['hana.session.extend', 'selected', undefined]]);
+  assert.equal(app.state.logins[0].session.idle_expires_at, 2120, 'the new limit comes from the server record');
+  assert.equal(app.extensionState(app.state.logins[0]), 'on');
+  await app.extendLogin('selected');
+  assert.equal(app.sent.length, 1, 'with a fresh limit nothing more is sent');
+});
+
+test('an extension that does not succeed is not retried and stops for that session', async t => {
+  const app = await nearLimit(t);
+  app.local = 5000; app.server = 1000;
+  app.setAutoExtend(true);
+  app.local = 5520; app.server = 1520;
+  app.outcome = 'rejected'; app.onFollow = null;
+  await app.extendLogin('selected');
+  assert.equal(app.sent.length, 1);
+  assert.equal(app.extensionState(app.state.logins[0]), 'stopped');
+  assert.match(app.document.querySelector('#toast').textContent, /자동 로그인 연장이 되지 않았어요 \(기관 거절\)/);
+  app.local = 5590; app.server = 1590;
+  await app.extendLogin('selected');
+  assert.equal(app.sent.length, 1, 'the same session is never tried again');
+});
+
+test('a busy session, a missing extension job or a locked store sends nothing and is not a failure', async t => {
+  const busy = await nearLimit(t);
+  busy.local = 5000; busy.server = 1000; busy.setAutoExtend(true);
+  busy.local = 5520; busy.server = 1520; busy.error = 'resource_busy';
+  await busy.extendLogin('selected');
+  assert.equal(busy.sent.length, 0);
+  assert.equal(busy.extensionState(busy.state.logins[0]), 'on', 'another job using the session is not a failed extension');
+
+  const none = await nearLimit(t);
+  none.state.capabilities = {jobs: []};
+  none.setAutoExtend(true);
+  await none.extendLogin('selected');
+  assert.equal(none.submissions, 0);
+  assert.equal(none.extensionState(none.state.logins[0]), 'unsupported');
+
+  const locked = await nearLimit(t, {method: 'onesign', credential: {ref: 'store'}});
+  locked.local = 5000; locked.server = 1000; locked.setAutoExtend(true);
+  locked.local = 5520; locked.server = 1520;
+  assert.equal(locked.extensionState(locked.state.logins[0]), 'locked');
+  await locked.extendLogin('selected');
+  assert.equal(locked.submissions, 0, 'no passphrase is kept in the browser to send');
+  locked.state.vaults = {store: true};
+  await locked.extendLogin('selected');
+  assert.equal(JSON.stringify(locked.sent.map(j => [j.name, j.secrets])), JSON.stringify([['hana.onesign.session.extend', {}]]));
+
+  const expired = await nearLimit(t);
+  expired.local = 5000; expired.server = 1000; expired.setAutoExtend(true);
+  expired.local = 5600; expired.server = 1600;
+  await expired.extendLogin('selected');
+  assert.equal(expired.submissions, 0, 'a session past its limit is logged out, not revived');
 });

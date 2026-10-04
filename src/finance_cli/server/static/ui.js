@@ -93,6 +93,11 @@ export function heading(title, sub, actions = '') {
   return `<div class="page-heading"><div><h1>${esc(title)}</h1><p>${sub}</p></div><div class="heading-actions">${actions}</div></div>`;
 }
 
+/* An on/off choice that takes effect at once. */
+export function switchButton(label, on, attributes, hint = '') {
+  return `<button type="button" class="switch ${on ? 'on' : ''}" role="switch" aria-checked="${on ? 'true' : 'false'}" ${hint ? `title="${esc(hint)}"` : ''} ${attributes}><span class="switch-track" aria-hidden="true"><i></i></span>${esc(label)}</button>`;
+}
+
 export function tag(text, tone = '') { return `<span class="status-pill ${tone}">${esc(text)}</span>`; }
 export function note(text) { return `<div class="scope-note">${icon('info')}<p>${text}</p></div>`; }
 export function button(label, attributes, kind = 'secondary', iconName = '') {
@@ -147,7 +152,7 @@ const MESSAGES = {
   login_required: '기관 로그인이 필요해요. 연결·인증서 화면에서 로그인하세요.',
   session_stale: '설정이 바뀌었거나 세션 저장을 확인하지 못했어요. 세션을 확인하거나 다시 로그인하세요.',
   session_expired: '기관 세션이 만료되었어요. 다시 로그인하세요.',
-  session_idle_expired: '마지막 은행 요청 후 10분이 지나 세션이 만료되었어요. 요청을 중단했어요. 다시 로그인한 뒤 필요한 작업을 직접 실행하세요.',
+  session_idle_expired: '마지막 은행 요청 후 10분이 지나 로그아웃 처리됐어요. 요청을 보내지 않았어요. 다시 로그인한 뒤 필요한 작업을 직접 실행하세요.',
   session_consumed: '이 로그인 세션은 이미 사용했어요. 새로 로그인하세요.',
   target_required: '업무 대상을 선택하세요.',
   target_unverified: '기관 응답에서 선택한 대상을 확인하지 못해 업무를 실행하지 않았어요.',

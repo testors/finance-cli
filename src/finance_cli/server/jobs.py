@@ -343,9 +343,13 @@ def public(con, job, *, listing=False):
     return value
 
 
-def listing(con, *, profile_id=None, area=None, limit=100, before=None):
+def listing(con, *, profile_id=None, area=None, limit=100, before=None, hide_extensions=False):
     query, args = 'SELECT * FROM jobs', []
     clauses = []
+    if hide_extensions:
+        # Login extensions can run every few minutes. Left out before the limit applies, they
+        # cannot push other results out of the listing. Every such job is named *.session.extend.
+        clauses.append("name NOT LIKE '%.session.extend'")
     if profile_id:
         clauses.append('(profile_id=? OR target_id IN (SELECT target_id FROM profile_targets WHERE profile_id=?))')
         args += [profile_id, profile_id]

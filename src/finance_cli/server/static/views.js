@@ -6,8 +6,8 @@ import * as ui from './ui.js';
 import {certificateActions} from './certificates.js';
 import {giroActions, giroViews, giroLogin} from './giro.js';
 import {corporateActions, corporateViews, corporateLogin} from './corporate.js';
-import {applyRemember, askSecrets, bankSessionExpired, changeView, ensureBankSession, expiredBankLogin, jobState, login, onesignStore, profile, refreshModel, rememberField,
-  render, scopeLogins, scopeTargets, SECRET_LABELS, secretFields, showJob, state, target} from './app.js';
+import {applyRemember, askSecrets, bankSessionExpired, changeView, ensureBankSession, expiredBankLogin, extensionState, jobState, login, onesignStore, profile, refreshModel, rememberField,
+  render, scopeLogins, scopeTargets, SECRET_LABELS, secretFields, setAutoExtend, showJob, state, target} from './app.js';
 
 const {esc, icon, tag, note, heading, money} = ui;
 
@@ -33,10 +33,19 @@ function setupNotice(featureId) {
   return note('설정이 필요해요: ' + item.reasons.map(r => esc(REASONS[r] || r)).join(', '));
 }
 
-function canQuery(row) { return ['ready', 'query_only'].includes(row.readiness); }
+// A session past its idle limit counts as logged out, whatever the last loaded state says.
+function canQuery(row) { return ['ready', 'query_only'].includes(row.readiness) && !bankSessionExpired(row); }
+
+const EXTEND_HINT = '켜 두면 이 브라우저에서 앱을 열어 둔 동안, 세션 만료 1분 30초 전에 로그인을 한 번씩 연장해요.';
+
+/* What the automatic extension does for this login, in a few words; empty when there is nothing to say. */
+function extensionNote(row) {
+  return {on: '자동 연장 켜짐', stopped: '자동 연장 중단됨 · 연장이 되지 않았어요', locked: '저장소 암호를 기억해 두어야 자동 연장돼요',
+    unsupported: state.autoExtend ? '이 로그인 방식은 연장 요청이 아직 없어 자동 연장하지 않아요' : ''}[extensionState(row)] || '';
+}
 
 function readiness(row) {
-  if (bankSessionExpired(row)) return tag('세션 만료 · 다시 로그인', 'warning');
+  if (bankSessionExpired(row)) return tag('로그아웃됨 · 10분 경과', 'warning');
   const value = row.readiness;
   return value === 'query_only' ? tag('조회용 세션 있음', '') : value === 'ready' ? tag('세션 있음', '') : value === 'login_disabled' ? tag('사용 중지', 'neutral') : tag('로그인 필요', 'warning');
 }
@@ -48,7 +57,7 @@ let pendingJobList = null;
 
 function recentJobs() {
   // Share concurrent reads only; the next render can observe new server jobs.
-  if (!pendingJobList) pendingJobList = api.get('/jobs?limit=200').finally(() => { pendingJobList = null; });
+  if (!pendingJobList) pendingJobList = api.get('/jobs?limit=200&hide=session_extend').finally(() => { pendingJobList = null; });
   return pendingJobList;
 }
 
@@ -433,7 +442,7 @@ const bankDate = ui.kstDate;
 
 function loginButton(row, primary = false) {
   if (row.disabled) return '';
-  return ui.button(row.current_session_id ? '다시 로그인' : '로그인',
+  return ui.button(row.current_session_id && !bankSessionExpired(row) ? '다시 로그인' : '로그인',
     `data-action="login" data-login="${esc(row.id)}"`, primary ? 'primary' : 'secondary');
 }
 
@@ -481,9 +490,9 @@ async function accountsView(ctx) {
       const id = mapping[a.ref];
       return `<tr ${id ? `data-row="account" data-action="account-history" data-target="${esc(id)}" tabindex="0" title="거래 내역 보기"` : ''}><td data-label="계좌">${esc(a.label)}</td><td data-label="번호">${esc(a.account_number)}</td><td data-label="통화">${esc(a.currency)}</td><td class="num" data-label="잔액">${state.hidden ? '••••••' : money(a.balance)}</td><td class="row-go">${id ? icon('arrow') : ''}</td></tr>`;
     };
-    return `<section class="panel"><div class="panel-heading"><div><h2>${esc(row.display_name)}</h2><p class="meta">${esc(ui.METHOD[row.method])} · ${job?.observed_at ? '조회 ' + ui.time(job.observed_at) : '미조회'}</p></div><div class="pill-row">${readiness(row)}</div></div>${panel('job-' + row.id, job && (job.status !== 'finished' || job.outcome !== 'success') ? job : null)}${rows.length ? `<div class="table-wrap"><table class="table data"><thead><tr><th>계좌</th><th>번호</th><th>통화</th><th class="num">잔액</th><th></th></tr></thead><tbody>${rows.map(line).join('')}</tbody></table></div>` : `<div class="empty-state">${job ? outcomeNote(job) || '표시할 계좌가 없어요.' : '아직 조회하지 않았어요.'}</div>`}<div class="section-actions">${canQuery(row) && !sameSession ? ui.button('잔액 조회', `data-action="accounts-query" data-login="${esc(row.id)}"`, 'primary', 'refresh') : ''}${loginButton(row, !canQuery(row) || sameSession)}${sameSession ? '<span class="muted-block">이 세션의 계좌 조회는 이미 기록했어요. 새로 로그인하면 다시 조회할 수 있어요.</span>' : ''}</div></section>`;
+    return `<section class="panel"><div class="panel-heading"><div><h2>${esc(row.display_name)}</h2><p class="meta">${esc(ui.METHOD[row.method])} · ${job?.observed_at ? '조회 ' + ui.time(job.observed_at) : '미조회'}${extensionNote(row) ? ' · ' + esc(extensionNote(row)) : ''}</p></div><div class="pill-row">${readiness(row)}</div></div>${panel('job-' + row.id, job && (job.status !== 'finished' || job.outcome !== 'success') ? job : null)}${rows.length ? `<div class="table-wrap"><table class="table data"><thead><tr><th>계좌</th><th>번호</th><th>통화</th><th class="num">잔액</th><th></th></tr></thead><tbody>${rows.map(line).join('')}</tbody></table></div>` : `<div class="empty-state">${job ? outcomeNote(job) || '표시할 계좌가 없어요.' : '아직 조회하지 않았어요.'}</div>`}<div class="section-actions">${canQuery(row) && !sameSession ? ui.button('잔액 조회', `data-action="accounts-query" data-login="${esc(row.id)}"`, 'primary', 'refresh') : ''}${loginButton(row, !canQuery(row) || sameSession)}${sameSession ? '<span class="muted-block">이 세션의 계좌 조회는 이미 기록했어요. 새로 로그인하면 다시 조회할 수 있어요.</span>' : ''}</div></section>`;
   }).join('');
-  return heading('내 계좌', '계좌를 누르면 거래 내역으로 이동해요.') + setupNotice('hana-accounts') +
+  return heading('내 계좌', '계좌를 누르면 거래 내역으로 이동해요.', ui.switchButton('자동 로그인 연장', state.autoExtend, 'data-action="auto-extend-toggle"', EXTEND_HINT)) + setupNotice('hana-accounts') +
     `<section class="balance-overview"><div><div class="balance-label">원화 계좌 잔액 합계<button class="icon-button" data-action="privacy" aria-label="${state.hidden ? '잔액 표시' : '잔액 숨기기'}">${icon('eye')}</button></div><div class="total-balance number">${counted ? (state.hidden ? '••••••' : money(total)) : '—'}<small>원</small></div><div class="balance-meta"><span>${counted}개 계좌 합산</span>${foreign ? `<span>외화 ${foreign}개 계좌는 합계에서 제외</span>` : ''}${unknown ? `<span>미조회 ${unknown}곳은 합계에서 제외</span>` : ''}</div></div><div class="overview-side"><button class="button on-dark" data-view="transfer">이체하기 ${icon('transfer')}</button></div></section><div class="stack">${panels}</div>`;
 }
 
@@ -587,10 +596,11 @@ function giroPlan(result) {
 async function activityView(ctx) {
   const scope = state.params.scope || (profile() ? 'profile' : 'all');
   const query = scope === 'profile' && profile() ? '?profile_id=' + encodeURIComponent(profile().id) : '';
-  const listing = await api.get('/jobs' + query + (query ? '&' : '?') + 'limit=200');
+  const extensions = Boolean(state.params.extensions);
+  const listing = await api.get('/jobs' + query + (query ? '&' : '?') + 'limit=200' + (extensions ? '' : '&hide=session_extend'));
   const areaIcon = {banking: 'accounts', corporate: 'business', tax: 'tax', giro: 'bill'};
   return heading('전체 작업 기록', '웹·CLI·에이전트의 작업과 결과를 함께 확인하세요.', profile() ? `<div class="segmented">${[['profile', '현재 프로필'], ['all', '전체']].map(([k, l]) => `<button data-action="activity-scope" data-scope="${k}" class="${scope === k ? 'active' : ''}" aria-pressed="${scope === k}">${l}</button>`).join('')}</div>` : '') +
-    `<section class="panel">${listing.jobs.length ? `<ul class="operation-list">${listing.jobs.map(job => `<li class="operation-row"><span class="workspace-icon">${icon(areaIcon[job.area] || 'activity')}</span><div class="operation-body"><h3>${esc(job.title)}</h3><p>${esc([job.fixed?.target?.display_name, job.fixed?.login?.display_name, ui.ORIGIN[job.origin]].filter(Boolean).join(' · '))} · ${ui.time(job.created_at)}${job.command ? ' · ' + esc(job.command.join(' ')) : ''}</p></div>${ui.statusTags(job)}<button class="text-button" data-action="job-detail" data-job="${esc(job.id)}">상세 ${icon('arrow')}</button></li>`).join('')}</ul>` : '<div class="empty-state">작업 기록이 없어요.</div>'}</section>`;
+    `<section class="panel">${listing.jobs.length ? `<ul class="operation-list">${listing.jobs.map(job => `<li class="operation-row"><span class="workspace-icon">${icon(areaIcon[job.area] || 'activity')}</span><div class="operation-body"><h3>${esc(job.title)}</h3><p>${esc([job.fixed?.target?.display_name, job.fixed?.login?.display_name, ui.ORIGIN[job.origin]].filter(Boolean).join(' · '))} · ${ui.time(job.created_at)}${job.command ? ' · ' + esc(job.command.join(' ')) : ''}</p></div>${ui.statusTags(job)}<button class="text-button" data-action="job-detail" data-job="${esc(job.id)}">상세 ${icon('arrow')}</button></li>`).join('')}</ul>` : '<div class="empty-state">작업 기록이 없어요.</div>'}<div class="list-footer">${extensions ? '로그인 연장 기록을 포함해 보여줘요.' : '로그인 연장 기록은 숨겼어요.'} <button type="button" class="link-button" data-action="activity-extensions">${extensions ? '숨기기' : '포함해 보기'}</button></div></section>`;
 }
 
 /* Connections screen. One card per institution login; its verified targets sit
@@ -601,6 +611,7 @@ const SESSION_LABEL = {usable: '사용 가능', consumed: '세션 사용함', ex
 
 function loginStatus(row) {
   if (row.disabled) return tag('사용 중지', 'neutral');
+  if (bankSessionExpired(row)) return tag('로그아웃됨', 'warning') + '<span class="meta">10분 동안 은행 요청이 없었어요</span>';
   if (row.readiness === 'query_only') return tag('조회용 세션 있음', '') + '<span class="meta">새 이체 시 로그인 필요</span>';
   if (row.readiness === 'ready') return tag('로그인됨', '') + (row.session?.checked_at ? `<span class="meta">확인 ${ui.time(row.session.checked_at)}</span>` : '');
   const session = row.session;
@@ -636,7 +647,9 @@ function signingLines(row) {
     const reg = row.registration || {};
     lines.push(['앱 등록 정보', reg.app_profile?.configured && reg.login_input?.configured ? '연결됨' : '서버에서 연결 필요', null]);
   }
-  return lines.map(([label, value, action, store]) => `<div class="connection-setting"><span>${esc(label)}</span><strong>${value ? esc(value) : '<em>미지정</em>'}</strong>${action ? `<button type="button" class="text-button" data-action="${action}" data-login="${esc(row.id)}" ${store ? `data-store="${esc(store)}"` : ''}>${action === 'unlock-vault' ? '잠금 해제' : action === 'lock-vault' ? '잠그기' : '변경'}</button>` : ''}</div>`).join('');
+  // One switch for this browser; each bank connection shows what it does for its own session.
+  if (row.institution === 'hana') lines.push(['로그인 자동 연장', state.autoExtend ? extensionNote(row) || '켜짐 · 로그인해 있는 동안 만료 전에 연장' : '꺼짐', 'auto-extend-toggle']);
+  return lines.map(([label, value, action, store]) => `<div class="connection-setting"><span>${esc(label)}</span><strong>${value ? esc(value) : '<em>미지정</em>'}</strong>${action ? `<button type="button" class="text-button" data-action="${action}" data-login="${esc(row.id)}" ${store ? `data-store="${esc(store)}"` : ''}>${action === 'unlock-vault' ? '잠금 해제' : action === 'lock-vault' ? '잠그기' : action === 'auto-extend-toggle' ? (state.autoExtend ? '끄기' : '켜기') : '변경'}</button>` : ''}</div>`).join('');
 }
 
 function targetRow(t) {
@@ -1055,7 +1068,14 @@ export const actions = {
   },
   'giro-readiness': ctx => ctx.run('giro.readiness', {}, {panel: 'job-panel', key: key('giro.readiness'), onDone: job => { document.getElementById('results').innerHTML = job.result ? giroPlan(job.result) : outcomeNote(job); }}),
   // Common
-  'activity-scope': (ctx, button) => changeView('activity', {scope: button.dataset.scope}),
+  'activity-scope': (ctx, button) => changeView('activity', {scope: button.dataset.scope, extensions: state.params.extensions}),
+  'activity-extensions': () => changeView('activity', {scope: state.params.scope, extensions: !state.params.extensions}),
+  'auto-extend-toggle': async () => {
+    setAutoExtend(!state.autoExtend);
+    ui.toast(state.autoExtend ? '자동 로그인 연장을 켰어요. 이 브라우저에서 앱을 열어 둔 동안 만료 전에 연장해요.'
+      : '자동 로그인 연장을 껐어요. 세션은 마지막 은행 요청 10분 뒤 로그아웃 처리돼요.');
+    await render();
+  },
   'cancel-job': async (ctx, button) => {
     try { await api.post(`/jobs/${encodeURIComponent(button.dataset.job)}/cancel`); ui.closeDialog(); ui.toast('작업을 취소했어요.'); render(); }
     catch (error) { ui.fail(ui.message(error.code)); }
@@ -1211,7 +1231,8 @@ export const actions = {
   sessions: async (ctx, button) => {
     const value = await api.get(`/logins/${encodeURIComponent(button.dataset.login)}/sessions`);
     const labels = {usable: '사용 가능', consumed: '사용함·대체됨', expired: '만료', stale: '재확인 필요'};
-    ui.showDialog('세션 기록', `<p class="dialog-note">저장된 성공 기록만으로 현재 유효성을 보장하지 않아요. 마지막 확인 시각을 함께 보세요.</p><div class="settings-body">${value.sessions.map(s => `<div class="setting-row"><span>${ui.time(s.created_at)}${s.id === value.current_session_id ? ' · 현재' : ''}<span class="meta">확인 ${ui.time(s.checked_at)}${s.note ? ' · ' + esc(s.note) : ''}</span></span>${tag(labels[s.state] || s.state, s.state === 'usable' ? '' : 'neutral')}</div>`).join('') || '<p class="field-help">세션이 없어요.</p>'}</div><div class="dialog-actions"><button class="button primary" data-ui="close">닫기</button></div>`);
+    const lapsed = bankSessionExpired(login(button.dataset.login));
+    ui.showDialog('세션 기록', `<p class="dialog-note">저장된 성공 기록만으로 현재 유효성을 보장하지 않아요. 마지막 확인 시각을 함께 보세요.</p><div class="settings-body">${value.sessions.map(s => `<div class="setting-row"><span>${ui.time(s.created_at)}${s.id === value.current_session_id ? ' · 현재' : ''}<span class="meta">확인 ${ui.time(s.checked_at)}${s.note ? ' · ' + esc(s.note) : ''}</span></span>${lapsed && s.id === value.current_session_id ? tag('로그아웃됨 · 10분 경과', 'warning') : tag(labels[s.state] || s.state, s.state === 'usable' ? '' : 'neutral')}</div>`).join('') || '<p class="field-help">세션이 없어요.</p>'}</div><div class="dialog-actions"><button class="button primary" data-ui="close">닫기</button></div>`);
   },
   'rename-credential': (ctx, button) => {
     const {kind, ref} = button.dataset;

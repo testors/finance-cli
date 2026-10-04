@@ -38,11 +38,19 @@ function stored(key, fallback) {
 function store(key, value) {
   try { sessionStorage.setItem('finance.' + key, JSON.stringify(value)); } catch (error) { /* per-tab convenience only */ }
 }
+/* A choice that holds for this browser, across its tabs and restarts. */
+function storedLocal(key, fallback) {
+  try { return JSON.parse(localStorage.getItem('finance.' + key)) ?? fallback; } catch (error) { return fallback; }
+}
+function storeLocal(key, value) {
+  try { localStorage.setItem('finance.' + key, JSON.stringify(value)); } catch (error) { /* the choice then lasts for this page only */ }
+}
 
 export const state = {
   server: null, profiles: [], logins: [], targets: [], credentials: [], capabilities: null,
   profileId: stored('profile', 'all'), mode: stored('mode', 'tax'), view: null, lastViews: stored('views', {}),
   token: 0, cache: new Map(), params: {}, rows: {}, hidden: false, vaults: {},
+  autoExtend: storedLocal('autoExtend', false) === true,
 };
 
 const main = () => document.querySelector('#main');
@@ -86,6 +94,7 @@ export async function refreshModel() {
   state.targets = targets.targets;
   state.capabilities = capabilities;
   if (state.profileId !== 'all' && !state.profiles.some(p => p.id === state.profileId && !p.disabled)) setProfile('all');
+  scheduleExtensions();
 }
 
 async function refreshLogins() {
@@ -93,6 +102,7 @@ async function refreshLogins() {
   state.logins = value.logins;
   state.sessionClock = {server: value.server_time, local: Date.now() / 1000};
   renderTabs();
+  scheduleExtensions();
   return value;
 }
 
@@ -115,22 +125,143 @@ function liveLogins(mode) {
 }
 
 let tabTimer = null;
+let countdownTimer = null;
+
+/* Time left until a tab's nearest idle limit, as m:ss. Text only; the tabs are not redrawn. */
+function tick() {
+  const nodes = document.querySelectorAll('.tab-countdown');
+  if (!nodes.length) { clearInterval(countdownTimer); countdownTimer = null; return; }
+  for (const node of nodes) {
+    const left = Math.max(0, Math.ceil(Number(node.dataset.deadline) - serverNow()));
+    node.textContent = `${Math.floor(left / 60)}:${String(left % 60).padStart(2, '0')}`;
+    node.classList.toggle('soon', left <= EXTEND_LEAD);
+  }
+}
+
+/* The idle limit passed with no request: from here on the session counts as logged out. */
+async function sessionLapsed() {
+  renderTabs();
+  await refreshLogins().catch(() => {});
+  ui.toast('10분 동안 은행 요청이 없어 로그아웃 처리됐어요. 계속하려면 다시 로그인하세요.');
+  // Screens that list sessions show it at once; a screen with a form or an open dialog is left as it is.
+  if (['accounts', 'settings'].includes(state.view) && !document.querySelector('#detail-dialog')?.open) render();
+}
 
 /* Area tabs at the top of the main page; an area with a live login has a lit icon
-   with a check, a state of the tab itself rather than a notification badge. */
+   with a check, a state of the tab itself rather than a notification badge, and a small
+   countdown to the nearest idle limit of its sessions. */
 export function renderTabs() {
   const target = document.querySelector('.area-tabs');
   if (!target) return;
   const expiries = [];
   target.innerHTML = Object.entries(AREAS).map(([key, area]) => {
     const rows = liveLogins(key);
-    rows.forEach(l => { if (l.institution === 'hana' && l.session?.idle_expires_at) expiries.push(l.session.idle_expires_at); });
+    const limits = rows.map(l => l.session?.idle_expires_at).filter(Boolean);
+    expiries.push(...limits);
+    const countdown = limits.length ? `<small class="tab-countdown" data-deadline="${Math.min(...limits)}" title="세션 만료까지 남은 시간"></small>` : '';
     const live = rows.length ? ' · 로그인됨' : '';
-    return `<button class="area-tab${rows.length ? ' live' : ''}" data-mode="${key}" ${key === state.mode && !common(state.view) ? 'aria-current="true"' : ''} aria-label="${ui.esc(area.name + live)}" title="${ui.esc(area.service + live)}"><span class="workspace-icon">${ui.icon(area.icon)}${rows.length ? `<i class="session-mark">${ui.icon('check')}</i>` : ''}</span><span class="full">${ui.esc(area.name)}</span><span class="short">${ui.esc(area.short)}</span></button>`;
+    return `<button class="area-tab${rows.length ? ' live' : ''}" data-mode="${key}" ${key === state.mode && !common(state.view) ? 'aria-current="true"' : ''} aria-label="${ui.esc(area.name + live)}" title="${ui.esc(area.service + live)}"><span class="workspace-icon">${ui.icon(area.icon)}${rows.length ? `<i class="session-mark">${ui.icon('check')}</i>` : ''}</span><span class="full">${ui.esc(area.name)}</span><span class="short">${ui.esc(area.short)}</span>${countdown}</button>`;
   }).join('');
+  tick();
+  if (expiries.length && !countdownTimer) countdownTimer = setInterval(tick, 1000);
   clearTimeout(tabTimer);
   // The bank idle limit passes without any request; drop the mark when it does.
-  if (expiries.length) tabTimer = setTimeout(renderTabs, Math.max(0, Math.min(...expiries) - serverNow()) * 1000 + 500);
+  if (expiries.length) tabTimer = setTimeout(sessionLapsed, Math.max(0, Math.min(...expiries) - serverNow()) * 1000 + 500);
+}
+
+/* Automatic login extension. A per-browser choice: while this app is open, a login whose
+   session has a local idle limit is extended once, shortly before the limit, with the
+   institution's own extension job. Nothing is retried: an extension that is refused or does not
+   succeed stops the automatic extension of that session, which then ends at its limit. */
+const EXTEND_LEAD = 90;            // seconds before the idle limit
+const extendTimers = new Map();    // login id -> timer
+const extending = new Set();       // login ids with an extension in flight
+const extendStopped = new Map();   // session id -> why its automatic extension stopped
+const extendAfter = new Map();     // login id -> do not try again before (ms)
+
+/* The extension job of a login, by the naming rule <module>.session.extend; null while the
+   institution module has no extension request. */
+export function extensionJob(row) {
+  const module = {hometax: 'hometax', hana: row?.method === 'onesign' ? 'hana.onesign' : 'hana',
+    hana_corporate: 'hana.corporate', giro: 'giro'}[row?.institution];
+  const name = module + '.session.extend';
+  return module && state.capabilities?.jobs?.includes(name) ? name : null;
+}
+
+/* What the automatic extension means for one login right now: 'none' (no session with an idle
+   limit), 'unsupported', 'off', 'stopped', 'locked' (its OneSign store is not remembered) or 'on'. */
+export function extensionState(row) {
+  if (!row?.session?.idle_expires_at || bankSessionExpired(row) || !['ready', 'query_only'].includes(row.readiness)) return 'none';
+  if (!extensionJob(row)) return 'unsupported';
+  if (!state.autoExtend) return 'off';
+  if (extendStopped.has(row.current_session_id)) return 'stopped';
+  if (row.method === 'onesign' && !state.vaults[onesignStore(row)]) return 'locked';
+  return 'on';
+}
+
+export function setAutoExtend(on) {
+  state.autoExtend = Boolean(on);
+  storeLocal('autoExtend', state.autoExtend);
+  if (state.autoExtend) { extendStopped.clear(); extendAfter.clear(); }  // turning it on is a new, explicit choice
+  scheduleExtensions();
+}
+
+function scheduleExtensions() {
+  for (const timer of extendTimers.values()) clearTimeout(timer);
+  extendTimers.clear();
+  if (!state.autoExtend) return;
+  for (const row of state.logins) {
+    if (extending.has(row.id) || extensionState(row) !== 'on') continue;
+    const due = (row.session.idle_expires_at - EXTEND_LEAD - serverNow()) * 1000;
+    const wait = Math.max(0, due, (extendAfter.get(row.id) || 0) - Date.now());
+    extendTimers.set(row.id, setTimeout(() => extendLogin(row.id), wait));
+  }
+}
+
+/* Only one tab of this browser sends the extension of a session. */
+function claimExtension(row) {
+  const key = 'finance.extending:' + row.current_session_id;
+  try {
+    const held = Number(localStorage.getItem(key));
+    if (held && Date.now() - held < 60000) return false;
+    localStorage.setItem(key, String(Date.now()));
+  } catch (error) { /* without shared storage each tab decides alone */ }
+  return true;
+}
+
+function stopExtension(row, reason) {
+  extendStopped.set(row.current_session_id, reason);
+  ui.toast(`${row.display_name}: 자동 로그인 연장이 되지 않았어요 (${reason}). 다시 시도하지 않으며, 이 세션은 만료 시각에 로그아웃 처리돼요.`);
+  if (['accounts', 'settings'].includes(state.view) && !document.querySelector('#detail-dialog')?.open) render();
+}
+
+export async function extendLogin(id) {
+  if (extending.has(id)) return;
+  extending.add(id);
+  try {
+    // Another tab or a query may have moved the limit: decide on the server's current record.
+    await refreshLogins().catch(() => {});
+    const row = login(id);
+    if (!row || extensionState(row) !== 'on') return;
+    if (row.session.idle_expires_at - serverNow() > EXTEND_LEAD + 5) return;
+    if (!claimExtension(row)) { extendAfter.set(id, Date.now() + 20000); return; }
+    let job;
+    try {
+      // A remembered OneSign store passphrase is supplied by the server, never by the browser.
+      job = await submit(extensionJob(row), {login_id: id, ...(row.method === 'onesign' ? {secrets: {}} : {})});
+    } catch (error) {
+      // Busy: another job is using this session right now, and its own request moves the limit.
+      if (error.code === 'resource_busy') extendAfter.set(id, Date.now() + 20000);
+      else if (error.code !== 'session_idle_expired') stopExtension(row, ui.message(error.code));
+      return;
+    }
+    const final = await follow(job.id, null).catch(() => null);
+    await refreshLogins().catch(() => {});
+    if (final?.outcome !== 'success') stopExtension(row, final ? ui.OUTCOME[final.outcome]?.[0] || final.status : '결과 미확인');
+  } finally {
+    extending.delete(id);
+    scheduleExtensions();
+  }
 }
 
 export async function expiredBankLogin(ctx, id) {

@@ -32,6 +32,7 @@ async function setup(t, method = 'onesign', readiness = 'query_only', secret = {
     bankSessionExpired: () => state.idleExpired || false,
     ensureBankSession: async (ctx, id) => { checked.push(id); return !state.idleExpired; }, expiredBankLogin: async () => {},
     rememberField: () => '', render: () => {}, secretFields: () => [], showJob: () => {},
+    extensionState: () => state.extension || 'none', setAutoExtend: on => { state.autoExtend = on; },
   };
   const app = new SyntheticModule(Object.keys(values), function () {
     for (const [k, v] of Object.entries(values)) this.setExport(k, v);
@@ -56,6 +57,9 @@ async function setup(t, method = 'onesign', readiness = 'query_only', secret = {
   await views.evaluate();
   return {ctx, state, calls, asked, checked, apiCalls, changed, row, document: dom.window.document, ...views.namespace};
 }
+
+// Screens read recent jobs without login extensions, which can run every few minutes.
+const LIST = '/jobs?limit=200&hide=session_extend';
 
 test('a completed tax query stays current when returning to its screen', async t => {
   const ui = await setup(t, 'joint_certificate', 'ready');
@@ -89,13 +93,13 @@ test('summary and account screens share concurrent job-list reads, with no lasti
   const tax = await setup(t, 'joint_certificate', 'ready');
   tax.row.institution = 'hometax'; tax.state.targets[0].kind = 'personal';
   await tax.views.taxhome(tax.ctx);
-  assert.deepEqual(tax.apiCalls, ['/jobs?limit=200']);
+  assert.deepEqual(tax.apiCalls, [LIST]);
   await tax.views.taxhome(tax.ctx);
-  assert.deepEqual(tax.apiCalls, ['/jobs?limit=200', '/jobs?limit=200']);
+  assert.deepEqual(tax.apiCalls, [LIST, LIST]);
   const bank = await setup(t, 'onesign', 'ready');
   bank.state.logins = Array.from({length: 3}, (_, i) => ({...bank.row, id: 'synthetic-' + i}));
   await bank.views.accounts(bank.ctx);
-  assert.deepEqual(bank.apiCalls, ['/jobs?limit=200']);
+  assert.deepEqual(bank.apiCalls, [LIST]);
   assert.equal(bank.calls.length, 0);
 });
 
@@ -383,7 +387,7 @@ test('idle accounts, history and transfers check expiry before requesting secret
   assert.equal(ui.asked.length, 0);
   assert.equal(ui.calls.length, 0);
   ui.document.querySelector('main').innerHTML = await ui.views.accounts(ui.ctx);
-  assert.match(ui.document.body.textContent, /세션 만료 · 다시 로그인/);
+  assert.match(ui.document.body.textContent, /로그아웃됨 · 10분 경과/);
 });
 
 
@@ -758,3 +762,58 @@ for (const method of ['onesign', 'joint_certificate']) {
     assert.equal(ui.calls.length, before + 3, 'without a usable session nothing more is requested');
   });
 }
+
+test('a session past its idle limit shows as logged out and offers only a login', async t => {
+  const ui = await setup(t, 'onesign', 'ready');
+  ui.state.idleExpired = true;
+  const main = ui.document.querySelector('main');
+  for (const view of ['accounts', 'settings']) {
+    main.innerHTML = await ui.views[view](ui.ctx);
+    assert.match(main.textContent, /로그아웃됨/);
+    assert.doesNotMatch(main.textContent, /세션 있음|로그인됨\s*확인/);
+    assert.equal(main.querySelector('[data-action="login"]').textContent, '로그인');
+    assert.equal(main.querySelector('[data-action="accounts-query"]'), null);
+  }
+  assert.equal(ui.calls.length, 0);
+});
+
+test('automatic login extension is one switch for the browser and says what it does for each login', async t => {
+  const ui = await setup(t, 'onesign', 'ready');
+  const main = ui.document.querySelector('main');
+  main.innerHTML = await ui.views.accounts(ui.ctx);
+  const toggle = main.querySelector('[data-action="auto-extend-toggle"]');
+  assert.equal(toggle.getAttribute('role'), 'switch');
+  assert.equal(toggle.getAttribute('aria-checked'), 'false');
+  main.innerHTML = await ui.views.settings(ui.ctx);
+  assert.match(main.querySelector('.connection-settings').textContent, /로그인 자동 연장꺼짐켜기/);
+  await ui.actions['auto-extend-toggle'](ui.ctx, toggle);
+  assert.equal(ui.state.autoExtend, true);
+  for (const [extension, text] of [['on', /자동 연장 켜짐/], ['locked', /저장소 암호를 기억해 두어야 자동 연장돼요/],
+    ['unsupported', /연장 요청이 아직 없어 자동 연장하지 않아요/], ['stopped', /자동 연장 중단됨/]]) {
+    ui.state.extension = extension;
+    for (const view of ['accounts', 'settings']) {
+      main.innerHTML = await ui.views[view](ui.ctx);
+      assert.match(main.textContent, text);
+    }
+  }
+  main.innerHTML = await ui.views.accounts(ui.ctx);
+  assert.equal(main.querySelector('[data-action="auto-extend-toggle"]').getAttribute('aria-checked'), 'true');
+  await ui.actions['auto-extend-toggle'](ui.ctx, toggle);
+  assert.equal(ui.state.autoExtend, false);
+  assert.equal(ui.calls.length, 0, 'the switch itself sends nothing to the bank');
+  assert.equal(ui.asked.length, 0);
+});
+
+test('the activity list leaves out login extensions unless asked', async t => {
+  const ui = await setup(t);
+  const main = ui.document.querySelector('main');
+  ui.state.params = {};
+  main.innerHTML = await ui.views.activity(ui.ctx);
+  assert.equal(ui.apiCalls.at(-1), LIST);
+  assert.match(main.querySelector('.list-footer').textContent, /로그인 연장 기록은 숨겼어요/);
+  ui.actions['activity-extensions'](ui.ctx, main.querySelector('[data-action="activity-extensions"]'));
+  assert.equal(JSON.stringify(ui.changed.at(-1)), JSON.stringify(['activity', {extensions: true}]));
+  ui.state.params = {extensions: true};
+  main.innerHTML = await ui.views.activity(ui.ctx);
+  assert.equal(ui.apiCalls.at(-1), '/jobs?limit=200');
+});

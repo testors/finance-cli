@@ -19,7 +19,7 @@ const start = (title, description) => heading(title, description,
 const loginFirst = text => `<div class="empty-state">${text}<div class="section-actions">${button('지로 로그인', 'data-action="giro-login"', 'primary')}</div></div>`;
 const close = (kind = 'primary') => `<div class="dialog-actions">${button('닫기', 'data-ui="close"', kind)}</div>`;
 
-async function listing() { return (await api.get('/jobs?area=giro&limit=200')).jobs; }
+async function listing() { return (await api.get('/jobs?area=giro&limit=200&hide=session_extend')).jobs; }
 async function latest(name, row, rows, tax = null) {
   const item = rows.find(j => j.name === name && j.login_id === row?.id && (!tax || j.input?.tax_type === tax));
   return item ? api.get('/jobs/' + encodeURIComponent(item.id)) : null;
