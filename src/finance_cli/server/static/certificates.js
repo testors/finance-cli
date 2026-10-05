@@ -1,5 +1,5 @@
 /* Certificate onboarding. Sensitive files and fields are passed once, never placed in jobs or browser storage. */
-import {api, follow} from './api.js';
+import {api, follow, idempotencyKey} from './api.js';
 import * as ui from './ui.js';
 import {applyRemember, refreshModel, rememberField, secretFields, state} from './app.js';
 
@@ -129,7 +129,7 @@ async function start(form, name, input, secrets, onDone) {
   if (form.dataset.started) return;
   form.dataset.started = 'true';
   // One key per submitted form. A lost HTTP response never leads to an automatic re-send.
-  const idempotency_key = 'web-' + crypto.randomUUID();
+  const idempotency_key = idempotencyKey();
   try {
     const job = await api.post('/jobs', {name, input, secrets, idempotency_key});
     form.reset();
@@ -244,7 +244,7 @@ async function submitWizard(form) {
       const job = await api.post('/jobs', {name: 'hana.onesign.issue.' + current,
         input: {name, ...(current === 'init' ? {settings} : {}), ...(current === 'prepare-id' && idCard ? {id_card: idCard} : {}),
           ...(REMOTE.has(current) ? {send: true} : {})},
-        secrets: {...vault, ...privateInputs[current]}, idempotency_key: 'web-' + crypto.randomUUID()});
+        secrets: {...vault, ...privateInputs[current]}, idempotency_key: idempotencyKey()});
       delete privateInputs[current];
       last = await follow(job.id, () => {});
       issued ||= last.result?.certificate_issued === true;

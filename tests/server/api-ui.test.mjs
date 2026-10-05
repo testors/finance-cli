@@ -2,6 +2,32 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import {readFile} from 'node:fs/promises';
 import {SourceTextModule, createContext} from 'node:vm';
+import {webcrypto} from 'node:crypto';
+
+test('HTTP browsers without randomUUID can submit a login exactly once', async () => {
+  const requests = [];
+  const context = createContext({
+    crypto: {getRandomValues: bytes => webcrypto.getRandomValues(bytes)},
+    Blob,
+    fetch: async (url, options) => {
+      requests.push({url, options});
+      return {ok: true, json: async () => ({id: 'synthetic-login', status: 'queued'})};
+    },
+  });
+  const source = await readFile(new URL('../../src/finance_cli/server/static/api.js', import.meta.url), 'utf8');
+  const module = new SourceTextModule(source, {context});
+  await module.link(() => { throw new Error('unexpected import'); });
+  await module.evaluate();
+  const result = await module.namespace.submit('hana.onesign.login', {login_id: 'synthetic'});
+  assert.equal(result.id, 'synthetic-login');
+  assert.equal(requests.length, 1);
+  assert.equal(requests[0].url, '/api/v1/jobs');
+  assert.equal(requests[0].options.method, 'POST');
+  const body = JSON.parse(requests[0].options.body);
+  assert.equal(body.name, 'hana.onesign.login');
+  assert.match(body.idempotency_key, /^web-[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/);
+  assert.notEqual(module.namespace.idempotencyKey(), body.idempotency_key);
+});
 
 test('API errors keep setup reasons and the stable error code', async () => {
   let result = {error: 'capability_unavailable', reasons: ['hometax_runtime_not_installed', null]};

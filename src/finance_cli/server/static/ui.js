@@ -144,7 +144,6 @@ const MESSAGES = {
   network_unreachable: '서버에 연결할 수 없어요. 네트워크와 서버 상태를 확인하세요.',
   access_required: '이 브라우저의 접속이 만료되었거나 철회되었어요. 다시 등록하세요.',
   csrf_token_invalid: '보안 확인이 만료되었어요. 화면을 새로 고치세요.',
-  origin_not_allowed: '허용되지 않은 주소에서 보낸 요청이에요.',
   enrollment_code_invalid: '등록 코드가 맞지 않거나 만료되었어요.',
   enrollment_rate_limited: '등록 시도가 너무 많아요. 잠시 후 서버에서 새 코드를 만들어 입력하세요.',
   resource_busy: '같은 기관 자원을 쓰는 다른 작업이 실행 중이에요. 입력한 비밀번호는 전달하지 않았어요. 잠시 후 다시 시도하세요.',

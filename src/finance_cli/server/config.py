@@ -83,20 +83,6 @@ class Config:
     def mode(self):
         return 'proxy' if self.secure else 'local'
 
-    @property
-    def public_host(self):
-        return self.public_origin.split('://', 1)[1]
-
-    def allowed_hosts(self):
-        """Host header values accepted: the public host and the loopback listener."""
-        return {self.public_host, f'127.0.0.1:{self.port}', f'localhost:{self.port}', f'[::1]:{self.port}'}
-
-    def allowed_origins(self):
-        origins = {self.public_origin}
-        if self.mode == 'local':
-            origins |= {f'http://127.0.0.1:{self.port}', f'http://localhost:{self.port}'}
-        return origins
-
     def as_dict(self):
         return {**asdict(self), 'mode': self.mode, 'secure_cookies': self.secure}
 

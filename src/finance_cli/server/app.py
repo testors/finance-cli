@@ -1,8 +1,7 @@
 """HTTP API and static app. Requests only accept or read jobs; workers do the work.
 
-Same-origin only: the Host header must name the configured public origin or
-the loopback listener, state changes need the configured Origin and the CSRF
-token, and responses never echo request values. Proxy headers are read only
+State changes require the device CSRF token, and responses never echo request
+values. Proxy headers are read only
 from loopback peers and only for the client address.
 """
 from contextlib import asynccontextmanager
@@ -102,9 +101,6 @@ def create_app(config, *, db=None, dispatcher=True, vaults=None):
 
     @app.middleware('http')
     async def guard(request: Request, call_next):
-        host = request.headers.get('host', '')
-        if host not in config.allowed_hosts():
-            return error(421, 'host_not_allowed')
         path, method = request.url.path, request.method
         length = request.headers.get('content-length')
         limit = UPLOAD_LIMIT if path == f'{API}/uploads' else \
@@ -116,8 +112,6 @@ def create_app(config, *, db=None, dispatcher=True, vaults=None):
             return error(411, 'length_required')
         request.state.device = request.state.token = None
         if path.startswith(API + '/'):
-            if method not in ('GET', 'HEAD') and request.headers.get('origin') not in config.allowed_origins():
-                return error(403, 'origin_not_allowed')
             token = request.cookies.get(access.COOKIE)
             if token:
                 with db.write() as con:
