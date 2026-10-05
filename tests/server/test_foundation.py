@@ -28,8 +28,7 @@ class SettingsTests(unittest.TestCase):
         self.assertEqual((local.mode, local.secure), ('local', False))
         proxy = settings.Config(public_origin='https://finance.example.ts.net')
         self.assertEqual((proxy.mode, proxy.secure), ('proxy', True))
-        self.assertIn('finance.example.ts.net', proxy.allowed_hosts())
-        self.assertEqual(proxy.allowed_origins(), {'https://finance.example.ts.net'})
+        self.assertEqual(proxy.public_origin, 'https://finance.example.ts.net')
 
 
 class LockTests(unittest.TestCase):
@@ -71,21 +70,25 @@ class AccessTests(ServerCase):
         self.assertEqual(self.client.get('/static/../config.json').status_code, 404)
         self.assertEqual(self.client.get('/static/unknown.js').status_code, 404)
 
-    def test_host_header_must_match(self):
-        response = self.client.get('/api/v1/auth/state', headers={'Host': 'attacker.example'})
-        self.assertEqual(response.status_code, 421)
+    def test_arbitrary_hosts_allow_public_access_but_require_device_authentication(self):
+        for host in ('100.64.0.1:8740', 'synthetic.example:8740'):
+            with self.subTest(host=host):
+                response = self.client.get('/api/v1/auth/state', headers={'Host': host})
+                self.assertEqual(response.status_code, 200)
+                self.assertFalse(response.json()['enrolled'])
+                protected = self.client.get('/api/v1/capabilities', headers={'Host': host})
+                self.assertEqual((protected.status_code, protected.json()['error']), (401, 'access_required'))
 
-    def test_enrollment_code_single_use_rate_limit_and_origin(self):
+    def test_enrollment_code_single_use_rate_limit_and_arbitrary_origin(self):
         self.assertEqual(self.get('/capabilities').status_code, 401)
         state = self.get('/auth/state').json()
         self.assertEqual((state['enrolled'], state['mode']), (False, 'local'))
         with self.db.write() as con:
             code = access.create_code(con, self.config)['code']
-        refused = self.client.post('/api/v1/auth/enroll', json={'code': code}, headers={'Origin': 'https://evil.example'})
-        self.assertEqual(refused.status_code, 403)
         wrong = self.client.post('/api/v1/auth/enroll', json={'code': 'AAAAA-AAAAA'}, headers={'Origin': ORIGIN})
         self.assertEqual((wrong.status_code, wrong.json()), (403, {'error': 'enrollment_code_invalid'}))
-        ok = self.client.post('/api/v1/auth/enroll', json={'code': code.lower()}, headers={'Origin': ORIGIN})
+        ok = self.client.post('/api/v1/auth/enroll', json={'code': code.lower()},
+                              headers={'Origin': 'http://synthetic.example:8740'})
         self.assertEqual(ok.status_code, 200)
         cookie = ok.headers['set-cookie'].lower()
         self.assertIn('httponly', cookie)
@@ -128,13 +131,17 @@ class AccessTests(ServerCase):
         self.assertEqual(client_address(Peer('127.0.0.1')), '198.51.100.7')
         self.assertEqual(client_address(Peer('192.0.2.1')), '192.0.2.1')
 
-    def test_csrf_origin_idle_expiry_and_revocation(self):
+    def test_csrf_arbitrary_origin_idle_expiry_and_revocation(self):
         self.enroll()
         self.assertEqual(self.get('/capabilities').status_code, 200)
-        no_token = self.client.post('/api/v1/profiles', json={'name': '내 개인'}, headers={'Origin': ORIGIN})
+        no_token = self.client.post('/api/v1/profiles', json={'name': '내 개인'},
+                                    headers={'Origin': 'http://synthetic.example:8740'})
         self.assertEqual((no_token.status_code, no_token.json()['error']), (403, 'csrf_token_invalid'))
         no_origin = self.client.post('/api/v1/profiles', json={'name': '내 개인'}, headers={'X-CSRF-Token': self.csrf})
-        self.assertEqual(no_origin.status_code, 403)
+        self.assertEqual(no_origin.status_code, 200)
+        other_origin = self.client.post('/api/v1/profiles', json={'name': '다른 주소'},
+                                        headers={'X-CSRF-Token': self.csrf, 'Origin': 'http://synthetic.example:8740'})
+        self.assertEqual(other_origin.status_code, 200)
         self.assertEqual(self.post('/profiles', {'name': '내 개인'}).status_code, 200)
         devices = self.get('/auth/devices').json()['devices']
         self.assertTrue(devices[0]['current'])

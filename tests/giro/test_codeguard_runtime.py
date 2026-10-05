@@ -8,7 +8,7 @@ from itertools import count
 from threading import Event, current_thread
 import unittest
 from urllib.parse import parse_qs, urlsplit
-from zipfile import BadZipFile, ZipFile
+from zipfile import BadZipFile, ZipFile, ZipInfo
 
 from cryptography.hazmat.primitives import serialization
 from cryptography.hazmat.primitives.asymmetric import padding
@@ -43,7 +43,8 @@ def memory_platform(der, *, dex=b'prepared dex' * 1000):
             ('META-INF/MANIFEST.MF', b'prepared manifest'),
             ('META-INF/SIGNER.SF', b'prepared signer'),
             ('META-INF/CERT.RSA', bag([der]))):
-            output.writestr(name, data)
+            # Identical fixtures must hash identically regardless of creation time.
+            output.writestr(ZipInfo(name, date_time=(2026, 1, 1, 0, 0, 0)), data)
     env.files[application.source_dir.encode()] = archive.getvalue()
     for path in tuple(env.files):
         if path.startswith(b'/data/sample.app/files/'): del env.files[path]

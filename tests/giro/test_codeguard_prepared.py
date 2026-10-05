@@ -5,6 +5,7 @@ import json
 from pathlib import Path
 import tempfile
 import unittest
+from unittest.mock import patch
 from urllib.parse import parse_qs
 from zipfile import ZipFile
 
@@ -41,6 +42,14 @@ class PreparedTests(unittest.TestCase):
     tearDown = support.RuntimeTests.tearDown
     transport = support.RuntimeTests.transport
     reply = support.RuntimeTests.reply
+
+    def test_synthetic_archive_is_identical_across_creation_times(self):
+        archives = []
+        for second in (0, 4):
+            with patch('zipfile.time.localtime', return_value=(2026, 1, 1, 0, 0, second, 3, 1, -1)):
+                platform = support.memory_platform(self.der)
+                archives.append(platform.environment.files[platform.application.source_dir.encode()])
+        self.assertEqual(*archives)
 
     def runtime(self, *, compiled, source=None):
         platform = source or support.memory_platform(self.der)

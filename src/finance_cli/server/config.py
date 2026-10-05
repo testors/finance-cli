@@ -1,9 +1,8 @@
-"""Server settings: loopback binding and one explicit public origin.
+"""Server settings and one explicit public origin.
 
-Cookie security, CSRF origin checks and enrollment validity follow the
-configured public origin, never request headers. A plain-HTTP origin is only
-accepted on loopback (local development); remote browsers reach the server
-through an HTTPS reverse proxy (Caddy) that forwards to the loopback port.
+Cookie security and enrollment validity follow the configured public origin,
+never request headers. Configured non-loopback origins require HTTPS;
+incoming Host and Origin headers are not restricted.
 """
 from dataclasses import asdict, dataclass
 import ipaddress
