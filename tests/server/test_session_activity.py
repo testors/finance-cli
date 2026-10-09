@@ -30,13 +30,13 @@ class SessionActivityTests(ServerCase):
                 request_activity.before_request('ra')
                 request_activity.before_request('ca')
                 with self.db.read() as con:
-                    self.assertEqual(session_activity.metadata(con, ctx.session)['last_request_at'], 1000)
+                    self.assertEqual(session_activity.metadata(con, ctx.session, 'hana')['last_request_at'], 1000)
                 request_activity.before_request('bank')
             request_activity.before_request('bank')  # CLI/default context does nothing.
         with Database(self.db.file()).read() as con:
-            self.assertEqual(session_activity.metadata(con, self.sessions[0], at=1600)['last_request_at'], 1599)
-            self.assertFalse(session_activity.metadata(con, self.sessions[0], at=1600)['idle_expired'])
-            self.assertTrue(session_activity.metadata(con, self.sessions[1], at=1600)['idle_expired'])
+            self.assertEqual(session_activity.metadata(con, self.sessions[0], 'hana', at=1600)['last_request_at'], 1599)
+            self.assertFalse(session_activity.metadata(con, self.sessions[0], 'hana', at=1600)['idle_expired'])
+            self.assertTrue(session_activity.metadata(con, self.sessions[1], 'hana', at=1600)['idle_expired'])
         with patch.object(session_activity, 'now', return_value=2199):
             with request_activity.observe(ctx.before_hana_request):
                 with self.assertRaisesRegex(request_activity.RequestBlocked, '^session_idle_expired$'):
@@ -49,7 +49,7 @@ class SessionActivityTests(ServerCase):
             con.execute('UPDATE sessions SET checked_at=3000')
         reopened = Database(self.db.file())
         with reopened.read() as con, patch.object(session_activity, 'now', return_value=1600):
-            self.assertEqual(session_activity.metadata(con, self.sessions[0])['last_request_at'], 1000)
+            self.assertEqual(session_activity.metadata(con, self.sessions[0], 'hana')['last_request_at'], 1000)
             for service in ('hana', 'hana_corporate', 'giro', 'hometax'):
                 self.adapter.service = service
                 self.assertEqual(session_activity.refusal(con, self.adapter, self.sessions[0]), 'session_idle_expired')
@@ -57,6 +57,19 @@ class SessionActivityTests(ServerCase):
             session_activity.record(con, self.sessions[0]['id'], 1599)
             con.execute('DELETE FROM sessions WHERE id=?', (self.sessions[0]['id'],))
             self.assertEqual(con.execute('SELECT count(*) FROM session_activity').fetchone()[0], 0)
+
+    def test_giro_counts_290_idle_seconds_and_the_others_ten_minutes(self):
+        with self.db.read() as con:
+            for service, limit in (('giro', 290), ('hana', 600), ('hana_corporate', 600), ('hometax', 600)):
+                self.adapter.service = service
+                value = session_activity.metadata(con, self.sessions[0], service, at=1000 + limit - 1)
+                self.assertEqual((value['idle_seconds'], value['idle_expires_at'], value['idle_expired']),
+                                 (limit, 1000 + limit, False))
+                self.assertTrue(session_activity.metadata(con, self.sessions[0], service, at=1000 + limit)['idle_expired'])
+                with patch.object(session_activity, 'now', return_value=1000 + limit - 1):
+                    self.assertIsNone(session_activity.refusal(con, self.adapter, self.sessions[0]))
+                with patch.object(session_activity, 'now', return_value=1000 + limit):
+                    self.assertEqual(session_activity.refusal(con, self.adapter, self.sessions[0]), 'session_idle_expired')
 
     def test_listing_can_leave_out_login_extension_jobs_before_its_limit(self):
         from finance_cli.server import jobs

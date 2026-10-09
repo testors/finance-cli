@@ -386,7 +386,7 @@ def create_app(config, *, db=None, dispatcher=True, vaults=None):
                 row['session'] = None if session is None else {
                     'state': session['state'], 'created_at': session['created_at'], 'checked_at': session['checked_at']}
                 if session is not None and row['institution'] in session_activity.SERVICES:
-                    row['session'].update(session_activity.metadata(con, session))
+                    row['session'].update(session_activity.metadata(con, session, row['institution']))
             return {'logins': rows, 'server_time': session_activity.now()}
 
     @app.post(API + '/logins')

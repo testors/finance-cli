@@ -443,7 +443,7 @@ class OneSignPathTests(HanaCase):
             self.assertEqual(row['session']['last_request_at'], at)
             with Database(self.db.file()).read() as con:
                 session = con.execute('SELECT * FROM sessions WHERE id=?', (row['current_session_id'],)).fetchone()
-                self.assertTrue(session_activity.metadata(con, session)['idle_expired'])
+                self.assertTrue(session_activity.metadata(con, session, 'hana')['idle_expired'])
                 self.assertEqual((session['state'], json.loads(session['verdict'])), ('usable', {'accepted': True}))
             with self.assertRaisesRegex(jobs.NotReady, '^session_idle_expired$'):
                 self.submit('hana.onesign.accounts', login_id=self.login['id'])

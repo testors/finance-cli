@@ -1,4 +1,8 @@
-"""Explicit session activity through one encrypted server-time query."""
+"""Login extension through one registered-account query; account rows are not returned.
+
+A login-required read: the service answers 000 only for a live login and ends an
+expired one with 301/302. It states no expiry time, so none is reported here.
+"""
 from datetime import datetime, timezone
 import uuid
 
@@ -9,8 +13,11 @@ from .query_flow import response_report
 from .session_store import SessionStore
 
 
+ENDPOINT = 'accounts.registered'
+
+
 def extend(*, send=False, store=None):
-    result = {'operation': 'session-extend', 'method': 'encrypted-time-query', 'endpoint': 'auth.datetime',
+    result = {'operation': 'session-extend', 'method': 'registered-accounts-query', 'endpoint': ENDPOINT,
               'network_used': False, 'automatic_login': False, 'automatic_retry': False,
               'request_accepted': None, 'login_extension_accepted': None, 'extension_effect': 'unverified',
               'session_ended': False, 'server_expires_at': None, 'session_current_validity': 'unverified',
@@ -28,14 +35,21 @@ def extend(*, send=False, store=None):
             directory = parent / uuid.uuid4().hex
             directory.mkdir(mode=0o700)
             result['operation_id'] = directory.name
-            storage.write_new(directory / 'attempt.json', b'{"endpoint":"auth.datetime","automatic_retry":false}\n')
+            storage.write_new(directory / 'attempt.json', ('{"endpoint":"%s","automatic_retry":false}\n' % ENDPOINT).encode())
             result['network_used'] = True
-            response = client.query('auth.datetime', {}, send=True)
+            response = client.query(ENDPOINT, {}, send=True)
             result.update(response_report(response), request_accepted=response.app_success if response.origin == 'response' else None,
                           session_ended=response.clear_session, events=list(client.events),
                           observed_at=datetime.now(timezone.utc).isoformat())
             if response.clear_session:
                 result['session_current_validity'] = 'ended'
+                if response.origin == 'response':
+                    result['login_extension_accepted'] = False
+            elif response.origin == 'response' and response.app_success:
+                # The service has no extension acknowledgement. A successful login-required
+                # read was observed to move its idle limit (live trial, 2026-10-10).
+                result.update(session_current_validity='valid', login_extension_accepted=True,
+                              extension_effect='idle_limit_reset_observed')
     except (Exception, KeyboardInterrupt) as exc:
         result['error'] = 'interrupted' if isinstance(exc, KeyboardInterrupt) else 'session_extension_processing_incomplete'
         result['processing_issues'].append(result['error'])

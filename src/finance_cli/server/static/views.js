@@ -45,7 +45,7 @@ function extensionNote(row) {
 }
 
 function readiness(row) {
-  if (bankSessionExpired(row)) return tag('로그아웃됨 · 10분 경과', 'warning');
+  if (bankSessionExpired(row)) return tag(`로그아웃됨 · ${ui.idleLimit(row)} 경과`, 'warning');
   const value = row.readiness;
   return value === 'query_only' ? tag('조회용 세션 있음', '') : value === 'ready' ? tag('세션 있음', '') : value === 'login_disabled' ? tag('사용 중지', 'neutral') : tag('로그인 필요', 'warning');
 }
@@ -611,7 +611,7 @@ const SESSION_LABEL = {usable: '사용 가능', consumed: '세션 사용함', ex
 
 function loginStatus(row) {
   if (row.disabled) return tag('사용 중지', 'neutral');
-  if (bankSessionExpired(row)) return tag('로그아웃됨', 'warning') + '<span class="meta">10분 동안 요청이 없었어요</span>';
+  if (bankSessionExpired(row)) return tag('로그아웃됨', 'warning') + `<span class="meta">${ui.idleLimit(row)} 동안 요청이 없었어요</span>`;
   if (row.readiness === 'query_only') return tag('조회용 세션 있음', '') + '<span class="meta">새 이체 시 로그인 필요</span>';
   if (row.readiness === 'ready') return tag('로그인됨', '') + (row.session?.checked_at ? `<span class="meta">확인 ${ui.time(row.session.checked_at)}</span>` : '');
   const session = row.session;
@@ -1081,7 +1081,7 @@ export const actions = {
   'auto-extend-toggle': async () => {
     setAutoExtend(!state.autoExtend);
     ui.toast(state.autoExtend ? '자동 로그인 연장을 켰어요. 이 브라우저에서 앱을 열어 둔 동안 만료 전에 연장해요.'
-      : '자동 로그인 연장을 껐어요. 세션은 마지막 요청 10분 뒤 로그아웃 처리돼요.');
+      : '자동 로그인 연장을 껐어요. 세션은 마지막 요청 뒤 유휴 제한(지로 4분 50초, 그 외 10분)이 지나면 로그아웃 처리돼요.');
     await render();
   },
   'cancel-job': async (ctx, button) => {

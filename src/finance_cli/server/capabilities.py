@@ -51,7 +51,7 @@ FEATURES = (
     ('giro', 'giro-tools', '실행 환경·인증서·인증 처리 점검', 'local', ()),
     ('giro', 'giro-probe', '초기 연결 점검', 'local', ()),
     ('giro', 'giro-login', '간편비밀번호 로그인', 'settings', ('giro.login',)),
-    ('giro', 'giro-extend', '세션 유지 (시간 조회)', 'settings', ('giro.session.extend',)),
+    ('giro', 'giro-extend', '로그인 연장', 'settings', ('giro.session.extend',)),
     ('giro', 'giro-live', '국세·지방세·관세 고지 조회', 'work', ('giro.bills.list',)),
     ('giro', 'giro-pay', '등록계좌 선택·단건 세금 납부', 'work', ('giro.payment.options', 'giro.payment.prepare')),
     ('giro', 'giro-accounts', '등록계좌·별칭 조회', 'work', ('giro.accounts.list',)),
@@ -163,7 +163,7 @@ def login_readiness(con, login):
     if login['disabled']:
         return 'login_disabled'
     if login['institution'] in session_activity.SERVICES and session is not None \
-            and session_activity.metadata(con, session)['idle_expired']:
+            and session_activity.metadata(con, session, login['institution'])['idle_expired']:
         return 'login_required'
     if login['institution'] == 'hana' and login['method'] == 'onesign' and session is not None \
             and session['state'] != 'usable' and adapters.get('hana.onesign.accounts').accepts_session(session):

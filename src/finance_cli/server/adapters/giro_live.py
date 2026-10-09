@@ -29,7 +29,7 @@ from ..worker import job_directory
 
 VERDICT = ('app_success', 'response_code', 'callback', 'callback_code', 'origin', 'service_decision',
            'login_service_decision', 'registration_service_decision')
-TTL = 600
+TTL = 300  # how long a queried bill may be prepared, and a prepared payment confirmed
 
 
 def observed(ctx, value, result=None, keys=VERDICT):
@@ -288,10 +288,10 @@ class Accounts(Session):
 
 
 class Extend(Session):
-    """One encrypted server-time query as session activity. Whether the server moves its own
-    timeout is not confirmed; the outcome is only that query's decision."""
+    """One registered-account query as the login extension. The service states no expiry;
+    the outcome is that query's decision and no account row is projected."""
     name = 'giro.session.extend'
-    title = '지로 세션 유지'
+    title = '지로 로그인 연장'
 
     def run(self, ctx, step):
         from giro import session as service

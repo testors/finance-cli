@@ -389,6 +389,10 @@ test('idle accounts, history and transfers check expiry before requesting secret
   assert.equal(ui.calls.length, 0);
   ui.document.querySelector('main').innerHTML = await ui.views.accounts(ui.ctx);
   assert.match(ui.document.body.textContent, /로그아웃됨 · 10분 경과/);
+  // The limit shown is the one the server sent for that institution's session.
+  ui.state.logins[0].session = {...ui.state.logins[0].session, idle_seconds: 290};
+  ui.document.querySelector('main').innerHTML = await ui.views.accounts(ui.ctx);
+  assert.match(ui.document.body.textContent, /로그아웃됨 · 4분 50초 경과/);
 });
 
 

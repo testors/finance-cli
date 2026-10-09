@@ -65,13 +65,14 @@ def hana_report():
 
 # Reviewed CLI and web service verdicts, not an automatic promotion based on
 # local job completion. No account, bill, session or receipt contents belong here.
-GIRO_REVIEWED_ON = '2026-10-03'
+GIRO_REVIEWED_ON = '2026-10-10'
 GIRO_JOBS = {
     'giro.login': ('live_verified', '웹 PIN 로그인·암호화 세션 저장 성공 확인.'),
     'giro.bills.list': ('live_partial', '국세 목록·상세는 CLI에서 성공 확인. 웹 국세·지방세·관세 조회는 “고지내용 없음”(311) 응답 확인. 고지가 있는 웹 목록은 미확인.'),
     'giro.payment.options': ('live_partial', '국세 상세·납부 가능 계좌 조회는 CLI에서 성공 확인. 웹 납부계좌 선택과 지방세·관세 상세는 미확인.'),
     'giro.payment.prepare': ('live_partial', '국세 단건 계좌 납부·추가 PIN 인증은 CLI에서 성공 확인. 웹 납부 실행과 지방세·관세 납부는 미확인.'),
     'giro.accounts.list': ('live_verified', '웹 등록계좌 목록·계좌 별칭 조회 성공 확인.'),
+    'giro.session.extend': ('live_partial', '같은 등록계좌 조회가 유휴 만료를 늦추는 것을 저장된 CLI 세션에서 확인(290초 뒤 유지, 315초 뒤 종료). 이 연장 명령과 웹 작업 자체의 실사용은 미확인.'),
     'giro.receipts.list': ('live_verified', '웹 납부내역 목록 조회 성공 확인. 관측한 기간·페이지 기준.'),
     'giro.receipts.detail': ('live_verified', '웹 납부내역 상세 조회 성공 확인. 관측한 납부내역 기준.'),
 }

@@ -84,7 +84,7 @@ fin idcard list
 
 ## 기관 명령
 
-기존 로그인 세션의 단발 연장 요청은 `fin hana onesign extend --name 이름 --send`, `fin hana corporate session extend --send`, `fin giro session extend --send`로 실행합니다. 지로는 암호화 시간 조회를 통한 활동 요청이며 서버 만료 연장 효과는 미확인입니다. [세션 선택·출력·검증 범위](docs/session-extension.md)를 참고하세요.
+기존 로그인 세션의 단발 연장 요청은 `fin hana onesign extend --name 이름 --send`, `fin hana corporate session extend --send`, `fin giro session extend --send`로 실행합니다. 지로는 등록계좌 조회 한 번으로 연장하며 계좌 정보는 출력하지 않습니다. 지로 세션은 요청 없이 약 5분이 지나면 끝납니다. [세션 선택·출력·검증 범위](docs/session-extension.md)를 참고하세요.
 
 명령은 JSON 결과와 종료코드를 반환합니다. 도움말은 `fin <기관> ... --help`로 확인합니다. 홈택스의 실제 접속 명령에는 `--send`를 붙여야 합니다.
 

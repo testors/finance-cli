@@ -180,7 +180,7 @@ async function sessionLapsed() {
   renderTabs();
   renderLoginNotice();
   await refreshLogins().catch(() => {});
-  ui.toast('10분 동안 요청이 없어 로그아웃 처리됐어요. 계속하려면 다시 로그인하세요.');
+  ui.toast('유휴 제한 시간 동안 요청이 없어 로그아웃 처리됐어요. 계속하려면 다시 로그인하세요.');
   // Screens that list sessions show it at once; a screen with a form or an open dialog is left as it is.
   if (LISTS.includes(state.view) && !document.querySelector('#detail-dialog')?.open) render();
 }

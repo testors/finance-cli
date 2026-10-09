@@ -28,9 +28,9 @@ def parser():
     runtime.add_subparsers(dest="action", required=True).add_parser("check", help="패키지 리소스·합성 암호·문자셋·시간대 점검")
     api = sub.add_parser("api", help="인증·조회·납부 요청 모델 목록; 통신 없음")
     api.add_subparsers(dest="action", required=True).add_parser("list")
-    session = sub.add_parser('session', help='저장된 로그인 세션 유지 요청')
+    session = sub.add_parser('session', help='저장된 로그인 연장 요청')
     item = session.add_subparsers(dest='action', required=True).add_parser(
-        'extend', aliases=['keepalive'], help='암호화 시간 조회 1회로 세션 활동 요청; 만료 연장 효과는 미확인')
+        'extend', aliases=['keepalive'], help='등록계좌 조회 1회로 로그인 연장; 계좌 정보는 출력하지 않음')
     item.add_argument('--send', '--live', dest='live', action='store_true')
     auth = sub.add_parser("auth", help="인증 순서 또는 로컬 PIN 코덱")
     auth_sub = auth.add_subparsers(dest="action", required=True)

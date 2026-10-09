@@ -101,6 +101,9 @@ class GiroTests(ServerCase):
         self.assertEqual(job['awaiting']['requires'], ['account_password', 'pin'])
         self.assertEqual(job['awaiting']['preview']['account_alias'], '합성 생활비')
         self.assertEqual(job['awaiting']['preview']['amount'], '2000000')
+        import time
+        left = job['awaiting']['expires_at'] - time.time()
+        self.assertTrue(290 < left <= 300, 'the confirmation waits five minutes')
         self.assertEqual([n for n, _ in self.calls], ['national.list', 'national.detail', 'accounts.payable', 'auth.datetime'])
         self.assert_private(job)
         result = self.confirm(job)
@@ -297,22 +300,36 @@ class GiroTests(ServerCase):
         self.assertEqual(features['giro-pay']['status'], 'available')
         self.assertEqual(features['giro-pay']['verification'], 'live_partial')
 
-    def test_session_extension_is_one_time_query_and_ten_idle_minutes_count_as_logged_out(self):
+    def test_session_extension_is_one_account_query_and_290_idle_seconds_count_as_logged_out(self):
         import time
         from finance_cli.server import session_activity
         row = lambda: self.get('/logins').json()['logins'][0]
         job = self.run_job(self.submit('giro.session.extend'))
         self.assertEqual(job['outcome'], 'success', job)
-        self.assertEqual([name for name, _ in self.calls], ['auth.datetime'])
+        self.assertEqual([name for name, _ in self.calls], ['accounts.registered'])
         self.assertEqual((job['result']['request_accepted'], job['result']['login_extension_accepted'],
-                          job['result']['extension_effect']), (True, None, 'unverified'))
-        self.assertNotIn('20261003120000', json.dumps(job, ensure_ascii=False))
-        self.assertGreater(row()['session']['idle_expires_at'], time.time() + 590)
+                          job['result']['extension_effect'], job['result']['session_current_validity'],
+                          job['result']['server_expires_at']),
+                         (True, True, 'idle_limit_reset_observed', 'valid', None))
+        for private in (ACCOUNT, '합성은행', '합성 생활비'):
+            self.assertNotIn(private, json.dumps(job, ensure_ascii=False))
+        self.assertEqual(row()['session']['idle_seconds'], 290)
+        self.assertGreater(row()['session']['idle_expires_at'], time.time() + 280)
+        self.assertLessEqual(row()['session']['idle_expires_at'], time.time() + 290)
         self.assertEqual(row()['readiness'], 'ready')
-        with patch.object(session_activity, 'now', return_value=time.time() + 601):
+        with patch.object(session_activity, 'now', return_value=time.time() + 291):
             self.assertEqual(row()['readiness'], 'login_required')
             with self.assertRaisesRegex(jobs.NotReady, '^session_idle_expired$'):
                 self.submit('giro.accounts.list')
             with self.assertRaisesRegex(jobs.NotReady, '^session_idle_expired$'):
                 self.submit('giro.session.extend')
         self.assertEqual(len(self.calls), 1, 'an idle session is neither queried nor revived')
+
+    def test_session_extension_on_an_ended_login_marks_the_session_and_is_not_repeated(self):
+        self.responses['accounts.registered'] = {'responseCode': '301'}
+        job = self.run_job(self.submit('giro.session.extend'))
+        self.assertEqual(job['outcome'], 'rejected', job)
+        self.assertEqual((job['result']['login_extension_accepted'], job['result']['session_ended'],
+                          job['result']['session_current_validity']), (False, True, 'ended'))
+        self.assertEqual(self.get('/logins').json()['logins'][0]['readiness'], 'login_required')
+        self.assertEqual(len(self.calls), 1)
