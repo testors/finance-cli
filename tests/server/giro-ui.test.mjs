@@ -183,3 +183,26 @@ test('receipts default to the last month, paging keeps the shown period, and wai
   await a.giroActions['giro-receipts-page'](a.ctx, next);
   assert.equal(JSON.stringify(a.calls[0].fields.input), JSON.stringify({start_date: '2026-08-01', end_date: '2026-08-31', page: 3}));
 });
+
+
+test('receipt null responses remain visible and distinct from empty lists and rejection', async t => {
+  const a = await setup(t);
+  const job = {id: 'receipts', name: 'giro.receipts.list', login_id: 'giro', outcome: 'success',
+    input: {start_date: '2026-04-12', end_date: '2026-10-09', page: 1}, result: {receipts: null}};
+  a.add(job);
+  let html = await a.giroViews['giro-receipts'](a.ctx);
+  assert.match(html, /기관 응답에 납부내역 목록이 없어요/);
+  assert.doesNotMatch(html, /이 페이지에 납부내역이 없어요|giro-receipts-page/);
+  assert.equal(job.result.receipts, null);
+  job.result.receipts = [];
+  html = await a.giroViews['giro-receipts'](a.ctx);
+  assert.match(html, /이 페이지에 납부내역이 없어요/);
+  job.result.receipts = null; job.outcome = 'rejected';
+  html = await a.giroViews['giro-receipts'](a.ctx);
+  assert.match(html, /납부내역 목록을 확인하지 못했어요/);
+  assert.doesNotMatch(html, /기관 응답에 납부내역 목록이 없어요/);
+  job.outcome = 'success'; job.input.page = 2;
+  html = await a.giroViews['giro-receipts'](a.ctx);
+  assert.match(html, /납부내역 목록을 확인하지 못했어요/);
+  assert.equal(a.calls.length, 0);
+});

@@ -121,8 +121,20 @@ class LiveWorkflowTests(unittest.TestCase):
         self.assertEqual(result['receipts'], [])
         self.assertFalse(result['payment_reservation_changed'])
         self.assertTrue(reservation.exists())
-        self.assertEqual(self.server.calls[-1][1]['startDate'], ['20261001'])
+        self.assertEqual(self.server.calls[-1][1]['startDate'], ['2026-10-01'])
+        self.assertEqual(self.server.calls[-1][1]['endDate'], ['2026-10-03'])
         self.assertEqual(self.server.steps.count('auth.pin'), 1)
+
+    def test_receipt_period_uses_hyphenated_dates_and_preserves_null(self):
+        self.server.responses['receipts.list'] = (200, {'responseCode': '000', 'receiptList': None})
+        result = list_receipts(date(2026,4,12), date(2026,10,9), send=True, store=self.store)
+        self.assertTrue(result['app_success'])
+        self.assertIsNone(result['receipts'])
+        fields = self.server.calls[-1][1]
+        self.assertEqual(fields['startDate'], ['2026-04-12'])
+        self.assertEqual(fields['endDate'], ['2026-10-09'])
+        self.assertEqual(fields['page'], ['1'])
+        self.assertEqual(self.server.steps.count('receipts.list'), 1)
 
     def test_receipt_detail_uses_selected_identifiers_without_releasing_reservation(self):
         reserved = self.journal.reserve('synthetic-payment')

@@ -119,8 +119,8 @@ def list_receipts(start_date, end_date, *, page=1, send=False, store=None):
     store = store if store is not None else SessionStore()
     with store.use() as (session, issues):
         client = AuthenticatedClient(session)
-        response = client.query('receipts.list', dict(startDate=start_date.strftime('%Y%m%d'),
-            endDate=end_date.strftime('%Y%m%d'), page=str(page), pageSize='10'), send=True)
+        response = client.query('receipts.list', dict(startDate=start_date.isoformat(),
+            endDate=end_date.isoformat(), page=str(page), pageSize='10'), send=True)
         result = dict(response_report(response), network_used=True, session_processing_issues=issues,
                       receipts=None, page_navi=None, events=list(client.events), payment_reservation_changed=False)
         if response.app_success:
