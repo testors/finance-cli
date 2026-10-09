@@ -7,7 +7,7 @@ import sys
 import warnings
 
 from finance_cli.cli.credentials import add_selection, resolve
-from . import idpw, keypad, login, store, protocol, queries, transfers
+from . import batch, idpw, keypad, login, store, protocol, queries, transfers
 
 
 def add_parser(sub):
@@ -43,6 +43,14 @@ def add_parser(sub):
     item.add_argument('--session', help='선택: 다른 기업 로그인 기록 사용')
     item.add_argument('--send', action='store_true')
     transfer = commands.add_parser('transfer', help='일반 원화 이체 준비·실행·결과').add_subparsers(dest='corporate_transfer_action', required=True)
+    item = transfer.add_parser('check-batch', help='급여 등 다건 이체 CSV의 건수·합계·중복 행 확인; 무통신')
+    item.add_argument('--file', required=True, type=Path, help='UTF-8 CSV 명단')
+    item = transfer.add_parser('prepare-batch', help='CSV 전체 명단을 한 묶음으로 이체 준비; 송금은 execute')
+    item.add_argument('--from-account', required=True)
+    item.add_argument('--file', required=True, type=Path, help='UTF-8 CSV 명단')
+    item.add_argument('--delayed', action='store_true', help='지연이체 선택')
+    item.add_argument('--session', help='선택: 다른 기업 로그인 기록 사용')
+    item.add_argument('--send', action='store_true')
     item = transfer.add_parser('prepare', help='수취인·금액 확인 후 이체 준비; 송금 실행은 execute')
     item.add_argument('--from-account', required=True)
     item.add_argument('--to-bank', required=True, help='입금은행 코드 3자리')
@@ -130,6 +138,10 @@ def dispatch(args):
     try:
         if args.corporate_action == 'transfer':
             action = args.corporate_transfer_action
+            if action == 'check-batch':
+                return batch.check(args.file)
+            if action == 'prepare-batch':
+                return batch.prepare(args.from_account, args.file, delayed=args.delayed, session=args.session, send=args.send)
             if action == 'prepare':
                 return transfers.prepare(args.from_account, args.to_bank, args.to_account, args.amount,
                     memo=args.memo, sender_text=args.credit_memo, recipient_text=args.debit_memo,
@@ -178,8 +190,11 @@ def dispatch(args):
             inputs['pin'] = pin_provider()
         return login.login(args.session, method, resolve(args, 'hana') if joint else args.name, send=True, inputs=inputs)
     except protocol.Stop as exc:
-        return {'channel': 'corporate', 'accepted': None, 'network_used': False,
-                'processing_status': 'stopped', 'error': str(exc)}
+        result = {'channel': 'corporate', 'accepted': None, 'network_used': False,
+                  'processing_status': 'stopped', 'error': str(exc)}
+        if isinstance(exc, batch.RowError):
+            result['input_row'] = exc.row
+        return result
     except (OSError, ValueError, KeyError, TypeError):
         return {'channel': 'corporate', 'accepted': None, 'network_used': False,
                 'processing_status': 'stopped', 'error': 'local_input_or_processing_error'}

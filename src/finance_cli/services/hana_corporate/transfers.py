@@ -30,57 +30,82 @@ def prepare(account, bank, recipient, amount, *, memo='', sender_text=None, reci
                          'ordinary_transfer_bank_required')
         protocol.require(re.fullmatch('[0-9]+', str(amount)) is not None and int(amount) > 0, 'invalid_transfer_amount')
         amount = str(int(amount))
-        previous = client.state_directory / 'pending-transfer.json'
-        if previous.exists():
-            old, old_directory = pending(client)
-            protocol.require((old_directory / 'finished.json').exists(), 'pending_transfer_exists_use_execute_result_or_cancel')
-        directory = storage.directory(client.state_directory / 'transfers') / uuid.uuid4().hex
-        directory.mkdir(mode=0o700)
-        output['transfer'] = directory.name
-        storage.atomic_json(previous, {'transfer': directory.name})
-        initial = client.request('transfer-init', {'ACCT_NO': account})
-        delayed = delayed or initial.get('dlayTrnsYn') in (True, 1, '1')
-        rows = initial.get('acctList')
-        protocol.require(isinstance(rows, list), 'withdrawal_accounts_unavailable')
-        protocol.require(rows, 'no_withdrawal_accounts')
-        selected = next((r for r in rows if r.get('accountNo') == account), None)
-        protocol.require(selected is not None, 'withdrawal_account_not_available')
-        if len(rows) == 1:
-            detail = initial
-            balance = initial.get('paymPossAmt')
-        else:
-            detail = client.request('transfer-withdrawal', {'ACCT_NO': account})
-            balance = detail.get('paymPossBal')
-        named = client.request('transfer-recipient', {'REC_NCNT': 1, 'RCV_BNK_CD': bank, 'RCV_ACCT_NO': recipient, 'TRNS_AMT': 0})
-        recipient_name = '' if named.get('resResult') == 'JSON_NO_DATA' else named.get('resResult', '')
-        client.request('transfer-amount', {'inqCd': '01', 'paymPossAmt': balance, 'ACCT_NO': account, 'trnsAmt': amount, 'rcvBnkCd': bank})
-        body = {'ADD_TRNS_CALL_YN': 'Y', 'ACCT_NO': account, 'RCV_BNK_CD': bank, 'RCV_ACCT_NO': recipient,
-                'TRNS_AMT': int(amount), 'CMSV_NO': cms_code, 'RCV_PSBK_MARK_CTT': detail.get('owacNm', '') if sender_text is None else sender_text,
-                'WDRW_PSBK_MARK_CTT': recipient_name if recipient_text is None else recipient_text,
-                'MEMO': memo, 'ACCT_NM': selected.get('alias') or selected.get('prdNm') or selected.get('title') or '',
-                'DLAY_TRNS_YN': 'Y' if delayed else 'N', 'RMTE_NM': recipient_name, 'OWAC_NM': detail.get('custNm', '')}
-        wire.check_notes(body, output)
-        if bank != '081':
-            clock = op.current_time(client)
-            if 0 <= int(clock['time'][:4]) <= 15:
-                op.warning(output, 'other_bank_transfer_time_notice')
-        if delayed:
-            day = client.request('server-time', attempt_name='delayed-business-date')
-            possible = False
-            if day.get('bizDayCheck') == 'Y':
-                clock = op.current_time(client, attempt_name='delayed-business-time')
-                possible = 800 <= int(clock['time'][:4]) < 1600
-            if not possible:
-                op.warning(output, 'delayed_transfer_time_notice_check_result')
-        try:
-            store.record(directory / 'requested.json', body)
-        except (OSError, ValueError):
-            op.warning(output, 'transfer_request_log_storage_failed')
-        client.request('transfer-prepare', body)
-        confirmation = client.request('transfer-confirm', observe=op.observe(output))
+        directory = new_preparation(client, output)
+        confirmation = prepare_item(client, directory, output, account, bank, recipient, amount,
+                                    memo=memo, sender_text=sender_text, recipient_text=recipient_text,
+                                    cms_code=cms_code, delayed=delayed)
         output.update(preview=wire.preview(confirmation), transfer_status='prepared', next='fin hana corporate transfer execute --send')
         store.record(directory / 'confirmation.json', confirmation)
     return output
+
+
+def new_preparation(client, output):
+    previous = client.state_directory / 'pending-transfer.json'
+    if previous.exists():
+        old, old_directory = pending(client)
+        protocol.require((old_directory / 'finished.json').exists(), 'pending_transfer_exists_use_execute_result_or_cancel')
+    directory = storage.directory(client.state_directory / 'transfers') / uuid.uuid4().hex
+    directory.mkdir(mode=0o700)
+    output['transfer'] = directory.name
+    storage.atomic_json(previous, {'transfer': directory.name})
+    return directory
+
+
+def prepare_item(client, directory, output, account, bank, recipient, amount, *, memo='', sender_text=None,
+                 recipient_text=None, cms_code='', delayed=False, previous=None, prefix=''):
+    def request(stage, body=None, **kwargs):
+        return client.request(stage, body, attempt_name=prefix + stage, **kwargs)
+    initial_body = {'ACCT_NO': account}
+    if previous is not None:
+        # The add-recipient page forwards OWAC_NM, but init reads the absent
+        # WDRW_PSBK_MARK_CTT for RCV_PSBK_MARK_CTT, producing an empty string.
+        rows = previous.get('cts0004InRec') or []
+        first = rows[0] if rows else {}
+        initial_body.update(ADD_TRANS_YN='Y', RE_TRANS_YN='N', RCV_PSBK_MARK_CTT='',
+                            OWAC_NM=first.get('OWAC_NM') or '', procGubn='')
+    initial = request('transfer-init', initial_body)
+    delayed = delayed or initial.get('dlayTrnsYn') in (True, 1, '1')
+    rows = initial.get('acctList')
+    protocol.require(isinstance(rows, list), 'withdrawal_accounts_unavailable')
+    protocol.require(rows, 'no_withdrawal_accounts')
+    selected = next((r for r in rows if r.get('accountNo') == account), None)
+    protocol.require(selected is not None, 'withdrawal_account_not_available')
+    if len(rows) == 1 or previous is not None:
+        detail = initial
+        balance = initial.get('paymPossAmt')
+    else:
+        detail = request('transfer-withdrawal', {'ACCT_NO': account})
+        balance = detail.get('paymPossBal')
+    named = request('transfer-recipient', {'REC_NCNT': 1, 'RCV_BNK_CD': bank, 'RCV_ACCT_NO': recipient, 'TRNS_AMT': 0})
+    recipient_name = '' if named.get('resResult') == 'JSON_NO_DATA' else named.get('resResult', '')
+    request('transfer-amount', {'inqCd': '01', 'paymPossAmt': balance, 'ACCT_NO': account, 'trnsAmt': amount, 'rcvBnkCd': bank})
+    body = {'ADD_TRNS_CALL_YN': 'Y', 'ACCT_NO': account, 'RCV_BNK_CD': bank, 'RCV_ACCT_NO': recipient,
+            'TRNS_AMT': int(amount), 'CMSV_NO': cms_code, 'RCV_PSBK_MARK_CTT': detail.get('owacNm', '') if sender_text is None else sender_text,
+            'WDRW_PSBK_MARK_CTT': recipient_name if recipient_text is None else recipient_text,
+            'MEMO': memo, 'ACCT_NM': selected.get('alias') or selected.get('prdNm') or selected.get('title') or '',
+            'DLAY_TRNS_YN': 'Y' if delayed else 'N', 'RMTE_NM': recipient_name, 'OWAC_NM': detail.get('custNm', '')}
+    if previous is not None:
+        body.pop('ACCT_NM', None)
+    wire.check_notes(body, output)
+    if bank != '081':
+        clock = op.current_time(client, attempt_name=prefix + 'server-time')
+        if 0 <= int(clock['time'][:4]) <= 15:
+            op.warning(output, 'other_bank_transfer_time_notice')
+    if delayed:
+        day = client.request('server-time', attempt_name=prefix + 'delayed-business-date')
+        possible = False
+        if day.get('bizDayCheck') == 'Y':
+            clock = op.current_time(client, attempt_name=prefix + 'delayed-business-time')
+            possible = 800 <= int(clock['time'][:4]) < 1600
+        if not possible:
+            op.warning(output, 'delayed_transfer_time_notice_check_result')
+    try:
+        store.record(directory / (prefix + 'requested.json'), body)
+    except (OSError, ValueError):
+        op.warning(output, 'transfer_request_log_storage_failed')
+    request('transfer-prepare', body)
+    confirmation = request('transfer-confirm', observe=op.observe(output))
+    return confirmation
 
 
 def stepper(client, directory):
@@ -148,6 +173,7 @@ def execute(*, session=None, send=False, inputs=None, credential=None, allow_dup
         output['transfer'] = saved['transfer']
         protocol.require(not (directory / 'transfer-execute-attempt.json').exists(), 'transfer_already_attempted_use_result')
         protocol.require(not (directory / 'finished.json').exists(), 'transfer_already_finished')
+        protocol.require((directory / 'confirmation.json').exists(), 'transfer_preparation_incomplete_use_cancel')
         confirmation = storage.read_json(directory / 'confirmation.json')
         output['preview'] = wire.preview(confirmation)
         rows = confirmation.get('cts0004InRec') or []
