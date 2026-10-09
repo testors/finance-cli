@@ -292,21 +292,23 @@ def assess_transfer_auth(response, login_info, *, auto_sign_yn='Y'):
 
 def transfer_form(form, server_date, server_time, *, bridge_type, prvt_cert_yn=''):
     """Zi single-transfer form; input is ordered/formatted, before '_1' suffixes."""
-    signing_text(form)  # Validate field types using the existing web TBS contract.
-    names = [item['name'] for item in form]
-    require(len(set(names)) == len(names), 'only_one_transfer_form_supported')
-    reserved = {'sign_privateCertType', 'sign_prvtCertYn', 'sign_sslsignctime', 'elecSignVluDat'}
-    require(not reserved.intersection(names) and all(not name.endswith('_1') for name in names),
-            'unsuffixed_transfer_form_required')
+    return transfer_forms([form], server_date, server_time, bridge_type=bridge_type, prvt_cert_yn=prvt_cert_yn)
+
+
+def transfer_forms(forms, server_date, server_time, *, bridge_type, prvt_cert_yn=''):
+    """Flatten ordered transaction forms, suffix each row, append one signing timestamp."""
+    require(isinstance(forms, list) and bool(forms), 'transfer_forms_required')
+    result = []
+    for index, form in enumerate(forms, 1):
+        _check_transfer_form(form)
+        require(form[0]['name'] == forms[0][0]['name'], 'inconsistent_transfer_form_start')
+        result.extend(dict(item, name=item['name'] + '_' + str(index)) for item in form)
     require(re.fullmatch(r'[0-9]{8}', text(server_date)) is not None and
             re.fullmatch(r'[0-9]{6}', text(server_time)) is not None, 'invalid_server_time')
     stamp = datetime.strptime(server_date + server_time, '%Y%m%d%H%M%S')
     require(bridge_type in ('pinHalf', 'noAuth'), 'unsupported_sign_bridge')
-    # yM passes undefined for explicit PIN (Zi defaults to A); automatic signing
-    # forwards the hook's prvtCertYn, whose original transfer default is ''.
     private_type = '0' if bridge_type == 'pinHalf' else ''
     private_skip = 'A' if bridge_type == 'pinHalf' else text(prvt_cert_yn, empty=True)
-    result = [dict(item, name=item['name'] + '_1') for item in form]
     result.extend([
         {'signid': '사설인증종류코드', 'name': 'sign_privateCertType', 'value': private_type},
         {'signid': '사설인증SKIP여부', 'name': 'sign_prvtCertYn', 'value': private_skip},
@@ -314,6 +316,15 @@ def transfer_form(form, server_date, server_time, *, bridge_type, prvt_cert_yn='
          'value': stamp.strftime('%Y-%m-%d %H:%M:%S')},
     ])
     return result
+
+
+def _check_transfer_form(form):
+    signing_text(form)  # Validate field types using the existing web TBS contract.
+    names = [item['name'] for item in form]
+    require(len(set(names)) == len(names), 'only_one_transfer_form_supported')
+    reserved = {'sign_privateCertType', 'sign_prvtCertYn', 'sign_sslsignctime', 'elecSignVluDat'}
+    require(not reserved.intersection(names) and all(not name.endswith('_1') for name in names),
+            'unsuffixed_transfer_form_required')
 
 
 def sign_cms(cert_der, key, content, signing_time=None):

@@ -109,6 +109,39 @@ fin hana transfer reconcile --name main --session login-1 --transaction payment-
 
 한 로그인 세션으로 한 이체만 준비합니다. 다음 이체에는 새 세션에서 로그인합니다. 실행 중 연결이 끊겼다면 완료 여부가 미확인일 수 있으므로 송금을 다시 보내지 마세요. `reconcile`은 같은 세션에서 실행일의 첫 20개 이체 내역과 연결된 상세를 한 번 조회합니다. 계좌·금액이 일치하는 완료 후보를 찾더라도 준비 거래번호와의 연결을 입증하지 못하면 `transfer_confirmed=false`로 남깁니다. `original_result_success`와 대조 결과는 별도입니다.
 
+### 개인 다계좌 이체 CSV
+
+한 하나은행 출금계좌에서 **1~15건**을 함께 준비하고 한 번 서명·전송합니다. 기존 하나인증서와 서명 로그인 세션을 사용합니다. Python으로 구현했으며 다계좌 경로는 합성 검증 단계이고 실서버 수락은 미검증입니다.
+
+UTF-8 CSV에서 계좌번호와 은행코드는 문자열로 유지합니다. 필수 열은 `to_bank,to_account,amount`이며, 선택 열은 `employee,credit_memo,debit_memo,cms_code`입니다. `employee`는 은행에 보내지 않습니다. `credit_memo`는 받는 통장, `debit_memo`는 출금 통장 표시이며 생략하면 은행이 조회한 기본 표시를 사용합니다.
+
+```csv
+employee,to_bank,to_account,amount,credit_memo,debit_memo
+예시직원A,004,000123456789,3000000,10월급여,직원A급여
+예시직원B,081,000234567890,3200000,10월급여,직원B급여
+```
+
+```sh
+# 파일 검사: 은행 접속·인증서 접근 없음
+fin hana transfer check-batch --input /path/to/payroll.csv
+# --send를 빼면 파일·금고를 열지 않고 실행 계획만 반환
+fin hana transfer prepare-batch --name main --from-account 12345678901234 \
+  --input /path/to/payroll.csv --send
+fin hana transfer show --name main
+fin hana transfer execute --name main --send
+fin hana transfer reconcile --name main --send
+```
+
+세션이 하나이면 자동 선택하고 이체·실행 기록 이름은 생성합니다. 준비된 이체가 하나이면 `execute`가 선택하며, 여러 개이면 출력의 `transaction`을 `--transaction`으로 지정합니다. 조회 기록이나 로그인 세션이 여러 개이면 `--transaction`·`--session`으로 선택합니다. 기존 상세 옵션은 계속 사용할 수 있습니다.
+
+`check-batch`는 건수·합계·중복 행 번호를 반환합니다. 은행 예금주·수수료 확인은 `prepare-batch`에서 수행합니다. 받는 통장 표시는 하나은행 20자/타행 10자, 출금 통장은 30자, CMS는 영문·숫자·하이픈 20자까지 받습니다. 입력 금액은 건당 1~9,999,999,999원이며 실제 이체한도·잔액·인증 요구는 은행 응답을 따릅니다.
+
+전체 CSV를 검사한 후 수취인 조회와 건별 준비를 진행합니다. 중간에 멈추면 앞서 준비된 일부만 실행할 수 없습니다. 전체 준비가 끝나면 은행이 반환한 수취인·계좌·금액·수수료·통장 표시와 차이 경고를 보여 줍니다. `execute`는 `2건 이체 6200000원`처럼 **건수와 합계**를 확인받아 한 번 전송합니다. 한 다계좌 묶음이 한 세션의 준비 기회를 사용합니다.
+
+결과의 `items`는 건별 판정이고 `transfer_status`는 `completed`·`partial`·`failed`·`unconfirmed`입니다. `partial_success=true`이면 성공한 건이 있으므로 전체 파일을 다시 보내면 중복 지급될 수 있습니다. `accepted=true`만으로 전건 성공을 해석하지 마세요. `original_result_success`는 은행 결과 화면의 전건 성공 표시이며, 처리 중 건수(`progress_count`)도 별도로 보존합니다. 후속 저장·조회 오류가 이전 실행 결과를 지우지 않습니다. `reconcile`은 건별 완료 후보를 대조하지만 중복·누락·첫 20건 밖의 내역은 미확인으로 남기고 자동 재전송하지 않습니다.
+
+급여 전용 서비스·매월 자동 실행·예약 이체·MMDA·오픈뱅킹 출금·추가 OTP/ARS 인증·웹의 CSV 입력은 지원하지 않습니다. 매달 새 CSV를 준비·확인하는 방식입니다.
+
 ## 5. 다른 설치 환경으로 옮기기
 
 ```sh

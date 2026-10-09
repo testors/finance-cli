@@ -6,7 +6,7 @@ import re
 import sys
 import warnings
 
-from . import onesign, onesign_setup, onesign_bundle, onesign_transfer
+from . import onesign, onesign_setup, onesign_bundle, onesign_transfer, onesign_multi_transfer
 from .onesign_state import State, remove_identity, rename_identity
 from .onesign_crypto import require
 
@@ -61,6 +61,9 @@ def inputs():
 
 def confirm_transfer(preview):
     print(json.dumps(preview,ensure_ascii=False,indent=2),file=sys.stderr)
+    if preview.get('mode') == 'multi':
+        phrase = f"{preview['item_count']}건 이체 {preview['amount_krw']}원"
+        return text(f'위 전체 수취인·계좌·금액·수수료·경고를 확인했다면 "{phrase}" 입력: ') == phrase
     return text(f"위 수취인·계좌·금액·수수료로 송금하려면 \"이체 {preview['amount_krw']}원\" 입력: ")==f"이체 {preview['amount_krw']}원"
 
 
@@ -154,16 +157,21 @@ def add_parsers(sub,onesign_sub):
             item.add_argument('--bundle',type=Path,required=True)
             item.add_argument('--settings',required=True)
     transfer=sub.add_parser('transfer',help='하나인증서 원화 이체: 준비→내용 확인·전송→결과 대조').add_subparsers(dest='action',required=True)
-    for action in ('prepare','show','execute','reconcile'):
+    item=transfer.add_parser('check-batch',help='개인 다계좌 이체 CSV 1~15건 검사; 접속·인증서 접근 없음')
+    item.add_argument('--input',type=Path,required=True)
+    for action in ('prepare','prepare-batch','show','execute','reconcile'):
         item=transfer.add_parser(action)
         common(item)
-        item.add_argument('--transaction',required=True)
+        item.add_argument('--transaction',help='선택: 이체 기록 이름; 준비 시 자동 생성, 조회·실행 시 유일한 기록 선택')
         if action!='show':
-            item.add_argument('--session',required=True)
-            item.add_argument('--run',required=True)
+            item.add_argument('--session',help='선택: 서명 로그인 세션이 여럿이면 지정')
+            item.add_argument('--run',help='선택: 새 실행 이름; 기본 자동 생성')
             item.add_argument('--send',action='store_true')
         if action=='prepare':
             item.add_argument('--input',type=Path,required=True,help='출금·수취계좌·은행·금액 JSON')
+        if action=='prepare-batch':
+            item.add_argument('--input',type=Path,required=True,help='to_bank,to_account,amount CSV; 최대 15건')
+            item.add_argument('--from-account',required=True,help='하나은행 출금계좌')
 
 
 def dispatch(args):
@@ -176,6 +184,8 @@ def dispatch(args):
         value=onesign_setup.load(args.name)
         return {'settings':args.name,'version':value['version'],'configured':'service_profile' in value,'network_used':False}
     # Planning does not open stores, prompt for secrets or create attempts.
+    if args.operation=='transfer' and args.action=='check-batch':
+        return onesign_multi_transfer.check(args.input)
     if args.operation=='onesign' and args.action=='extend' and not args.send:
         from . import onesign_session
         return onesign_session.extend()
@@ -193,6 +203,12 @@ def dispatch(args):
         from finance_cli.core.credential_refs import guard
         guard('onesign',args.name)
         return remove_identity(args.name)
+    intent = None
+    if args.operation=='transfer':
+        if args.action=='prepare-batch':
+            intent={'source_account':args.from_account,'items':onesign_multi_transfer.read_items(args.input)}
+        elif args.action=='prepare':
+            intent=json.loads(args.input.read_text())
     secret=password(args)
     if args.operation=='onesign' and args.action=='init':
         return onesign.initialize(args.name,args.settings,secret)
@@ -203,7 +219,6 @@ def dispatch(args):
             from . import onesign_session
             return onesign_session.extend(state,session=args.session,run=args.run,send=True)
         if args.operation=='transfer':
-            intent=json.loads(args.input.read_text()) if args.action=='prepare' else None
             return onesign_transfer.operate(state,args.action,args.transaction,getattr(args,'run',None),getattr(args,'session',None),
                 send=getattr(args,'send',False),intent=intent,inputs=inputs())
         if args.action=='new-session':

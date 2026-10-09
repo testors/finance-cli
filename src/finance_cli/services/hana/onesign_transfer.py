@@ -2,6 +2,7 @@
 import base64
 from datetime import datetime
 import hashlib
+import uuid
 from zoneinfo import ZoneInfo
 
 from . import onesign_crypto as pin, onesign_compat as compat, transfer_format
@@ -53,17 +54,20 @@ def binding(state, session):
             'certificate_sha256':entry['fingerprint'],'record_sha256':hashlib.sha256(encode(entry)).hexdigest()}
 
 
-def request(client, stage, body):
+def request(client, stage, body, *, multi=False):
+    from . import onesign_multi_transfer as batch
     native = stage in ('keypad_key','server_time')
     headers = client.headers()
     if not native:
         common = decode_header(headers['hana-com-header'])
-        common['CNL_HDPT']['SCRN_ID'] = 'TRNB0101002001'
+        common['CNL_HDPT']['SCRN_ID'] = batch.SCREEN if multi else 'TRNB0101002001'
         headers['hana-com-header'] = encode_header(common)
         headers['Content-Type'] = 'application/json;charset=utf-8'
-    raw = client.request('bank','POST',PATHS[stage],headers,
+    paths = {**PATHS, **batch.PATHS} if multi else PATHS
+    observer = batch.observe_execution if multi else observe_execution
+    raw = client.request('bank','POST',paths[stage],headers,
                          b'' if stage=='keypad_key' else encode(body),web=not native,
-                         observe=observe_execution if stage.startswith('execute_') else None)
+                         observe=observer if stage.startswith('execute_') else None)
     if stage == 'password':
         return {}  # The successful source callback ignores the response body.
     return compat.kotlin_object(raw,string_fields=('apiRlseKey',) if stage=='keypad_key' else ('dt','tm','bussDdYn')) if native else compat.web_value(raw)
@@ -84,6 +88,9 @@ def observe_execution(raw):
 
 
 def preview(transaction):
+    if transaction.get('mode') == 'multi':
+        from . import onesign_multi_transfer
+        return onesign_multi_transfer.preview(transaction)
     row = transaction['data']['additional_info']['trnsList'][0]
     return {'transaction':transaction['name'],'source_account':transaction['source'],
         'recipient_bank_code':row['rcvBnkCd'],'recipient_account':row['rcvAcctNo'],'recipient_name':row['rmteNm'],
@@ -164,7 +171,9 @@ def prepare(state, client, transaction, intent, password):
 
 
 def execute(state,client,transaction,control,confirm,pin_input):
+    from . import onesign_multi_transfer as batch
     ctx = state.snapshot()['transfers'][transaction]
+    multi = ctx.get('mode') == 'multi'
     pin.require(ctx['state']=='prepared','transfer_not_prepared_or_already_attempted')
     pin.require(ctx['binding']==binding(state,client.session),'transfer_binding_changed')
     pin.require(confirm(preview(ctx)) is True,'transfer_confirmation_required')
@@ -172,11 +181,12 @@ def execute(state,client,transaction,control,confirm,pin_input):
     # Reserve the entire signing/execution operation before the first nonce.
     with state.transaction() as value:
         value['transfers'][transaction]['state']='executing'
-    body = {'tmsgUnqNo':ctx['data']['additional_info']['tmsgUnqNo13']}
+    prepared = ctx['data']['prepared' if multi else 'additional_info']
+    body = {'tmsgUnqNo':prepared['trnsRsevTrscTmsgUnqNo' if multi else 'tmsgUnqNo13']}
     if ctx['cfg']['kind']=='other':
-        date = request(client,'server_time',{'bussDt':'','tgtDt':''})
-        row = dict(ctx['data']['additional_info']['trnsList'][0],mmdaHoldYn='N')
-        form = pin.transfer_form(transfer_format.form(row),date['dt'],date['tm'],bridge_type=ctx['route']['bridge_type'])
+        date = request(client,'server_time',{'bussDt':'','tgtDt':''},multi=multi)
+        forms = batch.forms(prepared['trnsList']) if multi else [transfer_format.form(dict(prepared['trnsList'][0],mmdaHoldYn='N'))]
+        form = pin.transfer_forms(forms,date['dt'],date['tm'],bridge_type=ctx['route']['bridge_type'])
         tbs = signing_text(form)
         alias,entry = record(state)
         flow = Workflow(state,ctx['binding']['device_id'],None,client.bank,client.ra,ms,ledger_vault=control)
@@ -200,7 +210,7 @@ def execute(state,client,transaction,control,confirm,pin_input):
         body.update(svcDvCd='ACCT_TRNS',bizDvNm='transfer',elecSignVluDat=base64.b64encode(cms).decode(),crypAcnmNo='')
     with state.transaction() as value:
         value['transfers'][transaction].update(execution_attempted=True,execution_started_ms=ms())
-    value = request(client,'execute_'+ctx['cfg']['kind'],body)
+    value = request(client,'execute_'+ctx['cfg']['kind'],body,multi=multi)
     result = client.last['execution_result']
     accepted = result['accepted']
     # Keep the observed bank result even if a later local write fails.
@@ -213,6 +223,9 @@ def execute(state,client,transaction,control,confirm,pin_input):
 
 def reconcile(state,client,transaction):
     ctx = state.snapshot()['transfers'][transaction]
+    if ctx.get('mode') == 'multi':
+        from . import onesign_multi_transfer
+        return onesign_multi_transfer.reconcile(state,client,transaction)
     pin.require(ctx.get('execution_attempted'),'no_execution_to_reconcile')
     pin.require(ctx['binding']==binding(state,client.session),'transfer_binding_changed')
     pin.require(not ctx.get('reconcile_attempted'),'reconciliation_already_attempted')
@@ -239,9 +252,40 @@ def reconcile(state,client,transaction):
     return result
 
 
-def operate(state,action,transaction,run,session,*,send=False,intent=None,inputs=None,exchange=send_http):
+def references(state, action, transaction, run, session):
+    value = state.snapshot()
+    if transaction is None:
+        if action in ('prepare', 'prepare-batch'):
+            transaction = 'payment-' + uuid.uuid4().hex
+        else:
+            candidates = [name for name, ctx in value['transfers'].items()
+                          if action == 'show' or action == 'execute' and ctx['state'] == 'prepared'
+                          or action == 'reconcile' and ctx.get('execution_attempted') and not ctx.get('reconcile_attempted')]
+            pin.require(bool(candidates), 'transfer_not_found')
+            pin.require(len(candidates) == 1, 'multiple_transfers_use_transaction')
+            transaction = candidates[0]
+    valid_name(transaction)
+    if action == 'show':
+        return transaction, run, session
+    if session is None:
+        if action in ('execute', 'reconcile'):
+            session = value['transfers'][transaction]['binding']['session']
+        else:
+            candidates = [name for name, saved in value['sessions'].items()
+                          if saved.get('signed_login') is True and not saved.get('transfer_attempted')]
+            pin.require(bool(candidates), 'unused_onesign_signed_session_required')
+            pin.require(len(candidates) == 1, 'multiple_onesign_sessions_use_session')
+            session = candidates[0]
+    return transaction, valid_name(run) if run is not None else 'transfer-' + uuid.uuid4().hex, valid_name(session)
+
+
+def operate(state,action,transaction=None,run=None,session=None,*,send=False,intent=None,inputs=None,exchange=send_http):
+    from . import onesign_multi_transfer as batch
     inputs = inputs or {}
-    pin.require(action in ('show','prepare','execute','reconcile'),'unsupported_transfer_operation')
+    pin.require(action in ('show','prepare','prepare-batch','execute','reconcile'),'unsupported_transfer_operation')
+    if action != 'show' and not send:
+        return {'operation':'transfer-'+action,'transaction':transaction,'network_used':False,'next':'same_command_with_send'}
+    transaction, run, session = references(state,action,transaction,run,session)
     if action=='show':
         ctx=state.snapshot()['transfers'][transaction]
         try:
@@ -250,14 +294,14 @@ def operate(state,action,transaction,run,session,*,send=False,intent=None,inputs
             value={'transaction':transaction,'state':ctx['state'],'intent':ctx['intent'],'prepared':False}
         return {**value,'execution_attempted':ctx.get('execution_attempted',False),
             'execution_result':ctx.get('execution_result'),'reconciliation':ctx.get('reconciliation'),'network_used':False}
-    if not send:
-        return {'operation':'transfer-'+action,'transaction':transaction,'network_used':False,'next':'same_command_with_send'}
     control = state.begin_run(run,'transfer-'+action)
     client = Client(state,run,session,send=True,exchange=exchange)
-    client.transfer_paths = set(PATHS.values())
+    client.transfer_paths = set(PATHS.values()) | set(batch.PATHS.values())
     try:
         if action=='prepare':
             result = prepare(state,client,transaction,intent,inputs['account_password'])
+        elif action=='prepare-batch':
+            result = batch.prepare(state,client,transaction,intent,inputs['account_password'])
         elif action=='execute':
             result = execute(state,client,transaction,control,inputs['confirm'],inputs['pin'])
         elif action=='reconcile':
@@ -266,20 +310,22 @@ def operate(state,action,transaction,run,session,*,send=False,intent=None,inputs
             raise pin.ProtocolError('unsupported_transfer_operation')
         with control.transaction() as value:
             value.update(outcome='completed',result=result)
-        return {**result,'processing_status':'completed','network_used':client.sent>0}
+        return {**result,'transaction':transaction,'session':session,'run':run,
+                'processing_status':'completed','network_used':client.sent>0}
     except Exception as exc:
         result = {'error':str(exc) if isinstance(exc,(pin.ProtocolError, request_activity.RequestBlocked)) else 'local_processing_error',
+            'transaction':transaction,'session':session,'run':run,
             'service_status':client.last['service_status'],'accepted':True if client.last['service_status']=='accepted' else False if client.last['service_status']=='rejected' else None,
             'processing_status':'stopped','network_used':client.sent>0,'automatic_retry':False,
             'execution_result':client.last.get('execution_result')}
-        if result['execution_result'] is not None:
-            result['accepted']=result['execution_result']['accepted']
-            result['service_status']='accepted' if result['accepted'] is True else 'rejected' if result['accepted'] is False else 'unconfirmed'
         if result['execution_result'] is None:
             try:
                 result['execution_result'] = state.snapshot()['transfers'].get(transaction,{}).get('execution_result')
             except Exception:
                 result['diagnostic_storage_failed'] = True
+        if result['execution_result'] is not None:
+            result['accepted']=result['execution_result']['accepted']
+            result['service_status']='accepted' if result['accepted'] is True else 'rejected' if result['accepted'] is False else 'unconfirmed'
         try:
             with control.transaction() as value:
                 value.update(outcome='stopped',result=result)

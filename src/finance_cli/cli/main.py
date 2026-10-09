@@ -16,10 +16,15 @@ def capabilities():
     from finance_cli.core.live_verification import HANA_LEVEL, REVIEWED_ON, hana_report, giro_report
     return {'schema_version': 1, 'services': {
         'hana': {'offline': ['protocol', 'shared-certificate-login-signature', 'onesign-vault-bundle',
-                            'user-package-settings-extraction', 'onesign-identity-initialization', 'onesign-identity-removal', 'onesign-identity-rename'],
+                            'user-package-settings-extraction', 'onesign-identity-initialization', 'onesign-identity-removal', 'onesign-identity-rename', 'personal-transfer-csv-check'],
                  'live': ['app-authentication', 'joint-certificate-login', 'accounts', 'transfer-history-query',
                           'ledger-history', 'security-inquiry', 'login-extension', 'onesign-new-issuance',
-                          'onesign-signed-login', 'onesign-login-extension', 'onesign-krw-transfer'],
+                          'onesign-signed-login', 'onesign-login-extension', 'onesign-krw-transfer', 'onesign-krw-multi-transfer'],
+                 'multi_transfer': {'command': 'fin hana transfer prepare-batch', 'max_items': 15,
+                                    'withdrawal_accounts': 1, 'verification': 'implemented_live_untested',
+                                    'csv': True, 'partial_results': True, 'automatic_retry': False,
+                                    'not_included': ['scheduled and recurring transfers', 'MMDA', 'open banking',
+                                                     'additional OTP/ARS authentication', 'web batch entry']},
                  'session_extension': {'onesign': 'implemented_live_untested', 'automatic_retry': False},
                  'requirements': ['user-supplied service settings for version 1.0.27',
                                   'domestic adult existing Hana customer for new issuance',
