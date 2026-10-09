@@ -100,8 +100,10 @@ class DeviceRegistration(PreloginClient):
             self.next_action = 'stopped'  # Reserve before inputs or side effects.
             try:
                 operation(result)
-            except CertificateRuleError:
+            except CertificateRuleError as error:
                 result.processing_issues.append('recipient_validation_failed')
+                if error.rule in ('issuer_ldap_failed', 'crl_ldap_failed', 'ctl_ldap_failed'):
+                    result.processing_issues.append('recipient_public_lookup_failed')
             except CertificateBackendLimit:
                 result.processing_issues.append('recipient_validation_incomplete')
             except GiroError:

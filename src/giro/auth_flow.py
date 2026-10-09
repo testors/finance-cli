@@ -13,7 +13,8 @@ from .codeguard_runtime import PythonProtectionRuntime
 from .errors import GiroError
 from .login import PinLogin, RecipientContext
 from .protection_profile import ProtectionProfile
-from .public_material_io import PublicCache
+from .public_material_io import PublicCache, PublicLdapClient
+from .recipient_trust import PUBLIC_ENDPOINT, MATERIAL_LIMIT
 from .registration import DeviceRegistration
 from .registration_flow import EnrollmentStore, enroll_once
 from .session_store import SessionStore, SessionAccessError
@@ -33,7 +34,8 @@ def auth_execution_plan(*, register=False, retry=False):
         device_identity='persistent CLI identity', protection_inputs='recorded-state-replay',
         session_storage='AES-GCM with private local key; PIN and protection token not saved',
         automatic_retry=False, retry_requested=retry, payment=False,
-        required_setup=['installed private protection profile', 'current recipient certificate/CRL cache'])
+        public_material_refresh='cache-first; missing or expired issuers/CRLs from ds.yessign.or.kr:389',
+        required_setup=['installed private protection profile', 'pinned recipient roots in public cache'])
 
 
 @dataclass(repr=False)
@@ -56,7 +58,9 @@ def login_dependencies(*, register=False, profile_path=None, public_cache=None):
     user_agent = profile.business_user_agent()
     sequence = ((101, 'GET'),) + ((200, 'GET'), (300, 'POST')) * (3 if register else 2)
     with PublicCache(Path(public_cache or root/'public-trust').absolute(), max_bytes=16*1024*1024) as cache:
-        recipient = RecipientContext.from_public_cache(cache, locale_language=profile.locale_language)
+        ldap = PublicLdapClient(allowed_endpoints=(PUBLIC_ENDPOINT,), timeout_ms=10000,
+            max_bytes=MATERIAL_LIMIT, locale_language=profile.locale_language)
+        recipient = RecipientContext.from_public_cache(cache, locale_language=profile.locale_language, ldap=ldap)
         transport = CodeGuardHTTP(endpoint=BASE+'CodeGuard/check.jsp', send=True,
             default_user_agent=CODEGUARD_USER_AGENT, max_requests=len(sequence), request_sequence=sequence)
         runtime = PythonProtectionRuntime(config=ManagerConfig(profile.platform.service,

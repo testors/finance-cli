@@ -28,6 +28,9 @@ async function latest(name, row, rows, tax = null) {
 function notices(job) {
   if (!job) return '';
   let result = job.local?.stopped ? note(esc(ui.message(job.local.stopped))) : '';
+  const validationIssue = ['recipient_public_lookup_failed', 'recipient_validation_failed',
+    'recipient_validation_incomplete'].find(code => job.local?.processing_issues?.includes(code));
+  if (validationIssue) result += note(esc(ui.message(validationIssue)));
   if (job.result?.no_bills_reported) return result + note('기관에서 “고지내용 없음”으로 응답했어요. 납부할 고지가 없다는 안내이며, 정상 목록 조회(0건)와는 다른 응답이에요.');
   if (job.local?.next_action === 'identity_registration_required') result += note('지로에 본인정보 등록이 필요해요. 모바일지로 앱에서 등록 상태를 확인하세요.');
   if (job.result?.complete === false) result += note('조회가 완료되지 않았어요. 수신한 항목만 표시해요.');

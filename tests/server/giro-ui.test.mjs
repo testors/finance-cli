@@ -56,6 +56,19 @@ test('new login creates only a PIN connection and never persists PIN in its meta
   assert.equal(JSON.stringify(a.requests).includes('654321'), false);
 });
 
+test('recipient lookup and validation errors explain the pre-PIN stop without retry', async t => {
+  const a = await setup(t);
+  for (const issue of ['recipient_public_lookup_failed', 'recipient_validation_failed', 'recipient_validation_incomplete']) {
+    a.responses.set('giro.login', {id: 'login', outcome: 'unknown', result: {session_saved: false},
+      local: {stage: 'recipient.validate', processing_issues: [issue], session_saved: false}});
+    await a.giroLogin(a.ctx);
+    assert.match(a.document.querySelector('#dialog-content').textContent, /인증서·폐지목록.*PIN 인증 전에 중단/);
+    assert.doesNotMatch(a.document.querySelector('#dialog-content').textContent, /654321/);
+  }
+  assert.deepEqual(a.calls.map(c => c.name), ['giro.login', 'giro.login', 'giro.login']);
+  assert.equal(a.requests.length, 0);
+});
+
 test('bill screen uses Korean headers, exact amount, deadline, and opaque selection', async t => {
   const a = await setup(t);
   a.add({id: 'bills', name: 'giro.bills.list', login_id: 'giro', input: {tax_type: 'national'}, outcome: 'success',

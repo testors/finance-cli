@@ -130,6 +130,9 @@ export function verification(level) {
 const MESSAGES = {
   giro_device_registration_required: '서버에서 지로 기기를 먼저 등록해야 해요. fin giro auth register --send로 등록한 기기를 그대로 사용해요.',
   giro_invalid_login_pin: '지로 로그인 간편비밀번호 6자리를 입력하세요.',
+  recipient_public_lookup_failed: '지로 서버 인증서·폐지목록을 조회하지 못해 PIN 인증 전에 중단했어요. 서버의 공개 인증서 조회 연결을 확인하세요.',
+  recipient_validation_failed: '지로 서버 인증서·폐지목록 검증을 통과하지 못해 PIN 인증 전에 중단했어요. 공개 인증서 자료의 유효성을 확인하세요.',
+  recipient_validation_incomplete: '지로 서버 인증서·폐지목록 검증을 완료하지 못해 PIN 인증 전에 중단했어요. 서버의 공개 인증서 자료와 조회 설정을 확인하세요.',
   giro_preparation_changed: '로그인 세션이나 확인 내역이 바뀌었어요. 납부를 전송하지 않았어요. 고지를 다시 조회하세요.',
   giro_preparation_expired: '납부 준비 시간이 지났어요. 고지를 다시 조회해 납부 내용을 확인하세요.',
   giro_payment_auth_unsupported: '이 고지는 인증서 또는 FIDO 추가 인증이 필요해요. 이 인증 방식은 아직 지원하지 않아요.',

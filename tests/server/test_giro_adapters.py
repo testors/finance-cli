@@ -256,6 +256,20 @@ class GiroTests(ServerCase):
         self.assertEqual(result['outcome'], 'success')
         self.assertIsNone(result['result']['session_id'])
 
+    def test_recipient_lookup_failure_keeps_login_unknown_and_shows_stage(self):
+        from giro.registration_flow import EnrollmentStore
+        EnrollmentStore().identity()
+        with patch.object(giro_live.auth_flow, 'authenticate', return_value={
+                'stage': 'recipient.validate', 'login_service_decision': 'unobserved',
+                'session_saved': False, 'processing_issues': ['recipient_validation_failed',
+                                                            'recipient_public_lookup_failed']}) as authenticate:
+            result = self.run_job(self.submit('giro.login'), {'pin': '654321'})
+        authenticate.assert_called_once()
+        self.assertEqual(result['outcome'], 'unknown')
+        self.assertEqual(result['local']['stage'], 'recipient.validate')
+        self.assertIn('recipient_public_lookup_failed', result['local']['processing_issues'])
+        self.assertIsNone(result['result']['session_id'])
+
     def test_unregistered_device_and_raw_browser_payment_fields_rejected_without_network(self):
         job = self.run_job(self.submit('giro.login'), {'pin': '654321'})
         self.assertEqual(job['local']['stopped'], 'giro_device_registration_required')

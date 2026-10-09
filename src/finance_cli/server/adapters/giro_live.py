@@ -45,7 +45,7 @@ def observed(ctx, value, result=None):
 
 
 def local(value):
-    return {k: value[k] for k in ('processing_issues', 'session_processing_issues', 'next_action', 'session_saved')
+    return {k: value[k] for k in ('stage', 'processing_issues', 'session_processing_issues', 'next_action', 'session_saved')
             if k in value}
 
 

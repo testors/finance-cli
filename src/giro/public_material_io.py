@@ -1,7 +1,7 @@
 """Explicit, bounded public-certificate IO; never app-private cache or PIN IO.
 
-No CLI invokes this automatically. LDAP endpoints must be individually opted
-in before DNS/socket use. Cache is an explicitly supplied existing directory.
+LDAP endpoints must be explicitly configured before DNS/socket use. Authentication
+supplies its public directory endpoint. Cache is an explicitly supplied existing directory.
 Policy/budget limits are diagnostics, NOT fabricated SDK IO failures. Acquired
 bytes remain untrusted until the mandatory independent validation pipeline.
 """
