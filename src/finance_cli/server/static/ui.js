@@ -112,10 +112,19 @@ export const VERIFICATION = {live_untested: ['실서버 미검증', 'untested'],
   live_partial: ['일부 실사용 확인', 'warning'], offline: ['오프라인 처리', 'neutral']};
 export const ORIGIN = {web: '웹', cli: 'CLI', agent: '에이전트'};
 
+/* Giro answers a bill query that has nothing billed with “고지내용 없음” on its failure path. The
+   summary says that instead of "기관 거절"; the recorded verdict and outcome stay as received. */
+const noBills = job => job.name === 'giro.bills.list'
+  && Boolean(job.service_verdict?.no_bills_reported ?? job.result?.no_bills_reported);
+
+export function outcomeLabel(job) {
+  return noBills(job) ? ['고지 없음', 'neutral'] : OUTCOME[job.outcome] || [job.outcome, 'neutral'];
+}
+
 export function statusTags(job) {
   if (job.name?.startsWith('cli.')) return `<span class="pill-row">${tag('CLI 실행 기록', 'neutral')}${tag('종료코드 ' + (job.local?.exit_code ?? '—'), 'neutral')}</span>`;
   const [status, tone] = STATUS[job.status] || [job.status, 'neutral'];
-  const [outcome, outcomeTone] = OUTCOME[job.outcome] || [job.outcome, 'neutral'];
+  const [outcome, outcomeTone] = outcomeLabel(job);
   // The service verdict of a finished job says more than "완료"; a verdict seen while running keeps both.
   const html = job.status === 'finished' ? tag(outcome, outcomeTone)
     : tag(status, tone) + (job.status === 'running' && job.outcome !== 'not_started' ? tag(outcome, outcomeTone) : '');

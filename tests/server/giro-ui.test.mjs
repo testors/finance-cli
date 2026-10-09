@@ -90,7 +90,8 @@ test('311 no-bills guidance is distinct from successful empty, null and incomple
     result: {complete: false, no_bills_reported: true, bills: null}};
   a.add(job);
   let html = await a.giroViews['giro-live'](a.ctx);
-  assert.match(html, /고지내용 없음/); assert.doesNotMatch(html, /표시 0건/);
+  assert.match(html, /납부할 고지가 없어요/); assert.match(html, /고지내용 없음/);
+  assert.doesNotMatch(html, /표시 0건|조회된 고지가 없어요|처리하지 않았어요/);
   job.outcome = 'success'; job.result = {complete: true, bills: []};
   html = await a.giroViews['giro-live'](a.ctx);
   assert.match(html, /조회된 고지가 없어요/);
@@ -134,15 +135,29 @@ test('payment confirmation names the same login PIN, sends fixed digest once and
   assert.equal(JSON.stringify(a.state).includes('654321'), false);
 });
 
-test('a logged-out screen asks for the login instead of offering a query', async t => {
+test('a logged-out screen offers no query; without a connection it offers the first login', async t => {
   const a = await setup(t);
   a.row.readiness = 'login_required';
   const main = a.document.querySelector('main');
-  for (const view of ['giro-live', 'giro-receipts', 'giro-accounts']) {
+  const views = ['giro-live', 'giro-receipts', 'giro-accounts'];
+  for (const view of views) {
+    main.innerHTML = await a.giroViews[view](a.ctx);
+    // The shell's notice under the heading carries the login of an existing connection.
+    assert.equal(main.querySelector('[data-action="giro-login"]'), null);
+    assert.equal(main.querySelector('button[type="submit"]'), null);
+    assert.equal(main.querySelector('[data-action="giro-accounts-query"]'), null);
+    assert.doesNotMatch(main.textContent, /조회를 누르세요|조회하세요/);
+  }
+  // An earlier result stays in view after the logout.
+  a.add({id: 'bills', name: 'giro.bills.list', login_id: 'giro', input: {tax_type: 'national'}, outcome: 'success',
+    result: {complete: true, bills: [{ref: '0', tax_name: '합성세', amount_raw: '1,000', electronic_number: '****1234'}]}});
+  main.innerHTML = await a.giroViews['giro-live'](a.ctx);
+  assert.match(main.textContent, /합성세/);
+  a.state.logins = [];
+  for (const view of views) {
     main.innerHTML = await a.giroViews[view](a.ctx);
     assert.ok(main.querySelector('.empty-state [data-action="giro-login"]'));
     assert.equal(main.querySelector('button[type="submit"]'), null);
-    assert.equal(main.querySelector('[data-action="giro-accounts-query"]'), null);
   }
   assert.equal(a.calls.length, 0);
 });

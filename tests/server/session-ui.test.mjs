@@ -144,6 +144,63 @@ test('area tabs mark only areas with a live login and drop the mark at the idle 
   assert.equal(app.gets.length, 0);
 });
 
+test('an area with every login logged out says so on its work screens and offers the login there', async t => {
+  const app = await setup(t);
+  const main = app.document.querySelector('#main');
+  const rows = [{id: 'bank', institution: 'hana', readiness: 'login_required', display_name: '합성 은행'},
+    {id: 'giro', institution: 'giro', readiness: 'login_required', display_name: '합성 지로'},
+    {id: 'tax', institution: 'hometax', readiness: 'ready', display_name: '합성 홈택스'}];
+  const draw = (view, mode, logins = rows) => {
+    Object.assign(app.state, {view, mode, logins: structuredClone(logins)});
+    main.innerHTML = '<div class="page-heading"><h1>합성 화면</h1></div><form><input name="typed"></form>';
+    main.querySelector('input').value = '합성 입력';
+    app.renderLoginNotice();
+    return main.querySelector('.login-notice');
+  };
+  for (const [view, mode, name] of [['giro-live', 'giro', '모바일지로'], ['giro-receipts', 'giro', '모바일지로'],
+    ['history', 'banking', '하나개인뱅킹'], ['transfer', 'banking', '하나개인뱅킹']]) {
+    const notice = draw(view, mode);
+    assert.ok(notice, view);
+    assert.match(notice.textContent, new RegExp(name + '에 로그인되어 있지 않아요'));
+    assert.equal(notice.previousElementSibling.className, 'page-heading');
+    assert.equal(notice.querySelectorAll('[data-action="login"]').length, 1);
+  }
+  assert.equal(draw('giro-live', 'giro').querySelector('button').dataset.login, 'giro');
+  // Several logged-out connections: one named login button each.
+  const two = draw('accounts', 'banking', [...rows, {id: 'bank2', institution: 'hana', readiness: 'login_required', display_name: '<b>둘째</b>'}]);
+  assert.deepEqual([...two.querySelectorAll('button')].map(b => [b.dataset.login, b.textContent]),
+    [['bank', '합성 은행 로그인'], ['bank2', '<b>둘째</b> 로그인']]);
+  // A live login, a screen that needs no session, a shared screen, or no connection at all: no notice.
+  assert.equal(draw('taxhome', 'tax'), null);
+  assert.equal(draw('history', 'banking', [{...rows[0], readiness: 'query_only'}]), null);
+  for (const view of ['girostatus', 'bills', 'deadlines']) assert.equal(draw(view, 'giro'), null, view);
+  assert.equal(draw('reports', 'tax', [{...rows[2], readiness: 'login_required'}]), null);
+  assert.equal(draw('settings', 'giro'), null);
+  assert.equal(draw('corporate-accounts', 'corporate'), null);
+  assert.equal(draw('giro-live', 'giro', [{...rows[1], disabled: true}]), null);
+  // The login button runs the connection's own login; nothing is sent by showing the notice.
+  draw('giro-live', 'giro').querySelector('button').click();
+  await new Promise(resolve => setTimeout(resolve));
+  assert.equal(app.asked.at(-1).login, 'giro');
+  assert.equal(app.gets.length, 0);
+});
+
+test('a session that lapses while a form is open shows the notice without redrawing the form', async t => {
+  const app = await setup(t);
+  const main = app.document.querySelector('#main');
+  Object.assign(app.state, {view: 'history', mode: 'banking', logins: [{...app.row, readiness: 'ready'}]});
+  main.innerHTML = '<div class="page-heading"><h1>합성 화면</h1></div><form><input name="typed"></form>';
+  main.querySelector('input').value = '합성 입력';
+  app.renderLoginNotice();
+  assert.equal(main.querySelector('.login-notice'), null);
+  app.local = 5600; app.server = 1600;
+  await app.ctx.run('hana.onesign.accounts', {login_id: 'selected'});
+  assert.ok(main.querySelector('.login-notice'));
+  assert.equal(main.querySelectorAll('.login-notice').length, 1);
+  assert.equal(main.querySelector('input').value, '합성 입력');
+  assert.equal(app.sent.length, 0);
+});
+
 test('records, connections and coverage belong to no area tab', async t => {
   const app = await setup(t);
   app.document.querySelector('#stage').innerHTML = '<nav class="area-tabs"></nav>';
@@ -161,6 +218,14 @@ test('a plain success shows when it was read; every other state keeps its badge'
   assert.doesNotMatch(app.jobState(done), /status-pill|실서버 미검증|웹 요청/);
   assert.match(app.jobState(done), /조회/);
   assert.match(app.jobState({...done, outcome: 'rejected'}), /기관 거절/);
+  // Giro's "고지내용 없음" answer is named as such, from the listed verdict or the full result.
+  const bills = {...done, name: 'giro.bills.list', outcome: 'rejected'};
+  for (const none of [{service_verdict: {no_bills_reported: true}}, {result: {no_bills_reported: true}}]) {
+    assert.match(app.jobState({...bills, ...none}), /고지 없음/);
+    assert.doesNotMatch(app.jobState({...bills, ...none}), /기관 거절/);
+  }
+  assert.match(app.jobState({...bills, service_verdict: {no_bills_reported: false}}), /기관 거절/);
+  assert.match(app.jobState({...done, name: 'giro.payment.prepare', outcome: 'rejected', result: {no_bills_reported: true}}), /기관 거절/);
   assert.match(app.jobState({...done, outcome: 'unknown'}), /결과 미확인/);
   assert.match(app.jobState({...done, outcome: 'partial_success'}), /부분 성공/);
   assert.match(app.jobState({...done, status: 'running', outcome: 'not_started'}), /실행 중/);
