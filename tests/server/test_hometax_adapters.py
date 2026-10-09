@@ -7,7 +7,7 @@ from unittest.mock import patch
 
 from support import ServerCase, synthetic_certificate
 
-from finance_cli.server import jobs, model, worker
+from finance_cli.server import jobs, model, session_activity, worker
 from finance_cli.server.adapters import hometax
 from finance_cli.server.db import loads
 
@@ -105,6 +105,51 @@ class HometaxAdapterTests(ServerCase):
         result = self.run_job(submitted['id'], secrets={'certificate_password': 'Synthetic-Password!'}, node=node)
         self.assertEqual(result['outcome'], 'success', result)
         return result
+
+    def test_ten_idle_minutes_require_login_and_only_institution_work_moves_the_deadline(self):
+        def row():
+            return next(r for r in self.get('/logins').json()['logins'] if r['id'] == self.login['id'])
+
+        with patch.object(session_activity, 'now', return_value=1000):
+            logged_in = self.login_session()
+        self.assertEqual(row()['session']['idle_expires_at'], 1600)
+        with patch.object(session_activity, 'now', return_value=1599):
+            self.assertEqual(row()['readiness'], 'ready')
+            refresh = self.submit('hometax.session.refresh')
+            node = FakeNode({'session.mjs': session_record()})
+            refreshed = self.run_job(refresh['id'], node=node)
+            self.assertEqual(refreshed['outcome'], 'success', refreshed)
+            self.assertNotEqual(refreshed['result']['session_id'], logged_in['result']['session_id'])
+            self.assertEqual(row()['session']['last_request_at'], 1599)
+        with patch.object(session_activity, 'now', return_value=2198):
+            self.assertEqual(row()['readiness'], 'ready')
+            self.get('/jobs/' + refresh['id'])
+            self.assertEqual(row()['session']['idle_expires_at'], 2199)
+        with patch.object(session_activity, 'now', return_value=2199):
+            self.assertEqual(row()['readiness'], 'login_required')
+            self.assertTrue(row()['session']['idle_expired'])
+            for name in ('hometax.session.refresh', 'hometax.targets.discover'):
+                response = self.post('/jobs', {'name': name, 'login_id': self.login['id']})
+                self.assertEqual(response.status_code, 409, response.text)
+                self.assertEqual(response.json()['error'], 'session_idle_expired')
+            # Local expiry preserves the institution's successful result and saved session verdict.
+            self.assertEqual(row()['session']['state'], 'usable')
+            self.assertEqual(self.get('/jobs/' + refresh['id']).json()['outcome'], 'success')
+            self.login_session()
+            self.assertEqual(row()['readiness'], 'ready')
+            self.assertEqual(row()['session']['idle_expires_at'], 2799)
+        self.assertEqual(len(node.calls), 1)
+
+    def test_idle_expiry_after_submission_stops_worker_before_node(self):
+        with patch.object(session_activity, 'now', return_value=1000):
+            self.login_session()
+            queued = self.submit('hometax.session.refresh')
+        node = FakeNode({})
+        with patch.object(session_activity, 'now', return_value=1600):
+            result = self.run_job(queued['id'], node=node)
+        self.assertEqual(result['outcome'], 'not_started', result)
+        self.assertEqual(result['local']['stopped'], 'session_idle_expired')
+        self.assertEqual(node.calls, [])
 
     def register(self, kind):
         discover, _ = jobs.submit(self.db, name='hometax.targets.discover', origin='web:test', login_id=self.login['id'])

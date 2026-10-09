@@ -778,6 +778,19 @@ test('a session past its idle limit shows as logged out and offers only a login'
   assert.equal(ui.calls.length, 0);
 });
 
+test('an idle hometax connection shows logout and offers login instead of discovery', async t => {
+  const ui = await setup(t, 'joint_certificate', 'ready');
+  ui.row.institution = 'hometax';
+  ui.state.idleExpired = true;
+  const main = ui.document.querySelector('main');
+  main.innerHTML = await ui.views.settings(ui.ctx);
+  assert.match(main.textContent, /로그아웃됨/);
+  assert.equal(main.querySelector('[data-action="login"]').textContent, '로그인');
+  assert.equal(main.querySelector('[data-action="discover"]'), null);
+  assert.equal(main.querySelector('[data-action="auto-extend-toggle"]'), null);
+  assert.equal(ui.calls.length, 0);
+});
+
 test('automatic login extension is one switch for the browser and says what it does for each login', async t => {
   const ui = await setup(t, 'onesign', 'ready');
   const main = ui.document.querySelector('main');

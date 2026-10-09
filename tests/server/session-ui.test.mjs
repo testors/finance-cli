@@ -55,7 +55,7 @@ test('600-second boundary uses server time despite browser clock offset', async 
   assert.equal(app.bankSessionExpired(app.row), false);
   app.local = 5600;
   assert.equal(app.bankSessionExpired(app.row), true);
-  assert.equal(app.bankSessionExpired({...app.row, institution: 'hometax'}), false);
+  assert.equal(app.bankSessionExpired({...app.row, institution: 'hometax'}), true);
   assert.equal(app.bankSessionExpired(null), false);
 });
 
@@ -83,15 +83,19 @@ test('activity in another tab prevents a stale browser timeout', async t => {
 });
 
 test('server expiry refusal and worker expiry both route to login without retry', async t => {
-  for (const where of ['submit', 'worker']) {
-    const app = await setup(t);
-    if (where === 'submit') app.error = 'session_idle_expired';
-    else app.stopped = 'session_idle_expired';
-    let completed = 0;
-    assert.equal(await app.ctx.run('hana.onesign.accounts', {login_id: 'selected'}, {onDone: () => completed++}), null);
-    assert.equal(app.asked.length, 1);
-    assert.equal(app.sent.length, where === 'submit' ? 0 : 1);
-    assert.equal(completed, 0);
+  for (const [institution, name] of [['hana', 'hana.onesign.accounts'], ['hometax', 'hometax.tax.dues']]) {
+    for (const where of ['submit', 'worker']) {
+      const app = await setup(t);
+      app.row.institution = institution;
+      app.state.logins = [structuredClone(app.row)];
+      if (where === 'submit') app.error = 'session_idle_expired';
+      else app.stopped = 'session_idle_expired';
+      let completed = 0;
+      assert.equal(await app.ctx.run(name, {login_id: 'selected'}, {onDone: () => completed++}), null);
+      assert.equal(app.asked.length, 1);
+      assert.equal(app.sent.length, where === 'submit' ? 0 : 1);
+      assert.equal(completed, 0);
+    }
   }
 });
 
@@ -183,19 +187,21 @@ test('only an area tab switches area; a button with its own mode value runs its 
 test('the area tab counts down to the nearest idle limit and stops at logout', async t => {
   const app = await setup(t);
   app.document.querySelector('#stage').innerHTML = '<nav class="area-tabs"></nav>';
-  app.state.logins = [{...app.row, readiness: 'ready'}, {id: 'tax', institution: 'hometax', readiness: 'ready', session: {state: 'usable'}}];
+  app.state.logins = [{...app.row, readiness: 'ready'}, {...app.row, id: 'tax', institution: 'hometax', readiness: 'ready'}];
   app.local = 5000;
   app.renderTabs();
   assert.equal(app.document.querySelector('[data-mode="banking"] .tab-countdown').textContent, '10:00');
-  assert.equal(app.document.querySelector('[data-mode="tax"] .tab-countdown'), null, 'no countdown without a known limit');
+  assert.equal(app.document.querySelector('[data-mode="tax"] .tab-countdown').textContent, '10:00');
   app.local = 5535;
   app.renderTabs();
   const soon = app.document.querySelector('[data-mode="banking"] .tab-countdown');
   assert.equal(soon.textContent, '1:05');
   assert.ok(soon.classList.contains('soon'));
+  assert.equal(app.document.querySelector('[data-mode="tax"] .tab-countdown').textContent, '1:05');
   app.local = 5600;
   app.renderTabs();
   assert.equal(app.document.querySelector('.tab-countdown'), null, 'a session past its limit is logged out');
+  assert.equal(app.document.querySelector('[data-mode="tax"]').classList.contains('live'), false);
   assert.equal(app.gets.length, 0);
 });
 
@@ -277,9 +283,10 @@ test('a busy session, a missing extension job or a locked store sends nothing an
   assert.equal(expired.submissions, 0, 'a session past its limit is logged out, not revived');
 });
 
-test('idle limits also cover corporate and giro sessions, and never block the login that replaces one', async t => {
+test('idle limits cover corporate, giro and hometax sessions, and allow a replacement login', async t => {
   for (const [institution, method, login, query] of [['hana_corporate', 'id_password', 'hana.corporate.login-idpw', 'hana.corporate.accounts'],
-    ['giro', 'pin', 'giro.login', 'giro.accounts.list']]) {
+    ['giro', 'pin', 'giro.login', 'giro.accounts.list'],
+    ['hometax', 'joint_certificate', 'hometax.login', 'hometax.tax.dues']]) {
     const app = await setup(t);
     Object.assign(app.row, {institution, method, readiness: 'ready'});
     app.state.logins = [structuredClone(app.row)];
@@ -295,6 +302,21 @@ test('idle limits also cover corporate and giro sessions, and never block the lo
     assert.equal(app.asked.length, 1);
     assert.equal(app.asked[0].reason, 'session_idle_expired');
   }
+});
+
+test('hometax activity refreshes the countdown without automatic session refresh', async t => {
+  const app = await nearLimit(t, {institution: 'hometax'});
+  app.state.capabilities.jobs.push('hometax.session.refresh');
+  app.setAutoExtend(true);
+  assert.equal(app.extensionState(app.state.logins[0]), 'unsupported');
+  await app.extendLogin('selected');
+  assert.equal(app.submissions, 0);
+  await app.ctx.run('hometax.tax.dues', {login_id: 'selected'});
+  assert.equal(app.state.logins[0].session.idle_expires_at, 2120);
+  app.local = 6120; app.server = 2120;
+  await app.ctx.run('hometax.report.resave', {login_id: 'selected'});
+  assert.equal(app.sent.length, 2, 'a saved report can be used without the current login session');
+  assert.equal(app.asked.length, 0);
 });
 
 test('corporate and giro sessions are extended with their own job and need no store passphrase', async t => {

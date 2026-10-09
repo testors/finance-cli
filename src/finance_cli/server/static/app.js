@@ -112,7 +112,7 @@ function serverNow() {
 }
 
 /* Institutions whose sessions follow the local idle limit; the server sends each deadline. */
-const IDLE_INSTITUTIONS = ['hana', 'hana_corporate', 'giro'];
+const IDLE_INSTITUTIONS = ['hana', 'hana_corporate', 'giro', 'hometax'];
 const LISTS = ['accounts', 'settings', 'corporate-accounts', 'giro-live', 'giro-receipts', 'giro-accounts'];
 
 export function bankSessionExpired(row) {
@@ -288,9 +288,9 @@ export async function ensureBankSession(ctx, id) {
 /* Jobs that send on an existing session of an idle-limited institution. A login makes a new
    session and a local step sends nothing, so an expired session stops neither. */
 function usesBankSession(name) {
-  if (!/^(hana|giro)\./.test(name)) return false;
+  if (!/^(hana|giro|hometax)\./.test(name)) return false;
   return !/(^|\.)login(-[a-z]+)?$/.test(name) && !name.endsWith('.history.export')
-    && !['giro.bills.parse', 'giro.readiness'].includes(name);
+    && !['giro.bills.parse', 'giro.readiness', 'hometax.report.resave'].includes(name);
 }
 
 export function setProfile(id) {
@@ -475,7 +475,7 @@ function makeContext(token) {
         ui.fail(ui.message(error.code));
         return null;
       });
-      if (/^(hana|giro)\./.test(final?.name || '') && final.login_id) {
+      if (/^(hana|giro|hometax)\./.test(final?.name || '') && final.login_id) {
         await refreshLogins().catch(() => {}); // A display refresh cannot change the job's outcome.
         if (final.local?.stopped === 'session_idle_expired' && context.current()) {
           await expiredBankLogin(context, final.login_id);

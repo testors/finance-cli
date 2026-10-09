@@ -43,16 +43,16 @@ class SessionActivityTests(ServerCase):
                     request_activity.before_request('ra')
             request_activity.before_request('bank')  # A blocked context also resets its observer.
 
-    def test_legacy_schema_uses_creation_time_and_other_institutions_are_unaffected(self):
+    def test_legacy_schema_uses_creation_time_for_all_idle_limited_institutions(self):
         with self.db.write() as con:
             con.execute('DROP TABLE session_activity')  # Pre-feature schema version 1.
             con.execute('UPDATE sessions SET checked_at=3000')
         reopened = Database(self.db.file())
         with reopened.read() as con, patch.object(session_activity, 'now', return_value=1600):
             self.assertEqual(session_activity.metadata(con, self.sessions[0])['last_request_at'], 1000)
-            self.assertEqual(session_activity.refusal(con, self.adapter, self.sessions[0]), 'session_idle_expired')
-            self.adapter.service = 'hometax'
-            self.assertIsNone(session_activity.refusal(con, self.adapter, self.sessions[0]))
+            for service in ('hana', 'hana_corporate', 'giro', 'hometax'):
+                self.adapter.service = service
+                self.assertEqual(session_activity.refusal(con, self.adapter, self.sessions[0]), 'session_idle_expired')
         with reopened.write() as con:
             session_activity.record(con, self.sessions[0]['id'], 1599)
             con.execute('DELETE FROM sessions WHERE id=?', (self.sessions[0]['id'],))
