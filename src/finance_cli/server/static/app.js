@@ -5,20 +5,24 @@ import * as ui from './ui.js';
 import {actions, views} from './views.js';
 
 export const AREAS = {
-  banking: {name: '하나개인뱅킹', short: '개인뱅킹', institution: 'hana', service: '개인 계좌·거래·이체', home: 'accounts', icon: 'accounts', items: [
+  banking: {name: '하나개인뱅킹', short: '개인뱅킹', institution: 'hana', service: '개인 계좌·거래·이체', home: 'accounts', icon: 'accounts',
+    guide: '로그인하면 계좌와 거래 내역을 조회하고 이체할 수 있어요.', items: [
     ['accounts', '내 계좌', '계좌', 'accounts', 'hana-accounts'], ['history', '거래 내역', '거래', 'history', 'hana-history'],
     ['transfer', '이체', '이체', 'transfer', 'hana-transfer'], ['inquiry', '이체 내역', '이체 내역', 'history', 'hana-inquiry'],
     ['security', '보안매체·한도', '보안', 'shield', 'hana-security']]},
-  corporate: {name: '하나기업뱅킹', short: '기업뱅킹', institution: 'hana_corporate', service: '기업 계좌·거래·이체', home: 'corporate-accounts', icon: 'business', items: [
+  corporate: {name: '하나기업뱅킹', short: '기업뱅킹', institution: 'hana_corporate', service: '기업 계좌·거래·이체', home: 'corporate-accounts', icon: 'business',
+    guide: '로그인하면 기업 계좌와 거래내역을 조회하고 이체할 수 있어요.', items: [
     ['corporate-accounts', '기업 계좌', '계좌', 'accounts', 'corporate-accounts'],
     ['corporate-history', '기업 거래내역', '거래', 'history', 'corporate-history'],
     ['corporate-transfer', '기업 이체', '이체', 'transfer', 'corporate-transfer']]},
-  giro: {name: '지로', short: '지로', institution: 'giro', service: '모바일지로', home: 'giro-live', icon: 'bill', items: [
+  giro: {name: '지로', short: '지로', institution: 'giro', service: '모바일지로', home: 'giro-live', icon: 'bill',
+    guide: '로그인하면 고지를 조회하고 납부할 수 있어요.', items: [
     ['giro-live', '고지·납부', '고지·납부', 'bill', 'giro-live'],
     ['giro-receipts', '납부내역', '납부내역', 'history', 'giro-receipts'],
     ['giro-accounts', '등록계좌', '등록계좌', 'accounts', 'giro-accounts'],
     ['girostatus', '도구·상태', '도구', 'shield', 'giro-readiness']]},
-  tax: {name: '세금', short: '세금', institution: 'hometax', service: '홈택스', home: 'taxhome', icon: 'tax', items: [
+  tax: {name: '세금', short: '세금', institution: 'hometax', service: '홈택스', home: 'taxhome', icon: 'tax',
+    guide: '로그인하면 세금·전자세금계산서·신고 내역을 조회할 수 있어요.', items: [
     ['taxhome', '세금 요약', '요약', 'tax', 'hometax-tax'], ['invoices', '전자세금계산서', '계산서', 'invoice', 'hometax-invoice-query'],
     ['returns', '신고·증빙', '신고', 'history', 'hometax-returns'], ['dues', '납부·환급', '납부·환급', 'accounts', 'hometax-tax'],
     ['notices', '전자고지', '전자고지', 'bill', 'hometax-tax']]},
@@ -30,6 +34,8 @@ const NESTED = {invoiceform: ['tax', 'invoices', '계산서 작성'], payments: 
   reports: ['tax', 'returns', '저장한 문서'], bills: ['giro', 'girostatus', '고지서 자료'], deadlines: ['giro', 'girostatus', '납부 기한'],
   'giro-pay': ['giro', 'giro-receipts', '납부내역']};
 const common = view => COMMON.some(([id]) => id === view);
+/* Area screens that work without an institution session: offline Giro tools and saved documents. */
+const NO_SESSION = ['girostatus', 'bills', 'deadlines', 'reports'];
 const known = view => common(view) || view in NESTED || Object.values(AREAS).some(a => a.items.some(i => i[0] === view));
 
 function stored(key, fallback) {
@@ -102,6 +108,7 @@ async function refreshLogins() {
   state.logins = value.logins;
   state.sessionClock = {server: value.server_time, local: Date.now() / 1000};
   renderTabs();
+  renderLoginNotice();
   scheduleExtensions();
   return value;
 }
@@ -120,12 +127,38 @@ export function bankSessionExpired(row) {
   return serverNow() >= row.session.idle_expires_at;
 }
 
+function areaLogins(mode) {
+  const institution = AREAS[mode].institution;
+  return institution === 'giro' ? state.logins.filter(l => l.institution === 'giro' && !l.disabled) : scopeLogins(institution);
+}
+
 /* Logins of an area whose recorded session is usable (or query-only) and inside the local
    bank idle limit. This reads local metadata only; the institution is not asked. */
 function liveLogins(mode) {
-  const institution = AREAS[mode].institution;
-  const rows = institution === 'giro' ? state.logins.filter(l => l.institution === 'giro' && !l.disabled) : scopeLogins(institution);
-  return rows.filter(l => ['ready', 'query_only'].includes(l.readiness) && !bankSessionExpired(l));
+  return areaLogins(mode).filter(l => ['ready', 'query_only'].includes(l.readiness) && !bankSessionExpired(l));
+}
+
+/* A work screen of an area whose logins are all logged out says so under its heading and offers
+   the login there, by the same local records as the tab mark. An area with no connection yet
+   keeps its screens' own first-connection guidance. */
+function loginNotice() {
+  if (!state.view || common(state.view) || NO_SESSION.includes(state.view)) return '';
+  const area = AREAS[state.mode], rows = areaLogins(state.mode);
+  if (!rows.length || liveLogins(state.mode).length) return '';
+  const buttons = rows.map(row => ui.button(rows.length > 1 ? `${row.display_name} 로그인` : '로그인',
+    `data-action="login" data-login="${ui.esc(row.id)}"`, 'primary')).join('');
+  return `<div class="login-notice" role="status">${ui.icon('info')}<p><strong>${ui.esc(ui.INSTITUTION[area.institution])}에 로그인되어 있지 않아요.</strong> ${area.guide}</p><div class="login-notice-actions">${buttons}</div></div>`;
+}
+
+/* Drawn apart from the screen itself, so a logout shows at once without redrawing a form. */
+export function renderLoginNotice() {
+  const page = main();
+  if (!page) return;
+  page.querySelector('.login-notice')?.remove();
+  const html = loginNotice();
+  if (!html) return;
+  const heading = page.querySelector('.page-heading');
+  if (heading) heading.insertAdjacentHTML('afterend', html); else page.insertAdjacentHTML('afterbegin', html);
 }
 
 let tabTimer = null;
@@ -145,6 +178,7 @@ function tick() {
 /* The idle limit passed with no request: from here on the session counts as logged out. */
 async function sessionLapsed() {
   renderTabs();
+  renderLoginNotice();
   await refreshLogins().catch(() => {});
   ui.toast('10분 동안 요청이 없어 로그아웃 처리됐어요. 계속하려면 다시 로그인하세요.');
   // Screens that list sessions show it at once; a screen with a form or an open dialog is left as it is.
@@ -336,10 +370,12 @@ export async function render() {
     const html = await view(context);
     if (token !== state.token) return;
     main().innerHTML = html;
+    renderLoginNotice();
     context.after.forEach(fn => fn());
   } catch (error) {
     if (token !== state.token) return;
     main().innerHTML = ui.heading(title(), '') + ui.note(ui.message(error.code || 'local_processing_error'));
+    renderLoginNotice();
   }
 }
 
@@ -510,7 +546,7 @@ export async function showJob(id) {
   const fixed = job.fixed || {};
   const lines = [
     ['작업', job.title], ['진행 상태', ui.STATUS[job.status]?.[0] || job.status],
-    ['업무 결과', ui.OUTCOME[job.outcome]?.[0] || job.outcome], ['요청한 곳', ui.ORIGIN[job.origin] || job.origin],
+    ['업무 결과', ui.outcomeLabel(job)[0]], ['요청한 곳', ui.ORIGIN[job.origin] || job.origin],
     ['로그인', fixed.login?.display_name], ['대상', fixed.target ? `${fixed.target.display_name} (${ui.KIND[fixed.target.kind] || fixed.target.kind})` : null],
     ['프로필', fixed.profile?.name], ['접수 시각', ui.time(job.created_at)], ['기관 응답 시각', ui.time(job.observed_at)],
     ['지원 상태', ui.VERIFICATION[job.verification]?.[0]],

@@ -247,8 +247,10 @@ class PinLogin(PreloginClient):
                     attempt.next_action = 'sms_identity_verification'
                     return attempt
                 return self._login_pin(recipient_der, pin_provider=pin_provider)
-            except CertificateRuleError:
+            except CertificateRuleError as error:
                 attempt.processing_issues.append('recipient_validation_failed')
+                if error.rule in ('issuer_ldap_failed', 'crl_ldap_failed', 'ctl_ldap_failed'):
+                    attempt.processing_issues.append('recipient_public_lookup_failed')
                 return attempt
             except CertificateBackendLimit:
                 attempt.processing_issues.append('recipient_validation_incomplete')

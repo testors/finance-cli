@@ -169,8 +169,19 @@ class GiroTests(ServerCase):
         self.assertEqual(job['verification'], 'live_partial')
         self.assertIsNone(job['result']['bills'])
         self.assertNotIn('total_count', job['result'])
+        # The verdict stays the institution's failure; the flag only lets lists name the answer.
+        self.assertEqual((job['service_verdict']['app_success'], job['service_verdict']['response_code'],
+                          job['service_verdict']['service_decision']), (False, '311', 'failure'))
+        listed = {j['id']: j for j in self.get('/jobs').json()['jobs']}[job['id']]
+        self.assertIs(listed['service_verdict']['no_bills_reported'], True)
+        self.assertNotIn('result', listed)
         self.responses['national.list']['errorInfo']['errorName'] = '다른 오류'
-        self.assertFalse(self.run_job(self.submit('giro.bills.list'))['result']['no_bills_reported'])
+        other = self.run_job(self.submit('giro.bills.list'))
+        self.assertFalse(other['result']['no_bills_reported'])
+        self.assertIs(other['service_verdict']['no_bills_reported'], False)
+        self.assertEqual(other['outcome'], 'rejected')
+        # Other Giro queries keep the plain verdict fields.
+        self.assertNotIn('no_bills_reported', self.run_job(self.submit('giro.accounts.list'))['service_verdict'])
 
     def test_expiry_marks_session_and_does_not_login(self):
         self.responses['national.list'] = {'responseCode': '301'}
@@ -254,6 +265,20 @@ class GiroTests(ServerCase):
                 'session_saved': False, 'processing_issues': ['session_save_incomplete']}):
             result = self.run_job(self.submit('giro.login'), {'pin': '654321'})
         self.assertEqual(result['outcome'], 'success')
+        self.assertIsNone(result['result']['session_id'])
+
+    def test_recipient_lookup_failure_keeps_login_unknown_and_shows_stage(self):
+        from giro.registration_flow import EnrollmentStore
+        EnrollmentStore().identity()
+        with patch.object(giro_live.auth_flow, 'authenticate', return_value={
+                'stage': 'recipient.validate', 'login_service_decision': 'unobserved',
+                'session_saved': False, 'processing_issues': ['recipient_validation_failed',
+                                                            'recipient_public_lookup_failed']}) as authenticate:
+            result = self.run_job(self.submit('giro.login'), {'pin': '654321'})
+        authenticate.assert_called_once()
+        self.assertEqual(result['outcome'], 'unknown')
+        self.assertEqual(result['local']['stage'], 'recipient.validate')
+        self.assertIn('recipient_public_lookup_failed', result['local']['processing_issues'])
         self.assertIsNone(result['result']['session_id'])
 
     def test_unregistered_device_and_raw_browser_payment_fields_rejected_without_network(self):

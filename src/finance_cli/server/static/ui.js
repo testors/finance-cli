@@ -112,10 +112,19 @@ export const VERIFICATION = {live_untested: ['실서버 미검증', 'untested'],
   live_partial: ['일부 실사용 확인', 'warning'], offline: ['오프라인 처리', 'neutral']};
 export const ORIGIN = {web: '웹', cli: 'CLI', agent: '에이전트'};
 
+/* Giro answers a bill query that has nothing billed with “고지내용 없음” on its failure path. The
+   summary says that instead of "기관 거절"; the recorded verdict and outcome stay as received. */
+const noBills = job => job.name === 'giro.bills.list'
+  && Boolean(job.service_verdict?.no_bills_reported ?? job.result?.no_bills_reported);
+
+export function outcomeLabel(job) {
+  return noBills(job) ? ['고지 없음', 'neutral'] : OUTCOME[job.outcome] || [job.outcome, 'neutral'];
+}
+
 export function statusTags(job) {
   if (job.name?.startsWith('cli.')) return `<span class="pill-row">${tag('CLI 실행 기록', 'neutral')}${tag('종료코드 ' + (job.local?.exit_code ?? '—'), 'neutral')}</span>`;
   const [status, tone] = STATUS[job.status] || [job.status, 'neutral'];
-  const [outcome, outcomeTone] = OUTCOME[job.outcome] || [job.outcome, 'neutral'];
+  const [outcome, outcomeTone] = outcomeLabel(job);
   // The service verdict of a finished job says more than "완료"; a verdict seen while running keeps both.
   const html = job.status === 'finished' ? tag(outcome, outcomeTone)
     : tag(status, tone) + (job.status === 'running' && job.outcome !== 'not_started' ? tag(outcome, outcomeTone) : '');
@@ -130,6 +139,9 @@ export function verification(level) {
 const MESSAGES = {
   giro_device_registration_required: '서버에서 지로 기기를 먼저 등록해야 해요. fin giro auth register --send로 등록한 기기를 그대로 사용해요.',
   giro_invalid_login_pin: '지로 로그인 간편비밀번호 6자리를 입력하세요.',
+  recipient_public_lookup_failed: '지로 서버 인증서·폐지목록을 조회하지 못해 PIN 인증 전에 중단했어요. 서버의 공개 인증서 조회 연결을 확인하세요.',
+  recipient_validation_failed: '지로 서버 인증서·폐지목록 검증을 통과하지 못해 PIN 인증 전에 중단했어요. 공개 인증서 자료의 유효성을 확인하세요.',
+  recipient_validation_incomplete: '지로 서버 인증서·폐지목록 검증을 완료하지 못해 PIN 인증 전에 중단했어요. 서버의 공개 인증서 자료와 조회 설정을 확인하세요.',
   giro_preparation_changed: '로그인 세션이나 확인 내역이 바뀌었어요. 납부를 전송하지 않았어요. 고지를 다시 조회하세요.',
   giro_preparation_expired: '납부 준비 시간이 지났어요. 고지를 다시 조회해 납부 내용을 확인하세요.',
   giro_payment_auth_unsupported: '이 고지는 인증서 또는 FIDO 추가 인증이 필요해요. 이 인증 방식은 아직 지원하지 않아요.',
