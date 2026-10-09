@@ -169,8 +169,19 @@ class GiroTests(ServerCase):
         self.assertEqual(job['verification'], 'live_partial')
         self.assertIsNone(job['result']['bills'])
         self.assertNotIn('total_count', job['result'])
+        # The verdict stays the institution's failure; the flag only lets lists name the answer.
+        self.assertEqual((job['service_verdict']['app_success'], job['service_verdict']['response_code'],
+                          job['service_verdict']['service_decision']), (False, '311', 'failure'))
+        listed = {j['id']: j for j in self.get('/jobs').json()['jobs']}[job['id']]
+        self.assertIs(listed['service_verdict']['no_bills_reported'], True)
+        self.assertNotIn('result', listed)
         self.responses['national.list']['errorInfo']['errorName'] = '다른 오류'
-        self.assertFalse(self.run_job(self.submit('giro.bills.list'))['result']['no_bills_reported'])
+        other = self.run_job(self.submit('giro.bills.list'))
+        self.assertFalse(other['result']['no_bills_reported'])
+        self.assertIs(other['service_verdict']['no_bills_reported'], False)
+        self.assertEqual(other['outcome'], 'rejected')
+        # Other Giro queries keep the plain verdict fields.
+        self.assertNotIn('no_bills_reported', self.run_job(self.submit('giro.accounts.list'))['service_verdict'])
 
     def test_expiry_marks_session_and_does_not_login(self):
         self.responses['national.list'] = {'responseCode': '301'}

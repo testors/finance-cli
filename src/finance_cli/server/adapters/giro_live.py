@@ -32,12 +32,12 @@ VERDICT = ('app_success', 'response_code', 'callback', 'callback_code', 'origin'
 TTL = 600
 
 
-def observed(ctx, value, result=None):
+def observed(ctx, value, result=None, keys=VERDICT):
     decision = value.get('login_service_decision', value.get('service_decision'))
     outcome = {'success': 'success', 'failure': 'rejected', 'partial_success': 'partial_success'}.get(decision, 'unknown')
     if outcome == 'success' and value.get('complete') is False:
         outcome = 'partial_success'
-    fields = {'service_verdict': pick(value, VERDICT), 'outcome': outcome}
+    fields = {'service_verdict': pick(value, keys), 'outcome': outcome}
     if result is not None:
         fields['result'] = result
     ctx.observe(**fields)
@@ -167,7 +167,9 @@ class Bills(Session):
                                   'no_bills_reported', 'issues', 'next_action'))
             result['bills'] = None if rows is None else [None if r is None else
                 dict(bill_row(r), ref=str(i)) for i, r in enumerate(rows)]
-            fields = observed(ctx, value, result)
+            # "고지내용 없음" arrives on the failure path and stays a failure here. The flag goes with
+            # the verdict so job lists, which carry no result, can name it instead of a refusal.
+            fields = observed(ctx, value, result, VERDICT + ('no_bills_reported',))
             seal(client.session, ctx.job['id'], {'bills': rows, 'tax_type': ctx.input['tax_type']})
             return StepResult(**fields, local=local(value))
 

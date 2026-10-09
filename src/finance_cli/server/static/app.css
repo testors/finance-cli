@@ -432,6 +432,10 @@ label.check input{margin-top:4px}
 }
 .section-actions{align-items:center}
 .scope-note.page-error{background:#fbeceb;border-color:#f1d4d1;color:#a4453e}
+.login-notice{display:flex;align-items:center;gap:12px;flex-wrap:wrap;padding:14px 18px;margin-bottom:23px;background:#fff5df;border:1px solid #f0dfb4;border-radius:8px;color:#8f6a1d;font-size:14px;line-height:1.7}
+.login-notice>.icon{width:18px;height:18px;flex-shrink:0}
+.login-notice p{flex:1 1 260px;margin:0}
+.login-notice-actions{display:flex;gap:8px;flex-wrap:wrap}
 .dialog-body .form-error:empty{min-height:0;margin:0}
 .folded-fields{padding:12px 14px;border-top:1px solid var(--line)}
 .folded-fields .summary-lines{margin-top:0}
