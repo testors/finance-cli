@@ -14,8 +14,8 @@ async function setup(t) {
   const context = dom.getInternalVMContext();
   const row = {id: 'giro', institution: 'giro', method: 'pin', readiness: 'ready', display_name: '합성 지로'};
   const state = {logins: [row], params: {}, rows: {}, cache: new Map()};
-  const calls = [], requests = [], asked = [], responses = new Map(), jobs = [];
-  const api = {get: async path => path.startsWith('/jobs?') ? {jobs} : responses.get(path), post: async (path, value) => {
+  const calls = [], requests = [], asked = [], paths = [], responses = new Map(), jobs = [];
+  const api = {get: async path => { paths.push(path); return path.startsWith('/jobs?') ? {jobs} : responses.get(path); }, post: async (path, value) => {
     requests.push({path, value: JSON.parse(JSON.stringify(value))});
     return path === '/logins' ? row : responses.get(path);
   }};
@@ -34,7 +34,7 @@ async function setup(t) {
     await opts.onDone?.(job); return job;
   }, track: async (job, opts) => { await opts.onDone?.(job); return job; }};
   const add = job => { jobs.unshift(job); responses.set('/jobs/' + job.id, job); };
-  return {...module.namespace, ctx, row, state, calls, asked, requests, responses, jobs, add, document: dom.window.document};
+  return {...module.namespace, ctx, row, state, calls, asked, requests, paths, responses, jobs, add, document: dom.window.document};
 }
 
 test('PIN login uses registered connection with no certificate/account setup or automatic query', async t => {
@@ -207,5 +207,40 @@ test('receipt null responses remain visible and distinct from empty lists and re
   job.outcome = 'success'; job.input.page = 2;
   html = await a.giroViews['giro-receipts'](a.ctx);
   assert.match(html, /납부내역 목록을 확인하지 못했어요/);
+  assert.equal(a.calls.length, 0);
+});
+
+test('each screen asks for its own job name and login, so other jobs cannot hide its result', async t => {
+  const a = await setup(t);
+  const main = a.document.querySelector('main');
+  a.add({id: 'national', name: 'giro.bills.list', login_id: 'giro', outcome: 'success', input: {tax_type: 'national'},
+    result: {complete: true, bills: []}});
+  a.state.params.tax_type = 'local';
+  main.innerHTML = await a.giroViews['giro-live'](a.ctx);
+  assert.match(main.textContent, /세금 종류를 고르고 고지 조회를 누르세요/, 'another tax type is not shown as this one');
+  main.innerHTML = await a.giroViews['giro-accounts'](a.ctx);
+  main.innerHTML = await a.giroViews['giro-receipts'](a.ctx);
+  // Filtered on the server before its limit; the tax type is matched among the recent bill queries.
+  assert.deepEqual(a.paths, ['/jobs?name=giro.bills.list&login_id=giro&limit=50', '/jobs?name=giro.accounts.list&login_id=giro&limit=1',
+    '/jobs?name=giro.receipts.list&login_id=giro&limit=1', '/jobs?name=giro.payment.prepare&login_id=giro&limit=20']);
+});
+
+test('a logged-out list offers no payment, and the confirmation carries the warnings a transfer has', async t => {
+  const a = await setup(t);
+  const main = a.document.querySelector('main');
+  a.add({id: 'bills', name: 'giro.bills.list', login_id: 'giro', outcome: 'success', input: {tax_type: 'national'},
+    result: {complete: true, bills: [{ref: '0', tax_name: '합성세', issuer: '합성기관', amount_raw: '1,000', due_date: '2026-10-31', electronic_number: '0000'}]}});
+  main.innerHTML = await a.giroViews['giro-live'](a.ctx);
+  assert.ok(main.querySelector('[data-action="giro-payment-options"]'));
+  a.row.readiness = 'login_required';
+  main.innerHTML = await a.giroViews['giro-live'](a.ctx);
+  assert.equal(main.querySelector('[data-action="giro-payment-options"]'), null, 'the bill stays in view without a button that cannot work');
+  assert.match(main.querySelector('.list-footer').textContent, /로그인하면 이 목록에서 납부할 수 있어요/);
+  a.add({id: 'pay', name: 'giro.payment.prepare', login_id: 'giro', status: 'awaiting_input', verification: 'live_partial',
+    awaiting: {digest: 'digest', requires: ['account_password'], expires_at: Date.now() / 1000 + 125, preview: {tax_type: 'national', amount: '1000'}}});
+  await a.giroActions['giro-payment-open'](a.ctx, {dataset: {job: 'pay'}});
+  const dialog = a.document.querySelector('#detail-dialog');
+  assert.match(dialog.querySelector('.pill-row').textContent, /일부 실사용 확인되돌릴 수 없음/);
+  assert.match(dialog.querySelector('.countdown').textContent, /^2분 0\d초$/, 'the time left to confirm is shown at once');
   assert.equal(a.calls.length, 0);
 });

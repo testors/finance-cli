@@ -263,13 +263,25 @@ export function closeDialog() {
   document.querySelector('#dialog-content').innerHTML = '';
 }
 
-let toastTimer;
+let toastTimer, toastGone;
 export function toast(text) {
   const target = document.querySelector('#toast');
+  clearTimeout(toastTimer);
+  clearTimeout(toastGone);
+  // A modal dialog is drawn above the page. Shown again as a popover, the toast joins that top
+  // layer above whatever is open now; without popover support it stays on the page as before.
+  const layered = target.popover === 'manual' && typeof target.showPopover === 'function';
+  if (layered) {
+    if (target.matches(':popover-open')) target.hidePopover();
+    target.showPopover();
+    void target.offsetWidth; // the fade starts from the hidden state
+  }
   target.textContent = text;
   target.classList.add('show');
-  clearTimeout(toastTimer);
-  toastTimer = setTimeout(() => target.classList.remove('show'), Math.min(10000, 3500 + String(text).length * 70));
+  toastTimer = setTimeout(() => {
+    target.classList.remove('show');
+    if (layered) toastGone = setTimeout(() => { if (target.matches(':popover-open')) target.hidePopover(); }, 250);
+  }, Math.min(10000, 3500 + String(text).length * 70));
 }
 
 /* An error stays where the user is looking: in the open dialog, else at the top of the
@@ -323,8 +335,25 @@ export const FIELD_LABELS = {
   lsatUtprc: '단가', lsatSplCft: '공급가액', lsatTxamt: '세액', lsatRmrkCntn: '품목 비고',
   wrtDt: '작성일', sumAmt: '합계', splCft: '공급가액', txamt: '세액', rmrkCntn: '비고',
   recApeClCd: '청구·영수 코드', etxivClsfCd: '계산서 분류 코드', etxivKndCd: '계산서 종류 코드',
+  // Hana transfer and ledger fields, by the names its own receipts and transaction list use.
+  trscDt: '거래일자', trscTm: '거래시각', trscAmt: '거래금액', trscAfBal: '거래 후 잔액', curCd: '통화', trscStNm: '처리 상태',
+  wdrwAcctNo: '출금계좌번호', rcvBnkCd: '입금은행코드', rcvBnkNm: '입금은행', rcvAcctNo: '입금계좌번호', trnsAmt: '이체금액',
+  rduAfComm: '수수료', rcvPsbkMarkCtt: '받는분에게표기', wdrwPsbkMarkCtt: '나에게표기', rmteNm: '수취인명', rmtrNm: '송금인명',
+  memoCtt: '메모', rmrk: '적요',
 };
 export const label = key => FIELD_LABELS[key] || key;
+
+/* Dates and times that arrive as bare digits, shown with separators. Display only: a value of
+   any other shape is left exactly as received. */
+export const dateText = value => /^\d{8}$/.test(String(value ?? '')) ? String(value).replace(/^(\d{4})(\d{2})(\d{2})$/, '$1-$2-$3') : value;
+export const timeText = value => /^\d{6}$/.test(String(value ?? '')) ? String(value).replace(/^(\d{2})(\d{2})(\d{2})$/, '$1:$2:$3') : value;
+// Institution fields this project reads as a date or as a time of day.
+const FIELD_FORMATS = {pmtDdt: dateText, wrtDt: dateText, lsatSplDt: dateText, trscDt: dateText, trscTm: timeText};
+
+function cell(key, value) {
+  const shown = FIELD_FORMATS[key] ? FIELD_FORMATS[key](value) : value;
+  return typeof shown === 'number' ? money(shown) : esc(shown ?? '');
+}
 
 /* Service rows arrive as the institution's own field names. Column choice is a
    display heuristic only; the detail view shows every allowlisted field. */
@@ -338,17 +367,18 @@ export function columns(rows, limit = 4) {
   return chosen.slice(0, limit);
 }
 
-export function rowsTable(rows, {group = 'rows', limit = 200, keys: fixed = null, num = []} = {}) {
+/* `mark(row, key, index)` may name a class for one cell, for example a deposit. */
+export function rowsTable(rows, {group = 'rows', limit = 200, keys: fixed = null, num = [], mark = null} = {}) {
   if (!rows) return '';
   if (!rows.length) return '<div class="empty-state">조회 결과가 0건이에요.</div>';
   const keys = fixed || columns(rows);
   const numeric = key => num.includes(key) || rows.every(r => r?.[key] === null || r?.[key] === undefined || typeof r[key] === 'number');
   // data-label lets a narrow screen show each cell as "label: value" without a header row.
-  return `<div class="table-wrap"><table class="table data"><thead><tr>${keys.map(k => `<th scope="col" class="${numeric(k) ? 'num' : ''}">${esc(label(k))}</th>`).join('')}</tr></thead><tbody>${rows.slice(0, limit).map((row, index) => `<tr data-row="${group}:${index}" tabindex="0">${keys.map(k => `<td class="${numeric(k) ? 'num' : ''}" data-label="${esc(label(k))}">${typeof row?.[k] === 'number' ? money(row[k]) : esc(row?.[k] ?? '')}</td>`).join('')}</tr>`).join('')}</tbody></table></div>${rows.length > limit ? `<div class="list-footer">${rows.length}건 중 ${limit}건 표시</div>` : ''}`;
+  return `<div class="table-wrap"><table class="table data"><thead><tr>${keys.map(k => `<th scope="col" class="${numeric(k) ? 'num' : ''}">${esc(label(k))}</th>`).join('')}</tr></thead><tbody>${rows.slice(0, limit).map((row, index) => `<tr data-row="${group}:${index}" tabindex="0">${keys.map(k => `<td class="${[numeric(k) ? 'num' : '', mark?.(row, k, index)].filter(Boolean).join(' ')}" data-label="${esc(label(k))}">${cell(k, row?.[k])}</td>`).join('')}</tr>`).join('')}</tbody></table></div>${rows.length > limit ? `<div class="list-footer">${rows.length}건 중 ${limit}건 표시</div>` : ''}`;
 }
 
 export function fieldsList(row) {
-  return `<div class="summary-lines">${Object.entries(row || {}).map(([k, v]) => `<div class="summary-line"><span>${esc(label(k))}</span><strong>${typeof v === 'number' ? money(v) : esc(v)}</strong></div>`).join('')}</div>`;
+  return `<div class="summary-lines">${Object.entries(row || {}).map(([k, v]) => `<div class="summary-line"><span>${esc(label(k))}</span><strong>${cell(k, v)}</strong></div>`).join('')}</div>`;
 }
 
 /* Row detail: fields with a known name first; names only the institution uses are folded. */

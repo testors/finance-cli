@@ -81,7 +81,7 @@ async function boot(t, {mode = 'banking', view = 'accounts', loggedIn = false} =
   const press = (label, scope = document.querySelector('#main')) => [...scope.querySelectorAll('button')].find(b => text(b).startsWith(label)).click();
   const dialog = () => document.querySelector('#detail-dialog').open ? text(document.querySelector('#dialog-title')) : null;
   const type = values => { for (const [name, value] of Object.entries(values)) document.querySelector(`[name="${name}"]`).value = value; };
-  return {document, server, held, press, dialog, type, text, state: app.namespace.state,
+  return {document, server, held, press, dialog, type, text, state: app.namespace.state, app: app.namespace,
     toast: () => text(document.querySelector('#toast')), submit: selector => document.querySelector(selector).requestSubmit()};
 }
 
@@ -164,4 +164,22 @@ test('a request that fails inside an action is said on the screen', async t => {
   assert.match(ui.toast(), /job_not_found/);
   assert.match(ui.text(ui.document.querySelector('#main [role="alert"]')), /job_not_found/);
   assert.equal(ui.held(), null);
+});
+
+test('a table is marked for labelled rows as it arrives on a narrow screen, on the page and in a dialog', async t => {
+  const ui = await boot(t);
+  const table = '<div class="table-wrap"><table class="table data"><tbody><tr><td data-label="합성">1</td></tr></tbody></table></div>';
+  ui.document.querySelector('#main').insertAdjacentHTML('beforeend', table);
+  ui.document.querySelector('#dialog-content').innerHTML = table;
+  await sleep(5);
+  // jsdom lays nothing out, so the stage is as narrow as a screen can be.
+  assert.equal(ui.document.querySelectorAll('.table-wrap.stacked').length, 2);
+});
+
+test('a login dialog leaves remembering the store passphrase to the user; the issuance wizard offers it chosen', async t => {
+  const ui = await boot(t);
+  const fields = [['vault_passphrase', '저장소 암호']];
+  assert.match(ui.app.rememberField(fields, 'main'), /name="remember_vault">/);
+  assert.match(ui.app.rememberField(fields, 'main', {chosen: true}), /name="remember_vault" checked>/);
+  assert.equal(ui.app.rememberField([['pin', 'PIN']], 'main'), '');
 });

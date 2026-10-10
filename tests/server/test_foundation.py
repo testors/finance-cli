@@ -634,3 +634,25 @@ class CliHistoryTests(ServerCase):
         with patch.dict(os.environ, {'FINANCE_REQUEST_ORIGIN': 'agent'}):
             self.fin(['giro', 'bills', 'list', '--type', 'national', '--input', str(path)])
         self.assertEqual(self.get('/jobs').json()['jobs'][0]['origin'], 'agent')
+
+
+class JobListingTests(ServerCase):
+    def test_every_listing_filter_applies_before_the_limit(self):
+        """Newer unrelated jobs and CLI records never push a screen's own rows out of its listing."""
+        from finance_cli.server import jobs
+        self.enroll()
+        old, created = jobs.submit(self.db, name='giro.readiness', origin='web:test')
+        self.assertTrue(created)
+        for _ in range(3):
+            jobs.record_cli(self.db, origin='cli', command=['hana', 'transfer', 'execute'], exit_code=0, service='hana')
+        newest = self.get('/jobs?limit=2').json()['jobs']
+        self.assertEqual([j['name'] for j in newest], ['cli.hana', 'cli.hana'])
+        for query in ('name=giro.readiness&limit=1', 'area=giro&limit=1', 'origin=web&limit=1'):
+            self.assertEqual([j['id'] for j in self.get('/jobs?' + query).json()['jobs']], [old['id']], query)
+        self.assertEqual(len(self.get('/jobs?origin=cli').json()['jobs']), 3)
+        for query in ('origin=agent', 'origin=web%25', 'area=unknown', 'area=banking',
+                      'name=giro.readiness&login_id=other', 'name=giro.readiness&target_id=other'):
+            self.assertEqual(self.get('/jobs?' + query).json()['jobs'], [], query)
+        older = self.get(f"/jobs?limit=5&before={newest[-1]['created_at']!r}").json()['jobs']
+        self.assertEqual(older[-1]['id'], old['id'])
+        self.assertFalse({j['id'] for j in newest} & {j['id'] for j in older})

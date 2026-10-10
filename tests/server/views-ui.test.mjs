@@ -42,7 +42,7 @@ async function setup(t, method = 'onesign', readiness = 'query_only', secret = {
     this.setExport('api', {get: async path => {
       apiCalls.push(path);
       if (state.failJobList && path.startsWith('/jobs?')) throw new Error('synthetic list error');
-      if (path.startsWith('/jobs?')) return {jobs: []};
+      if (path.startsWith('/jobs?')) return {jobs: state.listed ? state.listed(path) : []};
       if (state.served?.[path]) return state.served[path];
       return {credentials: [], devices: [], id_cards: []};
     }, post: async path => {
@@ -64,8 +64,8 @@ async function setup(t, method = 'onesign', readiness = 'query_only', secret = {
   return {ctx, state, calls, asked, checked, apiCalls, changed, redraws, posted, row, document: dom.window.document, ...views.namespace};
 }
 
-// Screens read recent jobs without login extensions, which can run every few minutes.
-const LIST = '/jobs?limit=200&hide=session_extend';
+// The activity list reads one page without login extensions, which can run every few minutes.
+const ACTIVITY = '/jobs?limit=50&hide=session_extend';
 
 test('a completed tax query stays current when returning to its screen', async t => {
   const ui = await setup(t, 'joint_certificate', 'ready');
@@ -95,29 +95,49 @@ test('a completed tax query stays current when returning to its screen', async t
   assert.equal(ui.apiCalls.length, 0, 'Navigation reuses the completed job without replaying a query');
 });
 
-test('summary and account screens share concurrent job-list reads, with no lasting list cache', async t => {
+test('screens ask for each result by its job name and target, with no lasting list cache', async t => {
   const tax = await setup(t, 'joint_certificate', 'ready');
   tax.row.institution = 'hometax'; tax.state.targets[0].kind = 'personal';
   await tax.views.taxhome(tax.ctx);
-  assert.deepEqual(tax.apiCalls, [LIST]);
+  // The server filters before its limit, so unrelated jobs and CLI records cannot push a result
+  // out of reach. The invoice direction is matched on the stored input, among the recent ones.
+  const asked = ['/jobs?name=hometax.tax.dues&limit=1&target_id=target', '/jobs?name=hometax.tax.refunds&limit=1&target_id=target',
+    '/jobs?name=hometax.invoice.list&limit=50&target_id=target'];
+  assert.deepEqual(tax.apiCalls, asked);
   await tax.views.taxhome(tax.ctx);
-  assert.deepEqual(tax.apiCalls, [LIST, LIST]);
+  assert.deepEqual(tax.apiCalls, [...asked, ...asked]);
   const bank = await setup(t, 'onesign', 'ready');
   bank.state.logins = Array.from({length: 3}, (_, i) => ({...bank.row, id: 'synthetic-' + i}));
   await bank.views.accounts(bank.ctx);
-  assert.deepEqual(bank.apiCalls, [LIST]);
+  assert.deepEqual(bank.apiCalls, [0, 1, 2].map(i => `/jobs?name=hana.onesign.accounts&limit=1&login_id=synthetic-${i}`));
   assert.equal(bank.calls.length, 0);
 });
 
-test('a failed shared list read does not prevent the next explicit screen load', async t => {
+test('a result that only the server filter can reach is shown, and another direction is not', async t => {
+  const ui = await setup(t, 'joint_certificate', 'ready');
+  ui.row.institution = 'hometax'; ui.state.targets[0].kind = 'business';
+  const job = direction => ({id: direction, name: 'hometax.invoice.list', login_id: 'login', target_id: 'target', status: 'finished',
+    outcome: 'success', input: {direction}, result: {items: [{dmnrTnmNm: '합성 ' + direction, wrtDt: '20260915'}], pagination: {complete: true}}});
+  ui.state.listed = path => path.startsWith('/jobs?name=hometax.invoice.list&') ? [job('purchases'), job('sales')] : [];
+  ui.state.served = {'/jobs/sales': job('sales'), '/jobs/purchases': job('purchases')};
+  const main = ui.document.querySelector('main');
+  ui.state.params = {};
+  main.innerHTML = await ui.views.invoices(ui.ctx);
+  assert.deepEqual(ui.apiCalls.filter(path => path.startsWith('/jobs/')), ['/jobs/sales']);
+  assert.match(main.textContent, /합성 sales/);
+  assert.doesNotMatch(main.textContent, /합성 purchases/);
+  assert.match(main.textContent, /2026-09-15/, 'a known date field reads as a date');
+});
+
+test('a failed list read does not prevent the next explicit screen load', async t => {
   const ui = await setup(t, 'joint_certificate', 'ready');
   ui.row.institution = 'hometax'; ui.state.targets[0].kind = 'personal';
   ui.state.failJobList = true;
   await assert.rejects(ui.views.taxhome(ui.ctx), /synthetic list error/);
-  assert.equal(ui.apiCalls.length, 1);
+  assert.equal(ui.apiCalls.length, 3);
   ui.state.failJobList = false;
   await ui.views.taxhome(ui.ctx);
-  assert.equal(ui.apiCalls.length, 2);
+  assert.equal(ui.apiCalls.length, 6);
   assert.equal(ui.calls.length, 0);
 });
 
@@ -478,11 +498,11 @@ test('idle accounts, history and transfers check expiry before requesting secret
   assert.equal(ui.asked.length, 0);
   assert.equal(ui.calls.length, 0);
   ui.document.querySelector('main').innerHTML = await ui.views.accounts(ui.ctx);
-  assert.match(ui.document.body.textContent, /로그아웃됨 · 10분 경과/);
+  assert.match(ui.document.body.textContent, /로그아웃됨 · 10분 넘게 요청 없음/);
   // The limit shown is the one the server sent for that institution's session.
   ui.state.logins[0].session = {...ui.state.logins[0].session, idle_seconds: 290};
   ui.document.querySelector('main').innerHTML = await ui.views.accounts(ui.ctx);
-  assert.match(ui.document.body.textContent, /로그아웃됨 · 4분 50초 경과/);
+  assert.match(ui.document.body.textContent, /로그아웃됨 · 4분 50초 넘게 요청 없음/);
 });
 
 
@@ -965,13 +985,41 @@ test('the activity list leaves out login extensions unless asked', async t => {
   const main = ui.document.querySelector('main');
   ui.state.params = {};
   main.innerHTML = await ui.views.activity(ui.ctx);
-  assert.equal(ui.apiCalls.at(-1), LIST);
+  assert.equal(ui.apiCalls.at(-1), ACTIVITY);
   assert.match(main.querySelector('.list-footer').textContent, /로그인 연장 기록은 숨겼어요/);
+  assert.equal(main.querySelector('[data-action="activity-more"]'), null, 'a short first page offers no older rows');
   ui.actions['activity-extensions'](ui.ctx, main.querySelector('[data-action="activity-extensions"]'));
   assert.equal(JSON.stringify(ui.changed.at(-1)), JSON.stringify(['activity', {extensions: true}]));
   ui.state.params = {extensions: true};
   main.innerHTML = await ui.views.activity(ui.ctx);
-  assert.equal(ui.apiCalls.at(-1), '/jobs?limit=200');
+  assert.equal(ui.apiCalls.at(-1), '/jobs?limit=50');
+});
+
+test('the activity list filters on the server and adds older pages under the rows shown', async t => {
+  const ui = await setup(t);
+  const main = ui.document.querySelector('main');
+  const row = i => ({id: 'job-' + i, name: 'cli.hana', title: 'CLI 실행', origin: 'cli', status: 'finished', outcome: 'unknown',
+    created_at: 1790000000 - i, command: ['hana', 'accounts'], local: {exit_code: 0}});
+  ui.state.listed = path => path.includes('before=') ? [row(50), row(51)] : Array.from({length: 50}, (_, i) => row(i));
+  ui.state.params = {area: 'giro', origin: 'cli'};
+  main.innerHTML = await ui.views.activity(ui.ctx);
+  assert.equal(ui.apiCalls.at(-1), ACTIVITY + '&area=giro&origin=cli');
+  assert.equal(main.querySelector('#activity-area').value, 'giro');
+  assert.equal(main.querySelector('#activity-origin').value, 'cli');
+  assert.equal(main.querySelectorAll('.operation-row').length, 50);
+  assert.match(main.querySelector('.list-footer').textContent, /명령어와 종료코드만/);
+  const more = main.querySelector('[data-action="activity-more"]');
+  await ui.actions['activity-more'](ui.ctx, more);
+  assert.equal(ui.apiCalls.at(-1), `${ACTIVITY}&area=giro&origin=cli&before=${1790000000 - 49}`);
+  assert.equal(main.querySelectorAll('.operation-row').length, 52, 'older rows join the ones already shown');
+  assert.equal(main.querySelector('[data-action="activity-more"]'), null);
+  assert.match(main.querySelector('#activity-more').textContent, /더 이전 기록은 없어요/);
+  main.querySelector('#activity-origin').value = 'web';
+  ui.actions['activity-filter'](ui.ctx, main.querySelector('#activity-origin'));
+  assert.equal(JSON.stringify(ui.changed.at(-1)), JSON.stringify(['activity', {area: 'giro', origin: 'web'}]));
+  ui.state.listed = () => [];
+  main.innerHTML = await ui.views.activity(ui.ctx);
+  assert.match(main.querySelector('.empty-state').textContent, /조건에 맞는 작업 기록이 없어요/);
 });
 
 test('a login is extended by hand with its own job, and only where its module has one', async t => {
@@ -988,4 +1036,87 @@ test('a login is extended by hand with its own job, and only where its module ha
   await ui.actions.extend(ui.ctx, {dataset: {login: 'login'}});
   assert.equal(ui.calls[1].name, 'giro.session.extend');
   assert.equal(ui.asked.length, 1, 'no passphrase for a module that needs none');
+});
+
+test('ledger rows show dates, times and the direction of each amount, and their detail uses plain names', async t => {
+  const ui = await setup(t, 'onesign', 'ready');
+  const main = ui.document.querySelector('main');
+  const job = {id: 'history', name: 'hana.onesign.history.list', login_id: 'login', target_id: 'target', status: 'finished', outcome: 'success',
+    result: {pagination_complete: true, rows: [
+      {date: '20261007', time: '181656', type: '대체', name: '합성 출금', amount: 1500, balance: 8500, currency: 'KRW', variation: 'decrease', extra: null, memo: ''},
+      {date: '20261006', time: '090000', type: '타행이체', name: '합성 입금', amount: 10000, balance: 10000, currency: 'KRW', variation: 'increase', extra: null, memo: ''},
+      {date: '합성 원문', time: null, type: '기타', name: '방향 없음', amount: 7, balance: 10000, currency: 'KRW', variation: 'none', extra: null, memo: ''}]}};
+  ui.state.cache.set('hana.onesign.history.list||target|', job);
+  ui.state.params = {};
+  main.innerHTML = await ui.views.history(ui.ctx);
+  const cells = [...main.querySelectorAll('#results tbody tr')].map(tr => [...tr.children].map(td => td.textContent));
+  assert.deepEqual(cells, [['2026-10-07', '18:16:56', '대체', '합성 출금', '-1,500', '8,500'],
+    ['2026-10-06', '09:00:00', '타행이체', '합성 입금', '+10,000', '10,000'],
+    ['합성 원문', '', '기타', '방향 없음', '7', '10,000']], 'a value of another shape and an unmarked amount stay as received');
+  assert.equal(main.querySelectorAll('#results td.incoming').length, 1);
+  ui.actions.row(ui.ctx, main.querySelector('#results tr[data-row]'));
+  const dialog = ui.document.querySelector('#detail-dialog');
+  assert.deepEqual([...dialog.querySelectorAll('.summary-line > span')].map(n => n.textContent),
+    ['거래일자', '거래시각', '구분', '내용', '입출금', '금액', '잔액', '통화']);
+  assert.match(dialog.textContent, /출금/);
+  assert.doesNotMatch(dialog.textContent, /variation|amount|decrease|기관 응답의 필드명/);
+  assert.equal(ui.calls.length, 0, 'opening a row asks the bank for nothing');
+});
+
+test('transfer rows use the field names this project reads and leave the rest to the row detail', async t => {
+  const ui = await setup(t, 'onesign', 'ready');
+  const main = ui.document.querySelector('main');
+  const job = {id: 'inquiry', name: 'hana.onesign.inquiry.history', login_id: 'login', target_id: 'target', status: 'finished', outcome: 'success',
+    result: {rows: [{achvChnlNm: '합성 채널', lstTrscDt: '20261001', rcvAcctNo: '00012345', rcvBnkNm: '합성은행', rmteNm: '합성 수취인',
+      trscAmt: 100, trscDt: '20261001', trscStNm: '완료', trscTm: '093000'}]}};
+  ui.state.cache.set('hana.onesign.inquiry.history||target|', job);
+  ui.state.params = {};
+  main.innerHTML = await ui.views.inquiry(ui.ctx);
+  assert.deepEqual([...main.querySelectorAll('#results th')].map(n => n.textContent),
+    ['거래일자', '거래시각', '받는 분', '입금은행', '입금계좌번호', '거래금액', '처리 상태']);
+  assert.deepEqual([...main.querySelectorAll('#results tbody td')].map(n => n.textContent),
+    ['2026-10-01', '09:30:00', '합성 수취인', '합성은행', '00012345', '100', '완료']);
+  ui.actions.row(ui.ctx, main.querySelector('#results tr[data-row]'));
+  const dialog = ui.document.querySelector('#detail-dialog');
+  assert.match(dialog.textContent, /수취인명/);
+  assert.match(dialog.querySelector('details.verdict summary').textContent, /그 밖의 항목 2개/, 'fields with no established name stay as sent');
+  assert.match(dialog.querySelector('.folded-fields').textContent, /achvChnlNm.*lstTrscDt20261001/s);
+  // Rows of a shape this project does not read keep the generic table and the bank's own names.
+  job.result.rows = [{anyNm: '합성', otherDt: '20260101'}];
+  main.innerHTML = await ui.views.inquiry(ui.ctx);
+  assert.deepEqual([...main.querySelectorAll('#results th')].map(n => n.textContent), ['anyNm', 'otherDt']);
+  assert.match(main.querySelector('#results tbody').textContent, /20260101/);
+});
+
+test('a logged-out account offers 로그인 rather than 다시 로그인, and an empty security screen says what to do', async t => {
+  const ui = await setup(t, 'onesign', 'ready');
+  const main = ui.document.querySelector('main');
+  ui.state.params = {};
+  main.innerHTML = await ui.views.history(ui.ctx);
+  assert.equal(main.querySelector('[data-action="account-login"]').textContent, '다시 로그인');
+  ui.state.idleExpired = true;
+  for (const view of ['history', 'inquiry']) {
+    main.innerHTML = await ui.views[view](ui.ctx);
+    assert.equal(main.querySelector('[data-action="account-login"]').textContent, '로그인', view);
+  }
+  main.innerHTML = await ui.views.security(ui.ctx);
+  assert.equal(main.querySelector('[data-action="security-login"]').textContent, '로그인');
+  assert.match(main.querySelector('#results .empty-state').textContent, /조회 항목을 고르고 조회하세요/);
+  assert.equal(ui.calls.length, 0);
+});
+
+test('an adapter reason code reads in words and a message from the institution stays as received', async t => {
+  const ui = await setup(t, 'joint_certificate', 'ready');
+  ui.row.institution = 'hometax'; ui.state.targets[0].kind = 'business';
+  const main = ui.document.querySelector('main');
+  const job = reason => ({id: 'invoice', name: 'hometax.invoice.list', login_id: 'login', target_id: 'target', status: 'finished',
+    outcome: 'unknown', input: {direction: 'sales'}, service_verdict: {reason}, result: null});
+  ui.state.params = {};
+  ui.state.cache.set('hometax.invoice.list||target|sales', job('original_action_not_observed'));
+  main.innerHTML = await ui.views.invoices(ui.ctx);
+  assert.match(main.querySelector('#results .scope-note').textContent, /\(홈택스 화면의 조회 요청을 관측하지 못함\)/);
+  assert.doesNotMatch(main.textContent, /original_action_not_observed/);
+  ui.state.cache.set('hometax.invoice.list||target|sales', job('합성 기관 안내문'));
+  main.innerHTML = await ui.views.invoices(ui.ctx);
+  assert.match(main.querySelector('#results .scope-note').textContent, /\(합성 기관 안내문\)/);
 });

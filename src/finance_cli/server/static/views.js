@@ -45,7 +45,7 @@ function extensionNote(row) {
 }
 
 function readiness(row) {
-  if (bankSessionExpired(row)) return tag(`로그아웃됨 · ${ui.idleLimit(row)} 경과`, 'warning');
+  if (bankSessionExpired(row)) return tag(`로그아웃됨 · ${ui.idleLimit(row)} 넘게 요청 없음`, 'warning');
   const value = row.readiness;
   return value === 'query_only' ? tag('조회용 세션 있음', '') : value === 'ready' ? tag('세션 있음', '') : value === 'login_disabled' ? tag('사용 중지', 'neutral') : tag('로그인 필요', 'warning');
 }
@@ -53,20 +53,23 @@ function readiness(row) {
 // A target already identifies its login. Use the same key when a screen knows
 // only the target and when a submitted job also carries the login id.
 const key = (name, fields = {}) => [name, fields.target_id ? '' : fields.login_id || '', fields.target_id || '', fields.parent || ''].join('|');
-let pendingJobList = null;
 
-function recentJobs() {
-  // Share concurrent reads only; the next render can observe new server jobs.
-  if (!pendingJobList) pendingJobList = api.get('/jobs?limit=200&hide=session_extend').finally(() => { pendingJobList = null; });
-  return pendingJobList;
+/* The jobs of one name for a login or target, newest first. The server filters before it limits,
+   so a result is found however many unrelated jobs and CLI records came after it. Nothing is
+   kept here: the next render observes new server jobs. */
+function jobsNamed(name, fields = {}, limit = 1) {
+  const query = new URLSearchParams({name, limit: String(limit)});
+  for (const field of ['login_id', 'target_id']) if (fields[field]) query.set(field, fields[field]);
+  return api.get('/jobs?' + query);
 }
 
 /* The latest job for a name and fixed login/target, from this tab or the server. */
 async function latest(name, fields = {}, match = null) {
   const cached = state.cache.get(key(name, fields));
   if (cached) return cached.result === undefined && cached.status === 'finished' ? api.get('/jobs/' + cached.id) : cached;
-  const listing = await recentJobs();
-  // `match` narrows by the job's stored input, for example the invoice direction.
+  // `match` narrows by the job's stored input, for example the invoice direction, so it reads
+  // the recent jobs of that name instead of only the newest.
+  const listing = await jobsNamed(name, fields, match ? 50 : 1);
   const found = listing.jobs.find(j => j.name === name && (!fields.login_id || j.login_id === fields.login_id)
     && (!fields.target_id || j.target_id === fields.target_id) && (!match || match(j.input || {})));
   if (!found) return null;
@@ -83,17 +86,23 @@ function empty(text, actions = '') {
   return `<section class="panel"><div class="empty-state">${text}${actions ? `<div class="section-actions">${actions}</div>` : ''}</div></section>`;
 }
 
+// Reasons the Hometax adapter gives as its own identifiers, in words. A reason that is not listed,
+// such as a message from the institution, is shown as received.
+const REASONS_SHOWN = {original_action_not_observed: '홈택스 화면의 조회 요청을 관측하지 못함', original_dues_navigation_not_observed: '납부할 세액 화면으로의 이동을 관측하지 못함',
+  unobserved: '응답을 관측하지 못함', original_service_result: '홈택스 서비스 응답'};
+const reasonText = value => esc(REASONS_SHOWN[value] || value);
+
 function outcomeNote(job, zeroText = '조회 결과가 0건이에요.') {
   if (!job || job.status !== 'finished') return '';
   const verdict = job.service_verdict || {};
   if (job.outcome === 'unknown' && verdict.original_dialog_observed) {
     // The original page stopped at its own notice, so no query was sent and there is no verdict.
     const personal = job.name?.startsWith('hometax.invoice.') && target(job.target_id)?.kind === 'personal';
-    return note(`홈택스 화면이 안내창을 띄우고 조회를 진행하지 않았어요${verdict.reason ? ` (${esc(verdict.reason)})` : ''}. 0건이나 실패로 처리하지 않았어요.` +
+    return note(`홈택스 화면이 안내창을 띄우고 조회를 진행하지 않았어요${verdict.reason ? ` (${reasonText(verdict.reason)})` : ''}. 0건이나 실패로 처리하지 않았어요.` +
       (personal ? ' 개인 대상으로 조회했어요. 전자세금계산서는 사업자 전환이 필요할 수 있으니 조회 대상을 사업장으로 바꿔 다시 조회해 보세요.' : ''));
   }
-  if (job.outcome === 'unknown') return note(`기관의 최종 판정을 확인하지 못했어요${verdict.reason ? ` (${esc(verdict.reason)})` : ''}. 서비스 이용 불가 시간대일 수 있으며, 0건이나 실패로 처리하지 않았어요.`);
-  if (job.outcome === 'rejected') return note(`기관이 실패로 판정했어요${verdict.reason ? ` (${esc(verdict.reason)})` : ''}.`);
+  if (job.outcome === 'unknown') return note(`기관의 최종 판정을 확인하지 못했어요${verdict.reason ? ` (${reasonText(verdict.reason)})` : ''}. 서비스 이용 불가 시간대일 수 있으며, 0건이나 실패로 처리하지 않았어요.`);
+  if (job.outcome === 'rejected') return note(`기관이 실패로 판정했어요${verdict.reason ? ` (${reasonText(verdict.reason)})` : ''}.`);
   if (job.outcome === 'not_started') return note(ui.message(job.local?.stopped) || '업무를 실행하지 않았어요.');
   if (job.outcome === 'partial_success') return note('일부만 성공했어요. 받은 부분만 표시하며 나머지는 확인이 필요해요.');
   return '';
@@ -435,7 +444,7 @@ function resultDialog(job) {
   const approval = job.result?.approval_number || job.result?.replacement_approval_number;
   const extra = transfer
     ? `<p class="success-copy">은행 실행 응답: ${esc(verdict.execution_result ? (verdict.execution_result.accepted === true ? '접수' : verdict.execution_result.accepted === false ? '거절' : '미확인') : '없음')}. 이체 확정은 결과 조회로 따로 확인해요.</p>`
-    : `<p class="success-copy">${approval ? `승인번호 ${esc(approval)}` : '승인번호를 받지 못했어요.'}${verdict.reason ? ` · ${esc(verdict.reason)}` : ''}</p>`;
+    : `<p class="success-copy">${approval ? `승인번호 ${esc(approval)}` : '승인번호를 받지 못했어요.'}${verdict.reason ? ` · ${reasonText(verdict.reason)}` : ''}</p>`;
   ui.showDialog(transfer ? '이체 결과' : '발급 결과', `<div class="success-symbol">${icon(job.outcome === 'success' ? 'check' : 'info')}</div><h3 class="success-title">${esc(label)}</h3>${extra}${job.outcome === 'unknown' || job.outcome === 'partial_success' ? `<p class="dialog-note">${transfer ? '같은 이체를 다시 보내지 말고 결과 조회로 확인하세요.' : '다시 발급하지 말고 계산서 목록이나 상세로 승인번호를 확인하세요.'}</p>` : ''}${ui.verification(job.verification)}<div class="dialog-actions">${transfer && job.attempt?.sent ? `<button class="button secondary" data-action="reconcile" data-job="${esc(job.id)}">이체 결과 조회</button>` : ''}<button class="button secondary" data-action="job-detail" data-job="${esc(job.id)}">작업 상세</button><button class="button primary" data-ui="close">확인</button></div>`);
   if (tone === 'danger' && job.local?.stopped) ui.toast(ui.message(job.local.stopped));
 }
@@ -523,19 +532,32 @@ async function historyView(ctx) {
   const value = (name, fallback) => esc(form[name] ?? fallback);
   const options = (name, rows) => rows.map(([v, l]) => `<option value="${v}" ${form[name] === v ? 'selected' : ''}>${l}</option>`).join('');
   return heading('거래 내역', '계좌별 입출금 내역을 조회해요. 최근·과거 구간과 다음 페이지도 자동으로 이어서 조회해요.') + setupNotice('hana-history') +
-    `<section class="panel"><form class="filter-bar" data-submit="history-query">${accountSelect(list, chosen.id)}<label class="field-inline">시작일<input type="date" name="start_date" value="${value('start_date', bankDate(6))}" required></label><label class="field-inline">종료일<input type="date" name="end_date" value="${value('end_date', bankDate())}" required></label>${ui.periodPresets([['1주', 6], ['1개월', 30], ['3개월', 90]])}<label class="field-inline">구분<select name="direction">${options('direction', [['all', '전체'], ['deposit', '입금'], ['withdrawal', '출금']])}</select></label><label class="field-inline">정렬<select name="order">${options('order', [['desc', '최신순'], ['asc', '과거순']])}</select></label><label class="field-inline">검색<input name="search" maxlength="25" value="${value('search', '')}"></label><button class="button primary" type="submit">${icon('refresh')}조회</button><button class="button secondary" type="button" data-action="account-login">다시 로그인</button></form>${panel('job-panel', job)}<div id="results">${job?.status === 'finished' ? historyRows(job) : '<div class="empty-state">계좌와 기간을 정해 조회하세요.</div>'}</div></section>`;
+    `<section class="panel"><form class="filter-bar" data-submit="history-query">${accountSelect(list, chosen.id)}<label class="field-inline">시작일<input type="date" name="start_date" value="${value('start_date', bankDate(6))}" required></label><label class="field-inline">종료일<input type="date" name="end_date" value="${value('end_date', bankDate())}" required></label>${ui.periodPresets([['1주', 6], ['1개월', 30], ['3개월', 90]])}<label class="field-inline">구분<select name="direction">${options('direction', [['all', '전체'], ['deposit', '입금'], ['withdrawal', '출금']])}</select></label><label class="field-inline">정렬<select name="order">${options('order', [['desc', '최신순'], ['asc', '과거순']])}</select></label><label class="field-inline">검색<input name="search" maxlength="25" value="${value('search', '')}"></label><button class="button primary" type="submit">${icon('refresh')}조회</button><button class="button secondary" type="button" data-action="account-login">${canQuery(login(chosen.login_id) || {}) ? '다시 로그인' : '로그인'}</button></form>${panel('job-panel', job)}<div id="results">${job?.status === 'finished' ? historyRows(job) : '<div class="empty-state">계좌와 기간을 정해 조회하세요.</div>'}</div></section>`;
+}
+
+// How the bank's list marks a row: the sign shown with its amount and the word for it.
+const DIRECTION = {increase: ['+', '입금'], decrease: ['-', '출금']};
+
+/* One ledger row for its detail. These keys are this project's own, so each has a plain name. */
+function historyDetail(r) {
+  const fields = [['거래일자', ui.dateText(r.date)], ['거래시각', ui.timeText(r.time)], ['구분', r.type], ['내용', r.name],
+    ['입출금', DIRECTION[r.variation]?.[1]], ['금액', r.amount], ['잔액', r.balance], ['통화', r.currency], ['거래 특이사항', r.extra], ['메모', r.memo]];
+  return Object.fromEntries(fields.filter(([, value]) => value !== null && value !== undefined && value !== ''));
 }
 
 /* One job holds every period and page it received. An unfinished range is said so, never shown as zero rows. */
 function historyRows(job) {
   const rows = job.result?.rows || [];
   rememberRows('history', rows, {job});
-  const mapped = rows.map(r => ({일자: r.date, 시각: r.time, 구분: r.type, 내용: r.name, 금액: r.amount, 잔액: r.balance, 메모: r.memo}));
+  // The bank's own list marks each row as a rise or a fall of the balance; the amount carries that sign.
+  const signed = r => typeof r.amount === 'number' && r.amount > 0 && DIRECTION[r.variation] ? DIRECTION[r.variation][0] + money(r.amount) : r.amount;
+  const mapped = rows.map(r => ({일자: ui.dateText(r.date), 시각: ui.timeText(r.time), 구분: r.type, 내용: r.name, 금액: signed(r), 잔액: r.balance, 메모: r.memo}));
   const complete = job.result?.pagination_complete === true;
   const received = job.result?.rows && ['success', 'partial_success'].includes(job.outcome);
   const stopped = job.outcome === 'partial_success' && job.local?.stopped ? note(ui.message(job.local.stopped)) : '';
   return outcomeNote(job) + stopped + (!job.result?.rows ? '' : !rows.length && !complete ? note('확인한 거래 내역이 아직 없어요. 조회가 완료된 것은 아니에요.')
-    : ui.rowsTable(mapped, {group: 'history', limit: rows.length, keys: ['일자', '시각', '구분', '내용', '금액', '잔액']})) +
+    : ui.rowsTable(mapped, {group: 'history', limit: rows.length, keys: ['일자', '시각', '구분', '내용', '금액', '잔액'], num: ['금액'],
+      mark: (row, key, index) => key === '금액' && rows[index]?.variation === 'increase' ? 'incoming' : ''})) +
     `<div class="list-footer">${rows.length}건 · ${complete ? '조회 완료' : '조회 범위 미완료'}</div><div class="section-actions">${received ? ui.button('내역 저장 (JSON·CSV)', `data-action="history-export" data-job="${esc(job.id)}"`, 'secondary', 'download') : ''}</div>`;
 }
 
@@ -551,9 +573,18 @@ async function transferView(ctx) {
     `<form class="panel form-panel transfer-form" data-submit="transfer-prepare"><div class="field"><label for="source-account">어느 계좌에서 보낼까요?</label><select id="source-account" name="target_id">${list.map(t => `<option value="${esc(t.id)}" ${t.id === draft.target_id ? 'selected' : ''}>${esc(t.display_name)} · ${esc(t.identity?.account_number)} (${esc(login(t.login_id)?.display_name)} · ${esc(login(t.login_id)?.readiness === 'ready' ? '세션 있음' : '새 이체 로그인 필요')})</option>`).join('')}</select><p class="field-help">새 로그인이 필요하면 확인을 누를 때 로그인 창이 먼저 열리고, 로그인하면 이어서 이체를 준비해요. <button class="link-button" type="button" data-action="account-login">지금 다시 로그인</button></p></div><div class="field"><label for="recipient-account">받는 계좌</label><div class="field-row"><select id="recipient-bank" name="bank" aria-label="받는 은행">${BANKS.map(([code, name]) => `<option value="${code}" ${code === draft.bank ? 'selected' : ''}>${name}</option>`).join('')}</select><input id="recipient-account" name="account" inputmode="numeric" autocomplete="off" required pattern="[0-9-]{8,30}" placeholder="숫자만 입력" value="${esc(draft.account || '')}"></div></div><div class="field"><label for="transfer-amount">얼마를 보낼까요?</label><div class="amount-input"><input id="transfer-amount" name="amount" inputmode="numeric" autocomplete="off" required pattern="[0-9,]+" value="${esc(draft.amount || '')}"><span>원</span></div><div class="amount-presets">${presets.map(v => `<button type="button" data-action="amount-add" data-add="${v}">+${money(v / 10000)}만</button>`).join('')}<button type="button" data-action="amount-clear">지우기</button></div></div><div class="form-actions"><button class="button primary" type="submit">이체 내용 확인 ${icon('arrow')}</button><p class="field-help">다음 단계에서 저장소 암호와 출금 계좌 비밀번호를 받아 은행의 확인 화면까지 준비해요. 이때는 이체하지 않아요. 내용을 확인한 뒤 한 번만 전송하고, 결과는 이체 내역으로 따로 대조해요.</p></div></form>${panel('job-panel', null)}`;
 }
 
+// Transfer-list fields this project reads by name, in the order a transfer is read.
+const INQUIRY_COLUMNS = [['trscDt', '거래일자', ui.dateText], ['trscTm', '거래시각', ui.timeText], ['rmteNm', '받는 분'], ['rcvBnkNm', '입금은행'],
+  ['rcvAcctNo', '입금계좌번호'], ['trscAmt', '거래금액'], ['trscStNm', '처리 상태']];
+
 function inquiryRows(job) {
-  rememberRows('inquiry', job.result?.rows, {job});
-  return outcomeNote(job) + ui.rowsTable(job.result?.rows, {group: 'inquiry'});
+  const rows = job.result?.rows;
+  rememberRows('inquiry', rows, {job});
+  const columns = INQUIRY_COLUMNS.filter(([key]) => (rows || []).some(r => r?.[key] !== undefined && r[key] !== null));
+  // Rows of another shape keep the generic table; every received field stays in the row detail.
+  if (columns.length < 3) return outcomeNote(job) + ui.rowsTable(rows, {group: 'inquiry'});
+  const mapped = rows.map(r => Object.fromEntries(columns.map(([key, name, format]) => [name, format ? format(r?.[key]) : r?.[key]])));
+  return outcomeNote(job) + ui.rowsTable(mapped, {group: 'inquiry', keys: columns.map(column => column[1]), num: ['거래금액']});
 }
 
 async function inquiryView(ctx) {
@@ -565,7 +596,7 @@ async function inquiryView(ctx) {
     onDone: done => { document.getElementById('results').innerHTML = inquiryRows(done); }}));
   const form = state.params?.form || {};
   return heading('이체 내역', '완료된 이체와 처리 결과를 확인하세요.') + setupNotice('hana-inquiry') +
-    `<section class="panel"><form class="filter-bar" data-submit="inquiry-query">${accountSelect(list, chosen.id)}<label class="field-inline">시작일<input type="date" name="start_date" value="${esc(form.start_date ?? bankDate(30))}" required></label><label class="field-inline">종료일<input type="date" name="end_date" value="${esc(form.end_date ?? bankDate())}" required></label>${ui.periodPresets([['1주', 6], ['1개월', 30], ['3개월', 90]])}<button class="button primary" type="submit">${icon('refresh')}조회</button><button class="button secondary" type="button" data-action="account-login">다시 로그인</button></form>${panel('job-panel', job)}<div id="results">${job?.status === 'finished' ? inquiryRows(job) : '<div class="empty-state">계좌와 기간을 정해 조회하세요.</div>'}</div><div class="list-footer">행을 누르면 이체 상세를 조회해요.</div></section>`;
+    `<section class="panel"><form class="filter-bar" data-submit="inquiry-query">${accountSelect(list, chosen.id)}<label class="field-inline">시작일<input type="date" name="start_date" value="${esc(form.start_date ?? bankDate(30))}" required></label><label class="field-inline">종료일<input type="date" name="end_date" value="${esc(form.end_date ?? bankDate())}" required></label>${ui.periodPresets([['1주', 6], ['1개월', 30], ['3개월', 90]])}<button class="button primary" type="submit">${icon('refresh')}조회</button><button class="button secondary" type="button" data-action="account-login">${canQuery(login(chosen.login_id) || {}) ? '다시 로그인' : '로그인'}</button></form>${panel('job-panel', job)}<div id="results">${job?.status === 'finished' ? inquiryRows(job) : '<div class="empty-state">계좌와 기간을 정해 조회하세요.</div>'}</div><div class="list-footer">행을 누르면 이체 상세를 조회해요.</div></section>`;
 }
 
 async function securityView(ctx) {
@@ -573,7 +604,7 @@ async function securityView(ctx) {
   if (!logins.length) return heading('보안매체·한도', '등록된 보안매체와 한도 상태를 조회하세요.') + setupNotice('hana-security') + empty('연결된 하나은행 로그인이 없어요.', '<button class="button primary" data-view="settings">연결·인증서</button>');
   const kinds = [['limits', '이체한도'], ['limit-exception', '한도 예외'], ['security-media', '보안매체'], ['otp', 'OTP'], ['otp-accident', 'OTP 사고'], ['mobile-otp', '모바일 OTP']];
   return heading('보안매체·한도', '상태를 조회만 해요. OTP 발급이나 한도 변경은 제공하지 않아요.') + setupNotice('hana-security') +
-    `<section class="panel"><form class="filter-bar" data-submit="security-query"><label class="field-inline">로그인<select name="login_id">${logins.map(l => `<option value="${esc(l.id)}">${esc(l.display_name)}</option>`).join('')}</select></label><label class="field-inline">조회 항목<select name="kind">${kinds.map(([k, l]) => `<option value="${k}">${l}</option>`).join('')}</select></label><button class="button primary" type="submit">${icon('refresh')}조회</button><button class="button secondary" type="button" data-action="security-login">다시 로그인</button></form>${panel('job-panel', null)}<div id="results"></div></section>`;
+    `<section class="panel"><form class="filter-bar" data-submit="security-query"><label class="field-inline">로그인<select name="login_id">${logins.map(l => `<option value="${esc(l.id)}">${esc(l.display_name)}</option>`).join('')}</select></label><label class="field-inline">조회 항목<select name="kind">${kinds.map(([k, l]) => `<option value="${k}">${l}</option>`).join('')}</select></label><button class="button primary" type="submit">${icon('refresh')}조회</button><button class="button secondary" type="button" data-action="security-login">${logins.some(canQuery) ? '다시 로그인' : '로그인'}</button></form>${panel('job-panel', null)}<div id="results"><div class="empty-state">로그인과 조회 항목을 고르고 조회하세요.</div></div></section>`;
 }
 
 // Giro -----------------------------------------------------------------------
@@ -612,14 +643,42 @@ function giroPlan(result) {
 
 // Common -----------------------------------------------------------------------
 
-async function activityView(ctx) {
-  const scope = state.params.scope || (profile() ? 'profile' : 'all');
-  const query = scope === 'profile' && profile() ? '?profile_id=' + encodeURIComponent(profile().id) : '';
-  const extensions = Boolean(state.params.extensions);
-  const listing = await api.get('/jobs' + query + (query ? '&' : '?') + 'limit=200' + (extensions ? '' : '&hide=session_extend'));
+const ACTIVITY_PAGE = 50;
+const ACTIVITY_AREAS = [['', '모든 영역'], ['banking', '하나개인뱅킹'], ['corporate', '하나기업뱅킹'], ['giro', '지로'], ['tax', '세금']];
+const ACTIVITY_ORIGINS = [['', '모든 요청'], ['web', '웹'], ['cli', 'CLI'], ['agent', '에이전트']];
+
+/* One page of the history under the screen's filters; `before` continues below the last row shown. */
+function activityQuery(before = null) {
+  const params = state.params || {};
+  const query = new URLSearchParams({limit: String(ACTIVITY_PAGE)});
+  if ((params.scope || 'profile') === 'profile' && profile()) query.set('profile_id', profile().id);
+  if (!params.extensions) query.set('hide', 'session_extend');
+  for (const name of ['area', 'origin']) if (params[name]) query.set(name, params[name]);
+  if (before) query.set('before', before);
+  return '/jobs?' + query;
+}
+
+function activityRows(jobs) {
   const areaIcon = {banking: 'accounts', corporate: 'business', tax: 'tax', giro: 'bill'};
+  return jobs.map(job => `<li class="operation-row"><span class="workspace-icon">${icon(areaIcon[job.area] || 'activity')}</span><div class="operation-body"><h3>${esc(job.title)}</h3><p>${esc([job.fixed?.target?.display_name, job.fixed?.login?.display_name, ui.ORIGIN[job.origin]].filter(Boolean).join(' · '))} · ${ui.time(job.created_at)}${job.command ? ' · ' + esc(job.command.join(' ')) : ''}</p></div>${ui.statusTags(job)}<button class="text-button" data-action="job-detail" data-job="${esc(job.id)}">상세 ${icon('arrow')}</button></li>`).join('');
+}
+
+/* A full page may have older rows behind it; a short one is the end of the history, which is
+   said once the user has asked for more. */
+function activityMore(jobs, asked = false) {
+  if (jobs.length === ACTIVITY_PAGE) return ui.button('이전 기록 더 보기', `data-action="activity-more" data-before="${esc(jobs.at(-1).created_at)}"`);
+  return asked ? '<span class="muted-block">더 이전 기록은 없어요.</span>' : '';
+}
+
+async function activityView(ctx) {
+  const params = state.params || {};
+  const scope = params.scope || (profile() ? 'profile' : 'all');
+  const extensions = Boolean(params.extensions);
+  const listing = await api.get(activityQuery());
+  const choice = (name, label, rows) => `<div class="field"><label for="activity-${name}">${label}</label><select id="activity-${name}" name="${name}" data-change="activity-filter">${rows.map(([v, l]) => `<option value="${v}" ${(params[name] || '') === v ? 'selected' : ''}>${l}</option>`).join('')}</select></div>`;
+  const filtered = Boolean(params.area || params.origin);
   return heading('전체 작업 기록', '웹·CLI·에이전트의 작업과 결과를 함께 확인하세요.', profile() ? `<div class="segmented">${[['profile', '현재 프로필'], ['all', '전체']].map(([k, l]) => `<button data-action="activity-scope" data-scope="${k}" class="${scope === k ? 'active' : ''}" aria-pressed="${scope === k}">${l}</button>`).join('')}</div>` : '') +
-    `<section class="panel">${listing.jobs.length ? `<ul class="operation-list">${listing.jobs.map(job => `<li class="operation-row"><span class="workspace-icon">${icon(areaIcon[job.area] || 'activity')}</span><div class="operation-body"><h3>${esc(job.title)}</h3><p>${esc([job.fixed?.target?.display_name, job.fixed?.login?.display_name, ui.ORIGIN[job.origin]].filter(Boolean).join(' · '))} · ${ui.time(job.created_at)}${job.command ? ' · ' + esc(job.command.join(' ')) : ''}</p></div>${ui.statusTags(job)}<button class="text-button" data-action="job-detail" data-job="${esc(job.id)}">상세 ${icon('arrow')}</button></li>`).join('')}</ul>` : '<div class="empty-state">작업 기록이 없어요.</div>'}<div class="list-footer">${extensions ? '로그인 연장 기록을 포함해 보여줘요.' : '로그인 연장 기록은 숨겼어요.'} <button type="button" class="link-button" data-action="activity-extensions">${extensions ? '숨기기' : '포함해 보기'}</button></div></section>`;
+    `<section class="panel"><div class="filter-bar">${choice('area', '영역', ACTIVITY_AREAS)}${choice('origin', '요청한 곳', ACTIVITY_ORIGINS)}</div><div id="activity-results">${listing.jobs.length ? `<ul class="operation-list" id="activity-list">${activityRows(listing.jobs)}</ul>${activityMore(listing.jobs) ? `<div class="section-actions" id="activity-more">${activityMore(listing.jobs)}</div>` : ''}` : `<div class="empty-state">${filtered ? '조건에 맞는 작업 기록이 없어요.' : '작업 기록이 없어요.'}</div>`}</div><div class="list-footer">${extensions ? '로그인 연장 기록을 포함해 보여줘요.' : '로그인 연장 기록은 숨겼어요.'} <button type="button" class="link-button" data-action="activity-extensions">${extensions ? '숨기기' : '포함해 보기'}</button> · CLI 실행 기록은 명령어와 종료코드만 남겨요. 실제 전송 여부나 기관 판정은 담지 않아요.</div></section>`;
 }
 
 /* Connections screen. One card per institution login; its verified targets sit
@@ -886,7 +945,9 @@ export const actions = {
     }
     if (group === 'history') buttons = ui.button('거래 상세 조회', `data-action="history-detail" data-index="${Number(index)}"`);
     if (group === 'inquiry') buttons = ui.button('이체 상세 조회', `data-action="inquiry-detail" data-index="${Number(index)}"`);
-    ui.showDialog('상세', `${ui.detailFields(item)}<p class="dialog-note">이름을 확인한 항목은 한글로, 나머지는 기관 응답의 필드명 그대로 보여줘요. 식별번호류는 가려서 표시해요.</p><div class="dialog-actions">${buttons}<button class="button ${buttons ? 'secondary' : 'primary'}" data-ui="close">닫기</button></div>`);
+    const fields = group === 'history' ? ui.fieldsList(historyDetail(item))
+      : ui.detailFields(item) + '<p class="dialog-note">이름을 확인한 항목은 한글로, 나머지는 기관 응답의 필드명 그대로 보여줘요. 식별번호류는 가려서 표시해요.</p>';
+    ui.showDialog(group === 'history' ? '거래 내역' : '상세', `${fields}<div class="dialog-actions">${buttons}<button class="button ${buttons ? 'secondary' : 'primary'}" data-ui="close">닫기</button></div>`);
   },
   'return-forms': (ctx, button) => { ui.closeDialog(); return runTax(ctx, 'hometax.returns.forms', {return_id: button.dataset.return, query_source: button.dataset.source}, 'forms', job => outcomeNote(job) + ui.rowsTable(job.result?.items || [], {group: 'forms'})); },
   'return-receipt': (ctx, button) => { ui.closeDialog(); return runTax(ctx, 'hometax.returns.receipt', {return_id: button.dataset.return, query_source: button.dataset.source}, 'reports', reportResult); },
@@ -1100,8 +1161,20 @@ export const actions = {
   },
   'giro-readiness': ctx => ctx.run('giro.readiness', {}, {panel: 'job-panel', key: key('giro.readiness'), onDone: job => { document.getElementById('results').innerHTML = job.result ? giroPlan(job.result) : outcomeNote(job); }}),
   // Common
-  'activity-scope': (ctx, button) => changeView('activity', {scope: button.dataset.scope, extensions: state.params.extensions}),
-  'activity-extensions': () => changeView('activity', {scope: state.params.scope, extensions: !state.params.extensions}),
+  'activity-scope': (ctx, button) => changeView('activity', {...state.params, scope: button.dataset.scope}),
+  'activity-extensions': () => changeView('activity', {...state.params, extensions: !state.params.extensions}),
+  'activity-filter': (ctx, select) => {
+    const chosen = Object.fromEntries([...select.closest('.filter-bar').querySelectorAll('select')].map(s => [s.name, s.value]));
+    changeView('activity', {...state.params, ...chosen});
+  },
+  // Older rows are added under the ones already shown; the filters stay as they are.
+  'activity-more': async (ctx, button) => {
+    const listing = await api.get(activityQuery(button.dataset.before));
+    if (ctx.current?.() === false) return;
+    document.querySelector('#activity-list')?.insertAdjacentHTML('beforeend', activityRows(listing.jobs));
+    const more = document.querySelector('#activity-more');
+    if (more) more.innerHTML = activityMore(listing.jobs, true);
+  },
   'auto-extend-toggle': async () => {
     setAutoExtend(!state.autoExtend);
     ui.toast(state.autoExtend ? '자동 로그인 연장을 켰어요. 이 브라우저에서 앱을 열어 둔 동안 만료 전에 연장해요.'
@@ -1264,7 +1337,7 @@ export const actions = {
     const value = await api.get(`/logins/${encodeURIComponent(button.dataset.login)}/sessions`);
     const labels = {usable: '사용 가능', consumed: '사용함·대체됨', expired: '만료', stale: '재확인 필요'};
     const lapsed = bankSessionExpired(login(button.dataset.login));
-    ui.showDialog('세션 기록', `<p class="dialog-note">저장된 성공 기록만으로 현재 유효성을 보장하지 않아요. 마지막 확인 시각을 함께 보세요.</p><div class="settings-body">${value.sessions.map(s => `<div class="setting-row"><span>${ui.time(s.created_at)}${s.id === value.current_session_id ? ' · 현재' : ''}<span class="meta">확인 ${ui.time(s.checked_at)}${s.note ? ' · ' + esc(s.note) : ''}</span></span>${lapsed && s.id === value.current_session_id ? tag('로그아웃됨 · 10분 경과', 'warning') : tag(labels[s.state] || s.state, s.state === 'usable' ? '' : 'neutral')}</div>`).join('') || '<p class="field-help">세션이 없어요.</p>'}</div><div class="dialog-actions"><button class="button primary" data-ui="close">닫기</button></div>`);
+    ui.showDialog('세션 기록', `<p class="dialog-note">저장된 성공 기록만으로 현재 유효성을 보장하지 않아요. 마지막 확인 시각을 함께 보세요.</p><div class="settings-body">${value.sessions.map(s => `<div class="setting-row"><span>${ui.time(s.created_at)}${s.id === value.current_session_id ? ' · 현재' : ''}<span class="meta">확인 ${ui.time(s.checked_at)}${s.note ? ' · ' + esc(s.note) : ''}</span></span>${lapsed && s.id === value.current_session_id ? tag(`로그아웃됨 · ${ui.idleLimit(login(button.dataset.login))} 넘게 요청 없음`, 'warning') : tag(labels[s.state] || s.state, s.state === 'usable' ? '' : 'neutral')}</div>`).join('') || '<p class="field-help">세션이 없어요.</p>'}</div><div class="dialog-actions"><button class="button primary" data-ui="close">닫기</button></div>`);
   },
   'rename-credential': (ctx, button) => {
     const {kind, ref} = button.dataset;

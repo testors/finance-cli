@@ -406,7 +406,8 @@ export function changeView(view, params = {}, {push = true} = {}) {
   state.params = params;
   ui.closeDialog();
   busy.during('화면을 불러오고 있어요', render(), {quiet: true}).then(() => {
-    document.querySelector('.main-shell').scrollTo({top: 0});
+    // A wide screen scrolls the page itself; a narrow one scrolls the shell.
+    for (const box of [document.scrollingElement, document.querySelector('.main-shell')]) box?.scrollTo?.({top: 0});
     main().focus({preventScroll: true});
   });
 }
@@ -429,9 +430,12 @@ export function secretFields(fields, store) {
   return fields.filter(([name]) => !(name === 'vault_passphrase' && store && state.vaults[store]));
 }
 
-export function rememberField(fields, store) {
+/* Remembering opens the store for every later job, transfers included, so a login, query or
+   transfer dialog leaves it to the user. The issuance wizard asks for the passphrase at each of
+   its steps and offers it already chosen (`chosen`). */
+export function rememberField(fields, store, {chosen = false} = {}) {
   return store && fields.some(([name]) => name === 'vault_passphrase')
-    ? `<label class="check"><input type="checkbox" name="remember_vault" checked> 서버를 끌 때까지 이 저장소 암호 기억 (서버 메모리에만, 이체 포함)</label>` : '';
+    ? `<label class="check"><input type="checkbox" name="remember_vault"${chosen ? ' checked' : ''}> 서버를 끌 때까지 이 저장소 암호 기억 (서버 메모리에만, 이체 포함)</label>` : '';
 }
 
 /* Unlock in server memory when asked; the passphrase is then not sent with the job. */
@@ -717,6 +721,21 @@ document.querySelector('#detail-dialog').addEventListener('click', event => {
     if (event.clientX < rect.left || event.clientX > rect.right || event.clientY < rect.top || event.clientY > rect.bottom) ui.closeDialog();
   }
 });
+
+/* A table that does not fit its panel is drawn as labelled rows instead of being cut off at the
+   edge: always on a narrow screen and, on a wider one, whenever its columns overflow. A table is
+   measured once as it arrives, before it is painted, and again when the window changes size. */
+function fitTables(again = false) {
+  const narrow = (document.querySelector('#stage')?.clientWidth || 0) <= 700;
+  for (const wrap of document.querySelectorAll(again ? '.table-wrap' : '.table-wrap:not([data-fit])')) {
+    wrap.dataset.fit = '1';
+    wrap.classList.remove('stacked');
+    if (narrow || wrap.scrollWidth > wrap.clientWidth + 1) wrap.classList.add('stacked');
+  }
+}
+const arriving = new MutationObserver(() => fitTables());
+for (const box of [main(), document.querySelector('#dialog-content')]) if (box) arriving.observe(box, {childList: true, subtree: true});
+window.addEventListener('resize', () => fitTables(true));
 
 export {api, submit, follow, TERMINAL, ApiError};
 boot();

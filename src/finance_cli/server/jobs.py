@@ -343,13 +343,33 @@ def public(con, job, *, listing=False):
     return value
 
 
-def listing(con, *, profile_id=None, area=None, limit=100, before=None, hide_extensions=False):
+def listing(con, *, profile_id=None, area=None, limit=100, before=None, hide_extensions=False,
+            name=None, login_id=None, target_id=None, origin=None):
+    """Jobs, newest first. Every filter applies before the limit, so the rows a screen asks for are
+    never pushed out of its listing by unrelated jobs or by CLI records."""
     query, args = 'SELECT * FROM jobs', []
     clauses = []
     if hide_extensions:
         # Login extensions can run every few minutes. Left out before the limit applies, they
         # cannot push other results out of the listing. Every such job is named *.session.extend.
         clauses.append("name NOT LIKE '%.session.extend'")
+    if area:
+        # An area is the set of its registered job names; CLI records belong to none.
+        names = [n for n in registry.names() if registry.get(n).area == area]
+        if not names:
+            return []
+        clauses.append(f"name IN ({','.join('?' * len(names))})")
+        args += names
+    for column, value in (('name', name), ('login_id', login_id), ('target_id', target_id)):
+        if value:
+            clauses.append(column + '=?')
+            args.append(value)
+    if origin:
+        if origin not in ORIGINS:
+            return []
+        # A stored origin is its kind alone or the kind followed by ":" and a device.
+        clauses.append("(origin=? OR substr(origin, 1, ?)=?)")
+        args += [origin, len(origin) + 1, origin + ':']
     if profile_id:
         clauses.append('(profile_id=? OR target_id IN (SELECT target_id FROM profile_targets WHERE profile_id=?))')
         args += [profile_id, profile_id]
@@ -359,8 +379,7 @@ def listing(con, *, profile_id=None, area=None, limit=100, before=None, hide_ext
     if clauses:
         query += ' WHERE ' + ' AND '.join(clauses)
     rows = con.execute(query + ' ORDER BY created_at DESC LIMIT ?', (*args, min(max(int(limit), 1), 500))).fetchall()
-    values = [public(con, dict(r), listing=True) for r in rows]
-    return [v for v in values if area is None or v['area'] == area]
+    return [public(con, dict(r), listing=True) for r in rows]
 
 
 def validate_outcome(value):

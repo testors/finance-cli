@@ -223,3 +223,14 @@ test('separate incoming and outgoing fields retain zero without hiding the withd
   assert.match(html, /입금액/); assert.match(html, /출금액/);
   assert.match(html, /123,456.789/); assert.match(html, /100.123/);
 });
+
+test('screens ask for each result by job name with its login or account, so other jobs cannot hide it', async t => {
+  const a = await setup(t); account(a);
+  await a.corporateViews['corporate-accounts'](a.ctx);
+  await a.corporateViews['corporate-history'](a.ctx);
+  await a.corporateViews['corporate-transfer'](a.ctx);
+  // Filtered on the server before its limit, not picked out of the newest jobs of every kind.
+  assert.deepEqual(a.requests.filter(r => r.path.startsWith('/jobs?')).map(r => r.path), [
+    '/jobs?name=hana.corporate.accounts&login_id=corporate&limit=1', '/jobs?name=hana.corporate.history&target_id=account&limit=1',
+    '/jobs?name=hana.corporate.transfer.prepare&limit=20']);
+});

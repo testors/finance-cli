@@ -30,7 +30,7 @@ const field = (name, label, attrs = '') => `<div class="field"><label for="cert-
 const password = () => field('vault_passphrase', '저장소 암호', 'type="password"');
 function vaultFields(name = null) {
   const fields = secretFields([['vault_passphrase', '저장소 암호']], name);
-  return fields.length ? password() + rememberField(fields, name || 'new')
+  return fields.length ? password() + rememberField(fields, name || 'new', {chosen: true})
     : '<p class="field-help">서버 메모리에 기억한 저장소 암호를 사용해요. 연결·인증서 화면의 잠그기로 암호를 지울 수 있어요.</p>';
 }
 const nameField = () => field('name', '보관할 이름', 'maxlength="64" pattern="[A-Za-z0-9][A-Za-z0-9_.-]{0,63}" placeholder="예: personal"');

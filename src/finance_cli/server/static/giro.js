@@ -21,9 +21,15 @@ const start = (title, description) => heading(title, description,
 const loginFirst = text => `<div class="empty-state">${text}<div class="section-actions">${button('지로 로그인', 'data-action="giro-login"', 'primary')}</div></div>`;
 const close = (kind = 'primary') => `<div class="dialog-actions">${button('닫기', 'data-ui="close"', kind)}</div>`;
 
-async function listing() { return (await api.get('/jobs?area=giro&limit=200&hide=session_extend')).jobs; }
-async function latest(name, row, rows, tax = null) {
-  const item = rows.find(j => j.name === name && j.login_id === row?.id && (!tax || j.input?.tax_type === tax));
+/* The jobs of one name for this login, newest first. The server filters before it limits, so a
+   result is found however many other jobs came after it. */
+async function listing(name, row, limit = 1) {
+  const rows = (await api.get('/jobs?' + new URLSearchParams({name, login_id: row.id, limit: String(limit)}))).jobs;
+  return rows.filter(j => j.name === name && j.login_id === row.id);
+}
+/* `tax` narrows by the stored input, so it reads the recent bill queries instead of only the newest. */
+async function latest(name, row, tax = null) {
+  const item = (await listing(name, row, tax ? 50 : 1)).find(j => !tax || j.input?.tax_type === tax);
   return item ? api.get('/jobs/' + encodeURIComponent(item.id)) : null;
 }
 
@@ -69,12 +75,12 @@ function billsResult(job, live) {
   if (!Array.isArray(rows)) return before + note('고지 목록을 확인하지 못했어요.');
   const shown = rows.filter(Boolean);
   if (!shown.length) return before + note(job.result.complete ? '조회된 고지가 없어요.' : '표시할 고지 항목을 받지 못했어요.');
-  return before + `<div class="table-wrap"><table class="table data"><thead><tr><th>세목</th><th>청구기관</th><th class="num">납부금액</th><th>납부기한</th><th>전자납부번호</th><th></th></tr></thead><tbody>${shown.map(r => `<tr><td data-label="세목">${esc(r.tax_name || taxName(r.tax_type))}</td><td data-label="청구기관">${esc(r.issuer || '확인 안 됨')}</td><td class="num" data-label="납부금액">${esc(money(r.amount_raw?.replaceAll(',', '') ?? r.amount))}</td><td data-label="납부기한">${esc(r.due_date || r.due_date_raw || '확인 안 됨')}</td><td data-label="전자납부번호">${esc(r.electronic_number)}</td><td>${button('납부하기', `data-action="giro-payment-options" data-job="${esc(job.id)}" data-ref="${esc(r.ref)}"`)}</td></tr>`).join('')}</tbody></table></div><div class="list-footer">표시 ${shown.length}건 · ${job.result.complete ? '마지막 페이지까지 확인' : '조회 범위 미완료'} · 납부하기를 누르면 출금 계좌를 고르고 내용을 확인한 뒤 납부해요.</div>`;
+  return before + `<div class="table-wrap"><table class="table data"><thead><tr><th>세목</th><th>청구기관</th><th class="num">납부금액</th><th>납부기한</th><th>전자납부번호</th><th></th></tr></thead><tbody>${shown.map(r => `<tr><td data-label="세목">${esc(r.tax_name || taxName(r.tax_type))}</td><td data-label="청구기관">${esc(r.issuer || '확인 안 됨')}</td><td class="num" data-label="납부금액">${esc(money(r.amount_raw?.replaceAll(',', '') ?? r.amount))}</td><td data-label="납부기한">${esc(r.due_date || r.due_date_raw || '확인 안 됨')}</td><td data-label="전자납부번호">${esc(r.electronic_number)}</td><td>${live ? button('납부하기', `data-action="giro-payment-options" data-job="${esc(job.id)}" data-ref="${esc(r.ref)}"`) : ''}</td></tr>`).join('')}</tbody></table></div><div class="list-footer">표시 ${shown.length}건 · ${job.result.complete ? '마지막 페이지까지 확인' : '조회 범위 미완료'} · ${live ? '납부하기를 누르면 출금 계좌를 고르고 내용을 확인한 뒤 납부해요.' : '로그인하면 이 목록에서 납부할 수 있어요.'}</div>`;
 }
 
 async function billsView(ctx) {
   const row = connection(), tax = state.params.tax_type || 'national';
-  const job = row ? await latest('giro.bills.list', row, await listing(), tax) : null;
+  const job = row ? await latest('giro.bills.list', row, tax) : null;
   return start('고지·납부', '고지 금액과 납부기한을 확인하고 등록된 계좌로 납부해요.') +
     `<section class="panel"><form class="filter-bar" data-submit="giro-query"><div class="field"><label for="giro-tax">세금 종류</label><select id="giro-tax" name="tax_type">${options(TAXES, tax)}</select></div>${ready(row) ? '<button class="button primary" type="submit">고지 조회</button>' : ''}</form>${panel()}<div id="giro-results">${row ? billsResult(job, ready(row)) : loginFirst('지로에 로그인하면 고지를 조회하고 납부할 수 있어요.')}</div></section>`;
 }
@@ -94,26 +100,37 @@ async function paymentDialog(ctx, job) {
     return;
   }
   const awaiting = job.awaiting, fields = [ACCOUNT, ...(awaiting.requires.includes('pin') ? [PIN] : [])];
-  ui.showDialog('납부 내용 확인', preview(awaiting.preview) + `<form data-submit="giro-payment-confirm" data-job="${esc(job.id)}" data-digest="${esc(awaiting.digest)}" autocomplete="off">${fields.map(([name, label, pattern]) => `<div class="field"><label for="giro-${name}">${esc(label)}</label><input id="giro-${name}" name="${name}" type="password" required inputmode="numeric" pattern="${pattern}" autocomplete="off"></div>`).join('')}${awaiting.requires.includes('pin') ? note('추가 인증에는 로그인할 때 사용한 지로 간편비밀번호 6자리를 입력해요.') : ''}<p class="dialog-note">확인한 세금 1건을 위 계좌에서 즉시 납부해요.</p><div class="dialog-actions">${button('나중에', 'data-ui="close"')}${button('납부 준비 취소', `data-action="giro-payment-cancel" data-job="${esc(job.id)}"`)}<button class="button primary" type="submit">확인하고 납부</button></div></form>`);
+  // The same warnings as a bank transfer: it cannot be taken back, and the preparation lapses.
+  const expires = awaiting.expires_at ? `<p class="dialog-note">확인 기한: <span class="countdown" data-deadline="${esc(awaiting.expires_at)}"></span> 남음. 기한이 지나면 고지를 다시 조회해 납부 내용을 확인해요.</p>` : '';
+  ui.showDialog('납부 내용 확인', `<p class="pill-row">${ui.verification(job.verification)}${ui.tag('되돌릴 수 없음', 'danger')}</p>` + preview(awaiting.preview) + expires + `<form data-submit="giro-payment-confirm" data-job="${esc(job.id)}" data-digest="${esc(awaiting.digest)}" autocomplete="off">${fields.map(([name, label, pattern]) => `<div class="field"><label for="giro-${name}">${esc(label)}</label><input id="giro-${name}" name="${name}" type="password" required inputmode="numeric" pattern="${pattern}" autocomplete="off"></div>`).join('')}${awaiting.requires.includes('pin') ? note('추가 인증에는 로그인할 때 사용한 지로 간편비밀번호 6자리를 입력해요.') : ''}<p class="dialog-note">확인한 세금 1건을 위 계좌에서 즉시 납부해요.</p><div class="dialog-actions">${button('나중에', 'data-ui="close"')}${button('납부 준비 취소', `data-action="giro-payment-cancel" data-job="${esc(job.id)}"`)}<button class="button primary" type="submit">확인하고 납부</button></div></form>`);
+  // Time left to confirm; the clock stops with the dialog.
+  const tick = () => {
+    const clock = document.querySelector('#detail-dialog .countdown');
+    if (!clock) return clearInterval(timer);
+    const left = Math.max(0, Math.round(Number(clock.dataset.deadline) - Date.now() / 1000));
+    clock.textContent = `${Math.floor(left / 60)}분 ${String(left % 60).padStart(2, '0')}초`;
+    if (!left) clearInterval(timer);
+  };
+  const timer = setInterval(tick, 500);
+  tick();
 }
 
 /* Payments prepared on the web: continue one that waits for confirmation, or reopen a result. */
-function paymentJobs(rows, row) {
-  const jobs = rows.filter(j => j.name === 'giro.payment.prepare' && j.login_id === row.id);
+function paymentJobs(jobs) {
   if (!jobs.length) return '';
   return `<section class="panel"><div class="panel-heading"><div><h2>웹에서 진행한 납부</h2><p class="meta">확인을 기다리는 납부를 이어가거나 결과를 다시 볼 수 있어요.</p></div></div><div class="settings-body">${jobs.map(j => `<div class="setting-row"><span>${ui.time(j.created_at)} ${ui.statusTags(j)}</span>${button(j.status === 'awaiting_input' ? '내용 확인·납부' : '결과 보기', `data-action="giro-payment-open" data-job="${esc(j.id)}"`)}</div>`).join('')}</div></section>`;
 }
 
 async function accountsView() {
-  const row = connection(), job = row ? await latest('giro.accounts.list', row, await listing()) : null;
+  const row = connection(), job = row ? await latest('giro.accounts.list', row) : null;
   const rows = job?.result?.accounts;
   return start('등록계좌', '모바일지로에 등록된 납부 계좌와 별칭이에요.') +
     `<section class="panel"><div class="panel-heading"><h2>등록된 계좌</h2>${ready(row) ? button('계좌 조회', 'data-action="giro-accounts-query"', 'primary', 'refresh') : ''}</div>${panel()}<div id="giro-results">${!row ? loginFirst('지로에 로그인하면 등록계좌를 조회할 수 있어요.') : (job ? jobState(job) + notices(job) : '') + (Array.isArray(rows) ? ui.rowsTable(rows.filter(Boolean).map(r => ({별칭: r.name, 은행: r.bank_name, 계좌번호: r.account_masked, 상태: r.account_status})), {group: 'giro-accounts', keys: ['별칭', '은행', '계좌번호', '상태']}) : '<div class="empty-state">아직 확인한 계좌 목록이 없어요. 납부할 때는 해당 고지에서 쓸 수 있는 계좌를 따로 조회해요.</div>')}</div></section>`;
 }
 
 async function receiptsView() {
-  const row = connection(), jobs = row ? await listing() : [];
-  const job = row ? await latest('giro.receipts.list', row, jobs) : null;
+  const row = connection();
+  const [job, payments] = row ? await Promise.all([latest('giro.receipts.list', row), listing('giro.payment.prepare', row, 20)]) : [null, []];
   const input = job?.input || {};
   const receipts = job?.result?.receipts;
   // The shown page keeps its own period, so paging never mixes it with an edited form.
@@ -124,7 +141,7 @@ async function receiptsView() {
     : job ? `<div class="empty-state">${job.outcome === 'success' && page === 1 ? '기관 응답에 납부내역 목록이 없어요. 조회 기간을 확인해 주세요.' : '납부내역 목록을 확인하지 못했어요.'}</div>` : `<div class="empty-state">${ready(row) ? '기간을 정해 납부내역을 조회하세요.' : '아직 조회한 납부내역이 없어요.'}</div>`;
   return start('납부내역', '기간별 납부내역과 상세 내용을 조회해요.') +
     `<section class="panel"><form class="filter-bar" data-submit="giro-receipts-query">${[['start_date', '시작일', ui.kstDate(30)], ['end_date', '종료일', ui.kstDate()]].map(([name, label, fallback]) => `<div class="field"><label for="giro-${name}">${label}</label><input id="giro-${name}" name="${name}" type="date" required value="${esc(input[name] || fallback)}"></div>`).join('')}${ui.periodPresets([['1개월', 30], ['3개월', 90], ['6개월', 180]])}<input type="hidden" name="page" value="1">${ready(row) ? '<button type="submit" class="button primary">조회</button>' : ''}</form>${panel()}<div id="giro-results">${!row ? loginFirst('지로에 로그인하면 납부내역을 조회할 수 있어요.') : (job ? jobState(job) + notices(job) : '') + list}</div></section>` +
-    (row ? paymentJobs(jobs, row) : '');
+    paymentJobs(payments);
 }
 
 // 'giro-pay' used to be its own menu; payments in progress now sit under the receipts screen.

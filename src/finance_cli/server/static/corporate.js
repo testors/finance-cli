@@ -41,10 +41,13 @@ function notices(job) {
   return messages.map(v => note(esc(v))).join('');
 }
 
-async function latest(name, id, listing) {
+/* The latest job of a name for a login (`by` 'login_id') or an account ('target_id'). The server
+   filters before it limits, so it is found however many other jobs came after it. */
+async function latest(name, id, by) {
   const cached = state.cache.get(cacheKey(name, id));
   if (cached) return cached;
-  const row = listing.jobs.find(j => j.name === PREFIX + name && (j.login_id === id || j.target_id === id));
+  const listing = await api.get('/jobs?' + new URLSearchParams({name: PREFIX + name, [by]: id, limit: '1'}));
+  const row = listing.jobs.find(j => j.name === PREFIX + name && j[by] === id);
   if (!row) return null;
   const job = await api.get('/jobs/' + encodeURIComponent(row.id));
   state.cache.set(cacheKey(name, id), job);
@@ -84,9 +87,8 @@ async function accountsView(ctx) {
   const intro = heading('기업 계좌', '계좌를 누르면 거래내역으로 이동해요.',
     logins.length ? button('다른 ID·인증서로 로그인', 'data-action="corporate-login-add"') : '');
   if (!logins.length) return intro + `<section class="panel"><div class="empty-state">${profile() ? '이 프로필에 기업 계좌가 없어요. 전체에서 로그인하고 조회한 계좌를 선택하세요.' : 'ID/PW 또는 보관한 인증서로 바로 로그인하세요.'}<div class="section-actions">${button('기업뱅킹 로그인', 'data-action="corporate-login-add"', 'primary')}</div></div></section>`;
-  const listing = await api.get('/jobs?limit=200&area=corporate&hide=session_extend');
   const panels = await Promise.all(logins.map(async row => {
-    const job = await latest('accounts', row.id, listing);
+    const job = await latest('accounts', row.id, 'login_id');
     const allowed = new Set(accounts().map(t => t.id));
     const mapping = job?.result?.candidate_targets || {};
     const rows = (job?.result?.accounts || []).filter(a => !profile() || allowed.has(mapping[a.ref]));
@@ -121,7 +123,7 @@ async function historyView() {
   const rows = accounts();
   if (!rows.length) return heading('기업 거래내역', '계좌별 거래내역을 조회해요.') + `<section class="panel"><div class="empty-state">기업 계좌를 먼저 조회하면 여기서 거래내역을 볼 수 있어요.<div class="section-actions">${button('기업 계좌', 'data-view="corporate-accounts"', 'primary')}</div></div></section>`;
   const chosen = rows.find(r => r.id === state.params.target) || rows[0];
-  const job = await latest('history', chosen.id, await api.get('/jobs?limit=200&area=corporate&hide=session_extend'));
+  const job = await latest('history', chosen.id, 'target_id');
   const previous = job?.input || {};
   return heading('기업 거래내역', '기간을 비우면 최근 7일을 조회해요. 다음 페이지도 자동으로 이어서 조회해요.') +
     `<section class="panel"><form class="filter-bar corporate-history-filter" data-submit="corporate-history">${select('target_id', '계좌', accountOptions(rows), chosen.id, 'data-change="corporate-history-target"')}${field('start', '시작일', `type="date" value="${esc(previous.start || '')}"`)}${field('end', '종료일', `type="date" value="${esc(previous.end || '')}"`)}${ui.periodPresets([['1주', 6], ['1개월', 30], ['3개월', 90]])}${select('direction', '구분', [['', '전체'], ['1', '입금'], ['2', '출금']], previous.direction)}${select('order', '정렬', [['latest', '최신순'], ['oldest', '과거순']], previous.order)}<button class="button primary" type="submit">조회</button><details class="advanced-block"><summary>검색·외화·대출 옵션</summary>${select('search_type', '원화 검색', [['', '선택 안 함'], ['04', '적요'], ['03', '금액'], ['05', '받는 분'], ['02', '메모']])}${field('search', '검색어', 'maxlength="100"')}${field('currency', '외화 통화 (예: USD, ALL)', 'maxlength="3" pattern="[A-Za-z]{3}"')}${field('sequence', '대출 실행번호 (필요할 때만)', 'inputmode="numeric" pattern="[0-9]+"')}<p class="field-help">대출은 입출금 구분 없이 조회해요.</p></details></form>${panel()}<div id="corporate-results">${job ? jobState(job) + historyRows(job) : '<div class="empty-state">계좌와 기간을 선택해 조회하세요.</div>'}</div></section>`;
@@ -170,7 +172,7 @@ function resultDialog(job) {
 async function transferView() {
   const rows = accounts().filter(t => t.identity?.account_type === 'krw');
   const allowed = new Set(scopeLogins('hana_corporate').map(r => r.id));
-  const listing = await api.get('/jobs?limit=200&area=corporate&hide=session_extend');
+  const listing = await api.get('/jobs?' + new URLSearchParams({name: PREFIX + 'transfer.prepare', limit: '20'}));
   const previous = listing.jobs.filter(j => j.name === PREFIX + 'transfer.prepare' && allowed.has(j.login_id));
   // Past and waiting transfers appear only once there are any.
   const recent = previous.length ? `<section class="panel"><div class="panel-heading"><h2>진행한 이체</h2></div><div class="settings-body">${previous.map(j => `<div class="setting-row"><span>${esc(j.fixed?.login?.display_name)} · ${ui.time(j.created_at)} ${ui.statusTags(j)}</span>${button(j.status === 'awaiting_input' ? '이어하기' : '결과 보기', `data-action="corporate-transfer-open" data-job="${esc(j.id)}"`)}</div>`).join('')}</div></section>` : '';
