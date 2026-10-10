@@ -19,19 +19,19 @@ async function setup(t, method = 'onesign', readiness = 'query_only', secret = {
   const target = {id: 'target', login_id: row.id, kind: 'account', display_name: '합성 계좌', identity: {account_number: '12345678901234'}};
   const state = {logins: [row], targets: [target], cache: new Map(), rows: {}, capabilities: {features: []},
     vaults: {synthetic: true}, credentials: [], profiles: []};
-  const calls = [], asked = [], checked = [], apiCalls = [], changed = [];
+  const calls = [], asked = [], checked = [], apiCalls = [], changed = [], redraws = [], posted = [];
   const ctx = {run: async (name, fields, options) => { calls.push({name, fields, options}); }};
   const values = {
     state, login: id => state.logins.find(r => r.id === id), target: id => state.targets.find(r => r.id === id), profile: () => null,
     scopeLogins: () => state.logins, scopeTargets: () => state.targets,
     onesignStore: owner => owner.credential.ref,
-    askSecrets: async (...args) => { asked.push(args); return secret; },
+    askSecrets: async (...args) => { asked.push(args); return typeof secret === 'function' ? secret() : secret; },
     SECRET_LABELS: {vault_passphrase: ['vault_passphrase', '저장소 암호'], pin: ['pin', 'PIN'],
       certificate_password: ['certificate_password', '인증서 비밀번호']},
     applyRemember: () => {}, changeView: (...args) => { changed.push(args); }, jobState: () => '', refreshModel: async () => {},
     bankSessionExpired: () => state.idleExpired || false,
     ensureBankSession: async (ctx, id) => { checked.push(id); return !state.idleExpired; }, expiredBankLogin: async () => {},
-    rememberField: () => '', render: () => {}, secretFields: () => [], showJob: () => {},
+    rememberField: () => '', render: by => { redraws.push(by); }, secretFields: () => [], showJob: () => {},
     extensionState: () => state.extension || 'none', setAutoExtend: on => { state.autoExtend = on; },
     extensionJob: () => state.extensionJob || null,
   };
@@ -43,8 +43,13 @@ async function setup(t, method = 'onesign', readiness = 'query_only', secret = {
       apiCalls.push(path);
       if (state.failJobList && path.startsWith('/jobs?')) throw new Error('synthetic list error');
       if (path.startsWith('/jobs?')) return {jobs: []};
+      if (state.served?.[path]) return state.served[path];
       return {credentials: [], devices: [], id_cards: []};
-    }, post: async () => { throw {code: 'job_not_cancellable'}; }, patch: async () => { throw {code: 'revision_conflict'}; }});
+    }, post: async path => {
+      if (!state.acceptPosts) throw {code: 'job_not_cancellable'};
+      posted.push(path);
+      return {};
+    }, patch: async () => { throw {code: 'revision_conflict'}; }});
     this.setExport('submit', () => { throw new Error('unexpected submission'); });
   }, {context});
   const certificates = new SyntheticModule(['certificateActions'], function () {
@@ -56,7 +61,7 @@ async function setup(t, method = 'onesign', readiness = 'query_only', secret = {
   const views = new SourceTextModule(await readFile(new URL('views.js', root), 'utf8'), {context});
   await views.link(name => ({'./app.js': app, './api.js': api, './ui.js': ui, './corporate.js': corporate, './giro.js': giro, './certificates.js': certificates}[name]));
   await views.evaluate();
-  return {ctx, state, calls, asked, checked, apiCalls, changed, row, document: dom.window.document, ...views.namespace};
+  return {ctx, state, calls, asked, checked, apiCalls, changed, redraws, posted, row, document: dom.window.document, ...views.namespace};
 }
 
 // Screens read recent jobs without login extensions, which can run every few minutes.
@@ -360,6 +365,90 @@ test('after transfer, accounts and settings offer queries and optional manual lo
   ui.document.querySelector('main').innerHTML = await ui.views.transfer(ui.ctx);
   assert.equal(ui.document.querySelector('[name="account"]').value, '00012345678');
   assert.equal(ui.document.querySelector('[name="amount"]').value, '12,000');
+});
+
+test('a login opened for a new transfer goes on to the account password, and only typing it prepares the transfer', async t => {
+  const answers = [{pin: '123456'}, null, {account_password: '1234'}];
+  const ui = await setup(t, 'onesign', 'query_only', () => answers.shift());
+  const main = ui.document.querySelector('main');
+  const pressed = [];
+  // As the app does: a submitted form runs its action, and a successful login redraws the screen.
+  ui.document.addEventListener('submit', event => {
+    event.preventDefault();
+    pressed.push(ui.actions[event.target.dataset.submit](ui.ctx, event.target));
+  });
+  ui.ctx.run = async (name, fields, options) => {
+    ui.calls.push({name, fields, options});
+    if (name !== 'hana.onesign.login') return;
+    ui.row.readiness = 'ready';
+    await options.onDone({outcome: 'success'});
+    main.innerHTML = await ui.views.transfer(ui.ctx);
+  };
+  const names = () => ui.calls.map(c => c.name);
+  main.innerHTML = await ui.views.transfer(ui.ctx);
+  main.querySelector('[name="account"]').value = '00012345678'; main.querySelector('[name="amount"]').value = '12,000';
+  await ui.actions['transfer-prepare'](ui.ctx, main.querySelector('form'));
+  await Promise.all(pressed);
+  assert.deepEqual(ui.asked.map(a => a[0]), ['합성 연결 로그인', '이체 준비'], 'the account password is asked right after the login');
+  assert.match(ui.asked[0][2], /로그인하면 이어서 출금 계좌 비밀번호/);
+  assert.match(ui.document.querySelector('#toast').textContent, /^로그인 · 성공/, 'the login result is not read as a transfer result');
+  assert.deepEqual(names(), ['hana.onesign.login'], 'a cancelled account password sends no transfer');
+  assert.equal(main.querySelector('[name="account"]').value, '00012345678');
+  await ui.actions['transfer-prepare'](ui.ctx, main.querySelector('form'));
+  assert.deepEqual(names(), ['hana.onesign.login', 'hana.transfer.prepare'], 'with the session ready no login is asked again');
+  assert.equal(JSON.stringify(ui.calls[1].fields.input),
+    JSON.stringify({recipient_bank_code: '081', recipient_account_number: '00012345678', amount_krw: 12000}));
+  assert.equal(pressed.length, 1, 'the form is submitted once after the login, and never again by itself');
+
+  // A screen the user left during the login keeps no values, so nothing is submitted for it.
+  ui.row.readiness = 'query_only';
+  answers.push({pin: '123456'});
+  ui.ctx.run = async name => { ui.calls.push({name}); ui.row.readiness = 'ready'; ui.state.params = {}; };
+  await ui.actions['transfer-prepare'](ui.ctx, main.querySelector('form'));
+  assert.deepEqual(names().slice(2), ['hana.onesign.login']);
+  assert.equal(pressed.length, 1);
+  assert.equal(ui.asked.at(-1)[0], '합성 연결 로그인');
+});
+
+test('a confirmed transfer ends on a redrawn empty form; one refused before sending or left for later is confirmed again', async t => {
+  const ui = await setup(t, 'onesign', 'ready', {account_password: '1234'});
+  const main = ui.document.querySelector('main');
+  ui.state.acceptPosts = true;
+  const prepared = {id: 'job', name: 'hana.transfer.prepare', login_id: 'login', status: 'awaiting_input', awaiting: {digest: 'synthetic',
+    requires: [], preview: {recipient_bank_code: '081', recipient_account: '00012345678', amount_krw: 12000, fee_krw: 0, total_krw: 12000}}};
+  const done = {...prepared, status: 'finished', outcome: 'success', awaiting: null, attempt: {sent: true}};
+  const confirm = async (final, current = true) => {
+    main.innerHTML = await ui.views.transfer(ui.ctx);
+    Object.assign(ui.ctx, {current: () => current, track: async () => final, run: async (name, fields, options) => options.onDone(prepared)});
+    main.querySelector('[name="account"]').value = '00012345678'; main.querySelector('[name="amount"]').value = '12,000';
+    await ui.actions['transfer-prepare'](ui.ctx, main.querySelector('form'));
+    ui.document.querySelector('#confirm-form').dispatchEvent(new ui.document.defaultView.Event('submit', {cancelable: true}));
+    await new Promise(resolve => setTimeout(resolve));
+    return ui.document.querySelector('#dialog-title').textContent;
+  };
+  assert.equal(await confirm(done), '이체 결과');
+  assert.equal(ui.redraws.length, 1);
+  main.innerHTML = await ui.views.transfer(ui.ctx);
+  assert.equal(main.querySelector('[name="account"]').value, '', 'the redrawn form cannot send the same transfer again');
+  assert.equal(main.querySelector('[name="amount"]').value, '');
+  assert.equal(await confirm({...done, outcome: 'unknown'}), '이체 결과');
+  assert.equal(ui.redraws.length, 2, 'whatever the verdict, the attempt is over');
+  assert.equal(await confirm(done, false), '이체 결과');
+  assert.equal(ui.redraws.length, 2, 'a screen the user moved to meanwhile is left as it is');
+  // Refused before anything was sent: the prepared transfer and its form are kept and the confirmation is asked again.
+  const title = () => ui.document.querySelector('#dialog-title').textContent;
+  assert.equal(await confirm({...prepared, local: {last_confirmation_refused: 'store_authentication_failed'}}), '이 내용으로 보낼까요?');
+  assert.match(ui.document.querySelector('#detail-dialog .form-error').textContent, /저장소 암호가 맞지 않아요/);
+  assert.equal(ui.redraws.length, 2);
+  assert.deepEqual(ui.posted, Array(4).fill('/jobs/job/confirm'), 'each confirmation is posted once');
+  // Left for later, it opens again from its job detail; once it has run, that shows its result.
+  ui.state.served = {'/jobs/job': prepared};
+  await ui.actions['transfer-open'](ui.ctx, {dataset: {job: 'job'}});
+  assert.equal(title(), '이 내용으로 보낼까요?');
+  ui.state.served = {'/jobs/job': done};
+  await ui.actions['transfer-open'](ui.ctx, {dataset: {job: 'job'}});
+  assert.equal(title(), '이체 결과');
+  assert.equal(ui.posted.length, 4, 'opening it sends nothing');
 });
 
 test('expired login still asks for login in accounts', async t => {
@@ -741,6 +830,7 @@ for (const method of ['onesign', 'joint_certificate']) {
     assert.deepEqual(names(), [loginJob], 'a login that did not succeed asks for nothing more');
     await ui.calls[0].options.onDone({outcome: 'success'});
     assert.deepEqual(names(), [loginJob, accountsJob]);
+    assert.equal(ui.redraws.at(-1), ui.ctx, 'the login redraws as its own action, so the balance result still reaches the screen');
     assert.equal(ui.calls[1].options.panel, 'job-login');
     if (method === 'onesign') assert.match(ui.asked[1][2], /저장소 암호가 한 번 더/);
 

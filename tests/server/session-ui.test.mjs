@@ -17,6 +17,7 @@ async function setup(t) {
     session: {last_request_at: 1000, idle_expires_at: 1600}};
   const values = {ApiError: class extends Error {}, TERMINAL: new Set(),
     api: {state: async () => ({enrolled: false}), get: async path => {
+      if (data.job && path === '/jobs/' + data.job.id) return structuredClone(data.job);
       data.gets.push(path);
       assert.equal(path, '/logins');
       return {logins: [structuredClone(data.row)], server_time: data.server};
@@ -235,6 +236,44 @@ test('a plain success shows when it was read; every other state keeps its badge'
   assert.match(app.jobState({...done, status: 'running', outcome: 'not_started'}), /실행 중/);
   assert.match(app.jobState({...done, origin: 'cli'}), /CLI 요청/);
   assert.match(app.jobState({...done, local: {session_saved: false}}), /세션 저장 확인 안 됨/);
+});
+
+const SHELL = '<nav class="area-tabs"></nav><div class="workspace-label"></div><nav class="main-nav"></nav><nav class="common-nav"></nav>'
+  + '<nav class="bottom-nav"></nav><button class="profile-switch"></button><span id="server-mode"></span><footer id="footer"></footer>';
+
+test('an action that redraws its own screen stays current for its next step; a screen the user left is not revived', async t => {
+  const app = await setup(t);
+  app.document.querySelector('#stage').innerHTML = SHELL;
+  const ctx = app.ctx;
+  let reached = 0;
+  const step = () => ctx.run('hana.onesign.accounts', {login_id: 'selected'}, {onDone: () => reached++});
+  await app.render(ctx);
+  assert.equal(ctx.current(), true);
+  await step();
+  assert.equal(reached, 1, 'a step chained after the redraw, such as the balance query after a login, reaches the screen');
+  await app.render();
+  assert.equal(ctx.current(), false, 'a redraw that is not its own, such as a screen change, ends it');
+  await app.render(ctx);
+  assert.equal(ctx.current(), false);
+  await step();
+  assert.equal(reached, 1, 'a late answer for the screen that was left is dropped');
+});
+
+test('a prepared transfer left for later is offered again only on the login session it was prepared in', async t => {
+  const app = await setup(t);
+  const dialog = app.document.querySelector('#detail-dialog');
+  dialog.innerHTML = '<div id="dialog-content"></div>';
+  dialog.showModal = () => { dialog.open = true; };
+  app.job = {id: 'job', name: 'hana.transfer.prepare', title: '원화 이체', origin: 'web', status: 'awaiting_input', step: 'prepare',
+    outcome: 'not_started', login_id: 'selected', session_id: 's', attempt: {sent: true}};
+  const offered = async () => { await app.showJob('job'); return Boolean(dialog.querySelector('[data-action="transfer-open"]')); };
+  assert.equal(await offered(), true);
+  app.job.session_id = 'older';
+  assert.equal(await offered(), false, 'a newer login took the session it was prepared in');
+  Object.assign(app.job, {session_id: 's', status: 'finished', step: 'execute'});
+  assert.equal(await offered(), false);
+  assert.ok(dialog.querySelector('[data-action="reconcile"]'), 'an executed transfer offers its result lookup instead');
+  assert.equal(app.gets.length, 0);
 });
 
 test('only an area tab switches area; a button with its own mode value runs its action', async t => {

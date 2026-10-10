@@ -409,7 +409,22 @@ function confirmDialog(ctx, job) {
     clearInterval(timer);
     ui.closeDialog();
     const final = await ctx.track({...job, status: 'queued'}, {panel: 'job-panel'});
-    if (final) resultDialog(final);
+    if (!final) return;
+    if (final.status === 'awaiting_input') {
+      // Refused before anything was sent (a wrong store passphrase, say). What was prepared is
+      // kept, so the same confirmation is asked again with the reason.
+      confirmDialog(ctx, final);
+      if (final.local?.last_confirmation_refused) ui.fail(ui.message(final.local.last_confirmation_refused));
+      return;
+    }
+    if (transfer && final.status === 'finished' && ctx.current()) {
+      // This transfer attempt is over. Draw the form empty, so pressing it again cannot repeat the
+      // transfer by accident, and with the login state the next transfer starts from.
+      await render();
+      const slot = document.getElementById('job-panel');
+      if (slot) slot.innerHTML = jobState(final);
+    }
+    resultDialog(final);
   });
 }
 
@@ -529,7 +544,7 @@ async function transferView(ctx) {
   const level = ui.VERIFICATION[featureOf('hana-transfer')?.verification]?.[0];
   return heading('이체', '받는 분과 금액을 은행에서 확인한 뒤, 내용을 보고 한 번만 보내요.') + setupNotice('hana-transfer') +
     note(`하나인증서 로그인 한 번으로 조회와 이체를 할 수 있어요. 이체 후에도 조회는 계속할 수 있고, 다음 이체를 준비할 때는 새 로그인이 필요해요.${level ? ` 지원 상태: ${esc(level)}.` : ''}`) +
-    `<form class="panel form-panel transfer-form" data-submit="transfer-prepare"><div class="field"><label for="source-account">어느 계좌에서 보낼까요?</label><select id="source-account" name="target_id">${list.map(t => `<option value="${esc(t.id)}" ${t.id === draft.target_id ? 'selected' : ''}>${esc(t.display_name)} · ${esc(t.identity?.account_number)} (${esc(login(t.login_id)?.display_name)} · ${esc(login(t.login_id)?.readiness === 'ready' ? '세션 있음' : '새 이체 로그인 필요')})</option>`).join('')}</select><p class="field-help">새 로그인이 필요하면 확인을 누를 때 로그인 창이 열려요. <button class="link-button" type="button" data-action="account-login">지금 다시 로그인</button></p></div><div class="field"><label for="recipient-account">받는 계좌</label><div class="field-row"><select id="recipient-bank" name="bank" aria-label="받는 은행">${BANKS.map(([code, name]) => `<option value="${code}" ${code === draft.bank ? 'selected' : ''}>${name}</option>`).join('')}</select><input id="recipient-account" name="account" inputmode="numeric" autocomplete="off" required pattern="[0-9-]{8,30}" placeholder="숫자만 입력" value="${esc(draft.account || '')}"></div></div><div class="field"><label for="transfer-amount">얼마를 보낼까요?</label><div class="amount-input"><input id="transfer-amount" name="amount" inputmode="numeric" autocomplete="off" required pattern="[0-9,]+" value="${esc(draft.amount || '')}"><span>원</span></div><div class="amount-presets">${presets.map(v => `<button type="button" data-action="amount-add" data-add="${v}">+${money(v / 10000)}만</button>`).join('')}<button type="button" data-action="amount-clear">지우기</button></div></div><div class="form-actions"><button class="button primary" type="submit">이체 내용 확인 ${icon('arrow')}</button><p class="field-help">다음 단계에서 저장소 암호와 출금 계좌 비밀번호를 받아 은행의 확인 화면까지 준비해요. 이때는 이체하지 않아요. 내용을 확인한 뒤 한 번만 전송하고, 결과는 이체 내역으로 따로 대조해요.</p></div></form>${panel('job-panel', null)}`;
+    `<form class="panel form-panel transfer-form" data-submit="transfer-prepare"><div class="field"><label for="source-account">어느 계좌에서 보낼까요?</label><select id="source-account" name="target_id">${list.map(t => `<option value="${esc(t.id)}" ${t.id === draft.target_id ? 'selected' : ''}>${esc(t.display_name)} · ${esc(t.identity?.account_number)} (${esc(login(t.login_id)?.display_name)} · ${esc(login(t.login_id)?.readiness === 'ready' ? '세션 있음' : '새 이체 로그인 필요')})</option>`).join('')}</select><p class="field-help">새 로그인이 필요하면 확인을 누를 때 로그인 창이 먼저 열리고, 로그인하면 이어서 이체를 준비해요. <button class="link-button" type="button" data-action="account-login">지금 다시 로그인</button></p></div><div class="field"><label for="recipient-account">받는 계좌</label><div class="field-row"><select id="recipient-bank" name="bank" aria-label="받는 은행">${BANKS.map(([code, name]) => `<option value="${code}" ${code === draft.bank ? 'selected' : ''}>${name}</option>`).join('')}</select><input id="recipient-account" name="account" inputmode="numeric" autocomplete="off" required pattern="[0-9-]{8,30}" placeholder="숫자만 입력" value="${esc(draft.account || '')}"></div></div><div class="field"><label for="transfer-amount">얼마를 보낼까요?</label><div class="amount-input"><input id="transfer-amount" name="amount" inputmode="numeric" autocomplete="off" required pattern="[0-9,]+" value="${esc(draft.amount || '')}"><span>원</span></div><div class="amount-presets">${presets.map(v => `<button type="button" data-action="amount-add" data-add="${v}">+${money(v / 10000)}만</button>`).join('')}<button type="button" data-action="amount-clear">지우기</button></div></div><div class="form-actions"><button class="button primary" type="submit">이체 내용 확인 ${icon('arrow')}</button><p class="field-help">다음 단계에서 저장소 암호와 출금 계좌 비밀번호를 받아 은행의 확인 화면까지 준비해요. 이때는 이체하지 않아요. 내용을 확인한 뒤 한 번만 전송하고, 결과는 이체 내역으로 따로 대조해요.</p></div></form>${panel('job-panel', null)}`;
 }
 
 function inquiryRows(job) {
@@ -750,7 +765,7 @@ function loginJob(row) {
   return row.institution === 'hometax' ? 'hometax.login' : row.method === 'onesign' ? 'hana.onesign.login' : 'hana.login';
 }
 
-async function afterModel(ctx) { await refreshModel(); await render(); }
+async function afterModel(ctx) { await refreshModel(); await render(ctx); }
 
 function candidatesDialog(ctx, job, loginId) {
   const candidates = job.result?.candidates || job.result?.accounts || [];
@@ -886,7 +901,7 @@ export const actions = {
     if (row.institution === 'hana_corporate') return corporateLogin(ctx, row);
     if (row.institution === 'giro') return giroLogin(ctx, row);
     const reason = button.dataset.reason === 'session_idle_expired' ? ui.message('session_idle_expired') + ' '
-      : button.dataset.reason === 'transfer_login_required' ? '새 이체에는 새 로그인이 필요해요. 로그인한 뒤 「이체 내용 확인」을 다시 눌러 주세요. ' : '';
+      : button.dataset.reason === 'transfer_login_required' ? '새 이체에는 새 로그인이 필요해요. 로그인하면 이어서 출금 계좌 비밀번호를 받아 이체를 준비해요. ' : '';
     // A first Hometax login goes on to the user/business check, and a bank login to one balance
     // query; the dialog says so before any password is typed. The balance query is a new read, not a
     // replay of whatever was interrupted, and a login opened to send a transfer skips it.
@@ -897,7 +912,7 @@ export const actions = {
     if (!secrets) return;
     await runForLogin(ctx, loginJob(row), row, {}, {secrets, onDone: async job => {
       const stopped = job.local?.stopped ? ui.message(job.local.stopped) : '';
-      ui.toast([ui.OUTCOME[job.outcome]?.[0], stopped].filter(Boolean).join(' · '));
+      ui.toast(['로그인', ui.OUTCOME[job.outcome]?.[0], stopped].filter(Boolean).join(' · '));
       await afterModel(ctx);
       if (job.outcome !== 'success' || stopped) return;
       if (discover) await actions.discover(ctx, {dataset: {login: row.id}});
@@ -1037,13 +1052,18 @@ export const actions = {
     // Kept across a login this step may open; logging in never sends the transfer.
     saveTransferDraft(form);
     if (!await ensureBankSession(ctx, source.login_id)) return;
-    const owner = login(source.login_id);
-    if (owner.readiness !== 'ready') {
-      // A new transfer needs a new login. Open it here; the user presses 「이체 내용 확인」 again afterwards.
-      return actions.login(ctx, {dataset: {login: owner.id, reason: 'transfer_login_required'}});
-    }
     const amount = Number(String(data.get('amount')).replace(/\D/g, ''));
     if (!amount) { ui.toast('보낼 금액을 입력하세요.'); return; }
+    const owner = login(source.login_id);
+    if (owner.readiness !== 'ready') {
+      // A new transfer needs a new login. Open it here. Once logged in, the form that login redrew
+      // from the kept values is submitted as if pressed again, which goes on to the account
+      // password; nothing of the transfer is sent before that is typed. A screen the user left
+      // meanwhile has no kept values and is not submitted.
+      await actions.login(ctx, {dataset: {login: owner.id, reason: 'transfer_login_required'}});
+      if (login(owner.id)?.readiness === 'ready' && state.params?.transferDraft) document.querySelector('.transfer-form')?.requestSubmit();
+      return;
+    }
     if (state.params) delete state.params.transferDraft;
     const secrets = await askSecrets('이체 준비', [SECRET_LABELS.vault_passphrase, SECRET_LABELS.account_password], '은행의 확인 화면까지 준비해요. 이 단계에서는 이체하지 않아요.', {store: onesignStore(owner, true)});
     if (!secrets) return;
@@ -1051,6 +1071,11 @@ export const actions = {
       recipient_bank_code: data.get('bank'), recipient_account_number: String(data.get('account')).replace(/\s/g, ''), amount_krw: amount}}, {
       panel: 'job-panel', secrets, onDone: job => job.status === 'awaiting_input' ? confirmDialog(ctx, job) : ui.showDialog('이체 준비 결과', outcomeNote(job) + (job.local?.authentication_not_supported ? note('은행이 이 CLI가 지원하지 않는 추가 인증을 요구해 멈췄어요. 이체는 실행하지 않았어요.') : '') + `<div class="dialog-actions"><button class="button primary" data-ui="close">확인</button></div>`)});
     await refreshModel();
+  },
+  // A prepared transfer left for later: its confirmation again, or its result once it has run.
+  'transfer-open': async (ctx, button) => {
+    const job = await api.get('/jobs/' + encodeURIComponent(button.dataset.job));
+    if (job.status === 'awaiting_input') confirmDialog(ctx, job); else resultDialog(job);
   },
   reconcile: async (ctx, button) => {
     const parent = await api.get('/jobs/' + encodeURIComponent(button.dataset.job));
