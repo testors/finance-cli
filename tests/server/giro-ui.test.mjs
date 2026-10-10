@@ -172,9 +172,12 @@ test('receipts default to the last month, paging keeps the shown period, and wai
   assert.equal(main.querySelector('[name="page"]').type, 'hidden');
   a.add({id: 'receipts', name: 'giro.receipts.list', login_id: 'giro', outcome: 'success',
     input: {start_date: '2026-08-01', end_date: '2026-08-31', page: 2},
-    result: {complete: true, page_navi: {currentPage: 2, totalPage: 3}, receipts: [{ref: '0', issuer: '합성기관', paid_date: '2026-08-10', amount_raw: '1,000'}]}});
+    result: {complete: true, page_navi: {currentPage: 2, totalPage: 3}, receipts: [{ref: '0', issuer: '합성기관', paid_date: '20260810', amount_raw: '1,000', payment_type: ''}]}});
   a.add({id: 'pay', name: 'giro.payment.prepare', login_id: 'giro', status: 'awaiting_input', created_at: 1790000000});
   main.innerHTML = await a.giroViews['giro-receipts'](a.ctx);
+  // The paid date reads as a date, and the amount stands apart from the muted line.
+  assert.equal(main.querySelector('.setting-row .meta').textContent, '2026-08-10');
+  assert.equal(main.querySelector('.setting-row .row-amount').textContent, '1,000원');
   const [previous, next] = main.querySelectorAll('[data-action="giro-receipts-page"]');
   assert.equal(previous.dataset.page, '1');
   assert.equal(next.dataset.page, '3');
