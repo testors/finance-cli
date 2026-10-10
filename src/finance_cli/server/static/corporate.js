@@ -233,9 +233,9 @@ export const corporateActions = {
     const id = form.dataset.job;
     const secrets = Object.fromEntries(new FormData(form));
     form.reset();
-    const job = await api.post('/jobs/' + encodeURIComponent(id) + '/confirm', {confirmation: form.dataset.digest, secrets});
+    const job = await api.post('/jobs/' + encodeURIComponent(id) + '/confirm', {confirmation: form.dataset.digest, secrets}, {label: '기업 원화 이체'});
     ui.closeDialog();
-    const final = await ctx.track(job, {panel: 'job-panel'});
+    const final = await ctx.track(job, {panel: 'job-panel', hold: true});
     if (final) await transferDialog(ctx, final);
   },
   'corporate-transfer-open': async (ctx, el) => transferDialog(ctx, await api.get('/jobs/' + encodeURIComponent(el.dataset.job))),

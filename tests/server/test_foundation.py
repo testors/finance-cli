@@ -70,6 +70,20 @@ class AccessTests(ServerCase):
         self.assertEqual(self.client.get('/static/../config.json').status_code, 404)
         self.assertEqual(self.client.get('/static/unknown.js').status_code, 404)
 
+    def test_every_packaged_screen_file_is_served(self):
+        # The screen is one set of modules that import each other; one that is not served stops it all.
+        from importlib.resources import files
+        import re
+        names = sorted(p.name for p in files('finance_cli.server').joinpath('static').iterdir() if p.name != 'index.html')
+        self.assertIn('busy.js', names)
+        for name in names:
+            with self.subTest(name=name):
+                response = self.client.get('/static/' + name)
+                self.assertEqual(response.status_code, 200)
+                self.assertIn("script-src 'self'", response.headers['content-security-policy'])
+                for imported in re.findall(r"from '\./([a-z]+\.js)'", response.text):
+                    self.assertIn(imported, names)
+
     def test_arbitrary_hosts_allow_public_access_but_require_device_authentication(self):
         for host in ('100.64.0.1:8740', 'synthetic.example:8740'):
             with self.subTest(host=host):

@@ -97,11 +97,11 @@ async def request(path, method='GET'):
     await app(scope, receive, send)
     return messages[0]['status'], b''.join(m.get('body', b'') for m in messages[1:])
 web = {}
-for path in ('/', '/static/app.js', '/static/views.js', '/static/certificates.js', '/static/corporate.js', '/static/giro.js', '/static/app.css', '/api/v1/auth/state', '/api/v1/capabilities'):
+for path in ('/', '/static/app.js', '/static/busy.js', '/static/views.js', '/static/certificates.js', '/static/corporate.js', '/static/giro.js', '/static/app.css', '/api/v1/auth/state', '/api/v1/capabilities'):
     status, body = asyncio.run(request(path))
     web[path] = status
     assert body, path
-assert web == {'/': 200, '/static/app.js': 200, '/static/views.js': 200, '/static/certificates.js': 200, '/static/corporate.js': 200, '/static/giro.js': 200, '/static/app.css': 200,
+assert web == {'/': 200, '/static/app.js': 200, '/static/busy.js': 200, '/static/views.js': 200, '/static/certificates.js': 200, '/static/corporate.js': 200, '/static/giro.js': 200, '/static/app.css': 200,
                '/api/v1/auth/state': 200, '/api/v1/capabilities': 401}, web
 print(json.dumps({'commands':len(rows),'python_report_archive':True,'web_app':web,'source_access':False,'network_used':False}))
 '''
@@ -126,6 +126,7 @@ def main():
     for required in ('giro/model_schema.json', 'hometax_cli/InvoiceSigner.java', 'hometax_cli/runtime/package-lock.json',
                      'hometax_cli/runtime_require.cjs', 'finance_cli/credentials/registry.py',
                      'finance_cli/server/static/index.html', 'finance_cli/server/static/app.js',
+                     'finance_cli/server/static/busy.js',
                      'finance_cli/server/static/app.css', 'finance_cli/server/Caddyfile.example',
                      'finance_cli/services/hana_corporate/cli.py'):
         if required not in names:

@@ -31,6 +31,7 @@ CODE = re.compile(r'[a-z][a-z0-9_]{1,63}(:[a-z0-9_,]{1,120})?')
 STATIC = {'index.html': 'text/html; charset=utf-8', 'app.css': 'text/css; charset=utf-8',
           'app.js': 'text/javascript; charset=utf-8', 'views.js': 'text/javascript; charset=utf-8',
           'api.js': 'text/javascript; charset=utf-8', 'ui.js': 'text/javascript; charset=utf-8',
+          'busy.js': 'text/javascript; charset=utf-8',
           'certificates.js': 'text/javascript; charset=utf-8', 'corporate.js': 'text/javascript; charset=utf-8',
           'giro.js': 'text/javascript; charset=utf-8'}
 PUBLIC_API = {(f'{API}/auth/state', 'GET'), (f'{API}/auth/enroll', 'POST')}

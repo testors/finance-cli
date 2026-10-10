@@ -106,6 +106,11 @@ export function switchButton(label, on, attributes, hint = '') {
 
 export function tag(text, tone = '') { return `<span class="status-pill ${tone}">${esc(text)}</span>`; }
 export function note(text) { return `<div class="scope-note">${icon('info')}<p>${text}</p></div>`; }
+/* Work in progress said inside a screen or dialog, with the same mark as the held screen. */
+export function working(text) {
+  return `<span class="working"><span class="spinner" aria-hidden="true"></span>${esc(text)}</span>`;
+}
+
 export function button(label, attributes, kind = 'secondary', iconName = '') {
   return `<button type="button" class="button ${kind}" ${attributes}>${iconName ? icon(iconName) : ''}${esc(label)}</button>`;
 }
@@ -231,6 +236,7 @@ const MESSAGES = {
   idempotency_key_conflict: '같은 요청 키로 다른 내용이 접수되었어요.',
   candidate_not_found: '확인 작업 결과에 없는 대상이에요.',
   local_processing_error: '서버 처리 중 오류가 있었어요. 관측한 기관 판정은 보존했어요.',
+  screen_processing_error: '화면에서 처리하지 못했어요. 이미 보낸 요청은 다시 보내지 않았어요. 전체 작업 기록에서 결과를 확인하세요.',
   session_not_saved: '세션 저장을 확인하지 못해 다음 단계를 진행하지 않았어요.',
   transfer_confirmation_required: '확인한 이체 내용과 달라 실행하지 않았어요.',
 };

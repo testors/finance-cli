@@ -160,9 +160,9 @@ export const giroActions = {
     const jobId = form.dataset.job, digest = form.dataset.digest;
     ui.closeDialog();
     try {
-      const job = await api.post('/jobs/' + encodeURIComponent(jobId) + '/confirm', {confirmation: digest, secrets: inputs});
+      const job = await api.post('/jobs/' + encodeURIComponent(jobId) + '/confirm', {confirmation: digest, secrets: inputs}, {label: '지로 단건 계좌 납부'});
       for (const key of Object.keys(inputs)) delete inputs[key];
-      await ctx.track(job, {panel: 'job-panel', onDone: value => paymentDialog(ctx, value)});
+      await ctx.track(job, {panel: 'job-panel', hold: true, onDone: value => paymentDialog(ctx, value)});
     } catch (error) { ui.fail(ui.message(error.code)); }
     finally { for (const key of Object.keys(inputs)) delete inputs[key]; }
   },

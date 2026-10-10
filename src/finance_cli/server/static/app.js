@@ -1,6 +1,7 @@
 /* Finance web app shell: access, profiles, areas, navigation and job plumbing.
    The business profile is per tab (sessionStorage) and never a server-wide choice. */
 import {api, ApiError, follow, submit, TERMINAL} from './api.js';
+import * as busy from './busy.js';
 import * as ui from './ui.js';
 import {actions, views} from './views.js';
 
@@ -181,8 +182,9 @@ async function sessionLapsed() {
   renderLoginNotice();
   await refreshLogins().catch(() => {});
   ui.toast('유휴 제한 시간 동안 요청이 없어 로그아웃 처리됐어요. 계속하려면 다시 로그인하세요.');
-  // Screens that list sessions show it at once; a screen with a form or an open dialog is left as it is.
-  if (LISTS.includes(state.view) && !document.querySelector('#detail-dialog')?.open) render();
+  // Screens that list sessions show it at once; a screen with a form or an open dialog is left as it
+  // is, and so is one held by a running request, whose own completion draws it.
+  if (LISTS.includes(state.view) && !document.querySelector('#detail-dialog')?.open && !busy.blocking()) render();
 }
 
 /* Area tabs at the top of the main page; an area with a live login has a lit icon
@@ -273,7 +275,7 @@ function claimExtension(row) {
 function stopExtension(row, reason) {
   extendStopped.set(row.current_session_id, reason);
   ui.toast(`${row.display_name}: 자동 로그인 연장이 되지 않았어요 (${reason}). 다시 시도하지 않으며, 이 세션은 만료 시각에 로그아웃 처리돼요.`);
-  if (LISTS.includes(state.view) && !document.querySelector('#detail-dialog')?.open) render();
+  if (LISTS.includes(state.view) && !document.querySelector('#detail-dialog')?.open && !busy.blocking()) render();
 }
 
 export async function extendLogin(id) {
@@ -289,7 +291,8 @@ export async function extendLogin(id) {
     let job;
     try {
       // A remembered OneSign store passphrase is supplied by the server, never by the browser.
-      job = await submit(extensionJob(row), {login_id: id, ...(needsStore(row) ? {secrets: {}} : {})});
+      // Nobody asked for this request at the screen, so it does not hold the screen.
+      job = await submit(extensionJob(row), {login_id: id, ...(needsStore(row) ? {secrets: {}} : {})}, {hold: false});
     } catch (error) {
       // Busy: another job is using this session right now, and its own request moves the limit.
       if (error.code === 'resource_busy') extendAfter.set(id, Date.now() + 20000);
@@ -399,7 +402,7 @@ export function changeView(view, params = {}, {push = true} = {}) {
   state.view = view;
   state.params = params;
   ui.closeDialog();
-  render().then(() => {
+  busy.during('화면을 불러오고 있어요', render(), {quiet: true}).then(() => {
     document.querySelector('.main-shell').scrollTo({top: 0});
     main().focus({preventScroll: true});
   });
@@ -477,6 +480,11 @@ export const SECRET_LABELS = {
   account_password: ['account_password', '출금 계좌 비밀번호 4자리', '[0-9]{4}'],
 };
 
+/* The name a job is shown under before the server has answered. */
+function jobTitle(name) {
+  return state.capabilities?.features?.flatMap(f => f.jobs || []).find(j => j.name === name)?.title || '';
+}
+
 function makeContext(token) {
   const context = {
     state, token, after: [], params: state.params,
@@ -484,13 +492,17 @@ function makeContext(token) {
     later: fn => context.after.push(fn),
     render, changeView, scopeTargets, scopeLogins, login, target, profile, feature, askSecrets,
     async refresh() { await refreshModel(); await render(); },
-    /* Submit a job and follow it; progress goes to the element with the given id. */
+    /* Submit a job and follow it. The screen is held from the press until the job is over or waits
+       for the user; the job's own line also goes to the element with the given id. */
     async run(name, fields, {panel, key, onDone, secrets} = {}) {
-      let job;
+      let job, held;
       try {
         if (usesBankSession(name) && !await ensureBankSession(context, fields.login_id)) return null;
+        held = busy.hold(jobTitle(name));
+        held.update('접수 중');
         job = await submit(name, {...fields, ...(secrets ? {secrets} : {}), profile_id: profile()?.id || undefined});
       } catch (error) {
+        held?.release();
         if (error.code === 'session_idle_expired') {
           await expiredBankLogin(context, fields.login_id);
           return null;
@@ -501,12 +513,16 @@ function makeContext(token) {
         ui.toast(message);
         return null;
       }
-      return context.track(job, {panel, key, onDone});
+      return context.track(job, {panel, key, onDone, held});
     },
-    async track(job, {panel, key, onDone} = {}) {
+    /* Follow a job to its end. `hold: true` holds the screen for a job the user just sent on (a
+       confirmation); a job a screen merely finds running is shown without holding anything. */
+    async track(job, {panel, key, onDone, held, hold} = {}) {
+      if (hold && !held) held = busy.hold(job.title || jobTitle(job.name));
       if (key) state.cache.set(key, job);
       const update = value => {
         if (key) state.cache.set(key, value);
+        held?.update(ui.STATUS[value.status]?.[0], value.title);
         const target = document.getElementById(panel);
         if (target && context.current()) target.innerHTML = jobState(value);
       };
@@ -515,14 +531,17 @@ function makeContext(token) {
         ui.fail(ui.message(error.code));
         return null;
       });
-      if (/^(hana|giro|hometax)\./.test(final?.name || '') && final.login_id) {
-        await refreshLogins().catch(() => {}); // A display refresh cannot change the job's outcome.
-        if (final.local?.stopped === 'session_idle_expired' && context.current()) {
-          await expiredBankLogin(context, final.login_id);
-          return null;
-        }
+      const bank = /^(hana|giro|hometax)\./.test(final?.name || '') && final.login_id;
+      if (bank) await refreshLogins().catch(() => {}); // A display refresh cannot change the job's outcome.
+      // The screen opens before anything that follows asks the user for more.
+      held?.release();
+      if (bank && final.local?.stopped === 'session_idle_expired' && context.current()) {
+        await expiredBankLogin(context, final.login_id);
+        return null;
       }
       if (final && context.current()) await onDone?.(final);
+      // Its screen was left meanwhile: the result is still said, and the screen shows it when reopened.
+      else if (final && held) ui.toast(`${final.title || final.name}: ${ui.outcomeLabel(final)[0]}`);
       return final;
     },
   };
@@ -546,7 +565,8 @@ export function jobState(job, error = '') {
 /* Job detail with the institution verdict, reconciliation and local state kept apart. */
 export async function showJob(id) {
   let job;
-  try { job = await api.get('/jobs/' + encodeURIComponent(id)); } catch (error) { ui.fail(ui.message(error.code)); return; }
+  try { job = await busy.during('작업 상세를 불러오고 있어요', api.get('/jobs/' + encodeURIComponent(id)), {quiet: true}); }
+  catch (error) { ui.fail(ui.message(error.code)); return; }
   const fixed = job.fixed || {};
   const lines = [
     ['작업', job.title], ['진행 상태', ui.STATUS[job.status]?.[0] || job.status],
@@ -609,6 +629,12 @@ window.addEventListener('popstate', event => {
   if (known(view) && document.querySelector('#stage') && !document.querySelector('#stage').hidden) changeView(view, {}, {push: false});
 });
 
+/* Whatever an action could not handle itself is said on the screen, never lost. */
+function report(error) {
+  if (!error?.code) console.error(error);
+  ui.fail(ui.message(error?.code || 'screen_processing_error'));
+}
+
 document.addEventListener('click', async event => {
   const target = event.target.closest('button,a,tr[data-row]');
   if (!target || target.disabled) return;
@@ -635,6 +661,7 @@ document.addEventListener('click', async event => {
   if (action && actions[action]) {
     if (target.tagName === 'BUTTON') target.disabled = true;
     try { await actions[action](makeContext(state.token), target, event); }
+    catch (error) { report(error); }
     finally { if (target.isConnected && target.tagName === 'BUTTON') target.disabled = false; }
   }
 });
@@ -666,13 +693,16 @@ document.addEventListener('submit', async event => {
     const button = form.querySelector('button[type="submit"]');
     if (button) button.disabled = true;
     try { await actions[name](makeContext(state.token), form, event); }
+    catch (error) { report(error); }
     finally { if (button?.isConnected) button.disabled = false; }
   }
 });
 
 document.addEventListener('change', event => {
   const name = event.target.dataset.change;
-  if (name && actions[name]) actions[name](makeContext(state.token), event.target, event);
+  if (!name || !actions[name]) return;
+  try { Promise.resolve(actions[name](makeContext(state.token), event.target, event)).catch(report); }
+  catch (error) { report(error); }
 });
 
 document.querySelector('#detail-dialog').addEventListener('click', event => {

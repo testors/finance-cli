@@ -1,5 +1,7 @@
 /* Same-origin API client. Access tokens live in an HttpOnly cookie; the CSRF
    token is kept in memory only. Secrets are sent in one request body and never stored. */
+import {during} from './busy.js';
+
 let csrf = null;
 
 export class ApiError extends Error {
@@ -32,6 +34,15 @@ async function request(method, path, body, headers = {}) {
   return value;
 }
 
+/* A request that changes something holds the screen until it is answered. Reads never hold.
+   Unnamed, it is expected to be over at once and shows nothing unless it takes longer; `label`
+   names a request worth showing from the start. `hold: false` is for a caller that sends in the
+   background or shows its own progress. */
+function change(method, path, body, headers, {hold = true, label = ''} = {}) {
+  const send = () => request(method, path, body, headers);
+  return hold ? during(label, send, {quiet: !label}) : send();
+}
+
 export const api = {
   async state() {
     const value = await request('GET', '/auth/state');
@@ -39,15 +50,15 @@ export const api = {
     return value;
   },
   async enroll(code, deviceName) {
-    const value = await request('POST', '/auth/enroll', {code, device_name: deviceName || null});
+    const value = await change('POST', '/auth/enroll', {code, device_name: deviceName || null});
     csrf = value.csrf_token;
     return value;
   },
   get: path => request('GET', path),
-  post: (path, body = {}) => request('POST', path, body),
-  patch: (path, body) => request('PATCH', path, body),
-  delete: path => request('DELETE', path),
-  upload: (kind, file) => request('POST', '/uploads?kind=' + encodeURIComponent(kind), file,
+  post: (path, body = {}, options) => change('POST', path, body, {}, options),
+  patch: (path, body, options) => change('PATCH', path, body, {}, options),
+  delete: (path, options) => change('DELETE', path, undefined, {}, options),
+  upload: (kind, file) => change('POST', '/uploads?kind=' + encodeURIComponent(kind), file,
     {'Content-Type': file.type || 'application/json', 'X-File-Name': encodeURIComponent(file.name || '')}),
 };
 
@@ -77,6 +88,6 @@ export function idempotencyKey() {
   return 'web-' + [hex.slice(0, 8), hex.slice(8, 12), hex.slice(12, 16), hex.slice(16, 20), hex.slice(20)].join('-');
 }
 
-export function submit(name, fields = {}) {
-  return api.post('/jobs', {name, idempotency_key: idempotencyKey(), ...fields});
+export function submit(name, fields = {}, options) {
+  return api.post('/jobs', {name, idempotency_key: idempotencyKey(), ...fields}, options);
 }

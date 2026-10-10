@@ -22,8 +22,10 @@ async function setup(t) {
       assert.equal(path, '/logins');
       return {logins: [structuredClone(data.row)], server_time: data.server};
     }},
-    submit: async (name, fields) => {
+    submit: async (name, fields, options) => {
       data.submissions++;
+      data.options = options;
+      data.onSubmit?.();
       if (data.error) throw {code: data.error, reasons: data.reasons};
       const job = {id: 'job', name, ...fields}; data.sent.push(job); return job;
     },
@@ -38,16 +40,17 @@ async function setup(t) {
   }, {context});
   const views = new SyntheticModule(['views', 'actions'], function () {
     this.setExport('views', {});
-    this.setExport('actions', {capture: ctx => { data.ctx = ctx; },
+    this.setExport('actions', {capture: ctx => { data.ctx = ctx; }, broken: async () => { throw data.thrown; },
       login: async (ctx, button) => { data.asked.push(button.dataset); }});
   }, {context});
   const ui = new SourceTextModule(await readFile(new URL('ui.js', root), 'utf8'), {context});
+  const busy = new SourceTextModule(await readFile(new URL('busy.js', root), 'utf8'), {context});
   const app = new SourceTextModule(await readFile(new URL('app.js', root), 'utf8'), {context});
-  await app.link(name => ({'./api.js': api, './views.js': views, './ui.js': ui}[name]));
+  await app.link(name => ({'./api.js': api, './views.js': views, './ui.js': ui, './busy.js': busy}[name]));
   await app.evaluate();
   Object.assign(app.namespace.state, {logins: [structuredClone(data.row)], sessionClock: {server: 1000, local: 5000}});
   dom.window.document.querySelector('[data-action="capture"]').click();
-  return Object.assign(data, app.namespace, {document: dom.window.document});
+  return Object.assign(data, app.namespace, {document: dom.window.document, busy: busy.namespace});
 }
 
 test('600-second boundary uses server time despite browser clock offset', async t => {
@@ -334,6 +337,8 @@ test('automatic extension is off until chosen, waits for the limit and sends the
   app.local = 5520; app.server = 1520;
   await app.extendLogin('selected');
   assert.deepEqual(app.sent.map(j => [j.name, j.login_id, j.secrets]), [['hana.session.extend', 'selected', undefined]]);
+  assert.equal(app.options.hold, false, 'nobody asked for it at the screen, so it does not hold the screen');
+  assert.equal(app.busy.blocking(), false);
   assert.equal(app.state.logins[0].session.idle_expires_at, 2120, 'the new limit comes from the server record');
   assert.equal(app.extensionState(app.state.logins[0]), 'on');
   await app.extendLogin('selected');
@@ -434,5 +439,68 @@ test('corporate and giro sessions are extended with their own job and need no st
     app.local = 5520; app.server = 1520;
     await app.extendLogin('selected');
     assert.equal(JSON.stringify(app.sent.map(j => [j.name, j.login_id, j.secrets])), JSON.stringify([[job, 'selected', undefined]]));
+  }
+});
+
+test('a job holds the screen from the press to its result and opens it before what follows', async t => {
+  const app = await setup(t);
+  app.state.capabilities = {features: [{jobs: [{name: 'hana.onesign.accounts', title: '하나은행 계좌 목록·잔액'}]}]};
+  const text = selector => app.document.querySelector(selector).textContent;
+  const seen = [];
+  app.onSubmit = () => seen.push(['접수 전', app.busy.blocking(), text('#busy-title'), text('#busy-status')]);
+  app.onFollow = () => seen.push(['실행 중', app.busy.blocking(), text('#busy-title')]);
+  const final = await app.ctx.run('hana.onesign.accounts', {login_id: 'selected'}, {
+    onDone: () => seen.push(['결과 처리', app.busy.blocking()])});
+  assert.equal(final.outcome, 'success');
+  assert.deepEqual(seen, [['접수 전', true, '하나은행 계좌 목록·잔액', '접수 중'], ['실행 중', true, '하나은행 계좌 목록·잔액'],
+    ['결과 처리', false]]);
+  assert.equal(app.options, undefined, 'a job asked for at the screen is sent with the default hold');
+  await new Promise(resolve => setTimeout(resolve, 5));
+  assert.equal(app.document.querySelector('#busy').hasAttribute('open'), false);
+});
+
+test('a refused submission opens the screen again and says why', async t => {
+  const app = await setup(t);
+  app.error = 'resource_busy';
+  assert.equal(await app.ctx.run('hana.onesign.accounts', {login_id: 'selected'}), null);
+  assert.equal(app.busy.blocking(), false);
+  assert.match(app.document.querySelector('#toast').textContent, /다른 작업이 실행 중이에요/);
+});
+
+test('a job a screen finds running is followed without holding; one the user just confirmed holds', async t => {
+  const app = await setup(t);
+  const job = {id: 'job', name: 'hana.transfer.prepare', title: '원화 이체', status: 'queued'};
+  app.sent.push(job);
+  const seen = [];
+  app.onFollow = () => seen.push(app.busy.blocking());
+  await app.ctx.track(job, {});
+  await app.ctx.track(job, {hold: true});
+  assert.deepEqual(seen, [false, true]);
+  assert.equal(app.busy.blocking(), false);
+});
+
+test('the result of a job whose screen was left meanwhile is still said', async t => {
+  const app = await setup(t);
+  let done = 0;
+  app.onFollow = () => { app.state.token += 1; };   // the screen was redrawn or left while the job ran
+  app.sent.push({id: 'job', name: 'hana.onesign.accounts', title: '하나은행 계좌 목록·잔액'});
+  await app.ctx.run('hana.onesign.accounts', {login_id: 'selected'}, {onDone: () => done++});
+  assert.equal(done, 0);
+  assert.equal(app.document.querySelector('#toast').textContent, 'hana.onesign.accounts: 성공');
+  assert.equal(app.busy.blocking(), false);
+});
+
+test('an error an action did not handle itself is said on the screen, and its button works again', async t => {
+  const app = await setup(t);
+  app.document.querySelector('#main').insertAdjacentHTML('beforeend', '<button data-action="broken">고장</button>');
+  const button = app.document.querySelector('[data-action="broken"]');
+  for (const [thrown, message] of [[{code: 'job_not_found'}, /job_not_found/], [new TypeError('synthetic'), /화면에서 처리하지 못했어요/]]) {
+    app.thrown = thrown;
+    button.click();
+    assert.equal(button.disabled, true);
+    await new Promise(resolve => setTimeout(resolve, 5));
+    assert.match(app.document.querySelector('#toast').textContent, message);
+    assert.match(app.document.querySelector('#main [role="alert"]').textContent, message);
+    assert.equal(button.disabled, false);
   }
 });

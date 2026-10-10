@@ -395,7 +395,7 @@ function confirmDialog(ctx, job) {
       if (transfer && !await ensureBankSession(ctx, job.login_id)) return;
       const secrets = await applyRemember(Object.fromEntries(new FormData(form).entries()), store);
       form.reset();
-      await api.post(`/jobs/${encodeURIComponent(job.id)}/confirm`, {confirmation: awaiting.digest, secrets});
+      await api.post(`/jobs/${encodeURIComponent(job.id)}/confirm`, {confirmation: awaiting.digest, secrets}, {label: job.title});
     } catch (error) {
       if (error.code === 'session_idle_expired') {
         clearInterval(timer);
@@ -408,7 +408,7 @@ function confirmDialog(ctx, job) {
     }
     clearInterval(timer);
     ui.closeDialog();
-    const final = await ctx.track({...job, status: 'queued'}, {panel: 'job-panel'});
+    const final = await ctx.track({...job, status: 'queued'}, {panel: 'job-panel', hold: true});
     if (!final) return;
     if (final.status === 'awaiting_input') {
       // Refused before anything was sent (a wrong store passphrase, say). What was prepared is

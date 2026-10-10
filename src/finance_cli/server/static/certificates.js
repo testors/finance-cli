@@ -133,7 +133,7 @@ async function start(form, name, input, secrets, onDone) {
   try {
     const job = await api.post('/jobs', {name, input, secrets, idempotency_key});
     form.reset();
-    ui.showDialog('인증서 작업 진행', '<p>서버에서 처리하고 있어요. 창을 닫아도 작업은 계속되며 다시 전송하지 않아요.</p><div id="certificate-progress"></div>' + button('작업 기록', 'data-view="activity"'));
+    ui.showDialog('인증서 작업 진행', `<p>${ui.working('서버에서 처리하고 있어요.')}</p><p class="field-help">창을 닫아도 작업은 계속되며 다시 전송하지 않아요.</p><div id="certificate-progress"></div>` + button('작업 기록', 'data-view="activity"'));
     const holder = document.querySelector('#certificate-progress');
     const final = await follow(job.id, value => { if (holder.isConnected) holder.innerHTML = ui.statusTags(value); });
     secrets = null;
@@ -239,12 +239,13 @@ async function submitWizard(form) {
     for (let i = 0; i < chain.length; i++) {
       if (!holder.isConnected) return;
       const current = chain[i];
-      holder.textContent = RUNNING[current];
+      holder.innerHTML = ui.working(RUNNING[current]);
       submitted = true;
+      // This dialog already holds the screen and says which step runs.
       const job = await api.post('/jobs', {name: 'hana.onesign.issue.' + current,
         input: {name, ...(current === 'init' ? {settings} : {}), ...(current === 'prepare-id' && idCard ? {id_card: idCard} : {}),
           ...(REMOTE.has(current) ? {send: true} : {})},
-        secrets: {...vault, ...privateInputs[current]}, idempotency_key: idempotencyKey()});
+        secrets: {...vault, ...privateInputs[current]}, idempotency_key: idempotencyKey()}, {hold: false});
       delete privateInputs[current];
       last = await follow(job.id, () => {});
       issued ||= last.result?.certificate_issued === true;
