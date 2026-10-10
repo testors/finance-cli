@@ -18,7 +18,7 @@ HANA_JOBS = {
     'hana.onesign.history.detail': ('live_verified', '하나인증서 거래 내역의 은행 상세 응답 확인. 상세 유형 전체를 검증한 것은 아님.'),
     'hana.onesign.inquiry.history': ('live_partial', PREFLIGHT_NOTE),
     'hana.onesign.security.query': ('live_partial', '하나인증서 이체한도 조회 성공 확인. 한도 예외·보안매체·OTP 세부 조회는 미확인.'),
-    'hana.onesign.session.extend': ('live_partial', '하나인증서 로그인 연장의 은행 수락과 연장만으로 세션이 유지되는 것을 저장된 CLI 세션에서 확인(2026-10-10; 요청 없이 590초 뒤 유지, 620초 뒤 종료). 이 웹 작업 자체의 실사용은 미확인.'),
+    'hana.onesign.session.extend': ('live_partial', '하나인증서 로그인 연장의 은행 수락과 연장만으로 세션이 유지되는 것을 저장된 CLI 세션에서 확인(2026-10-10; 요청 없이 595초 뒤 유지, 600초 뒤 종료). 이 웹 작업 자체의 실사용은 미확인.'),
     'hana.transfer.prepare': ('live_partial', TRANSFER_NOTE),
     'hana.transfer.reconcile': ('live_partial', '계좌·금액과 연결된 상세 후보 확인. 최종 이체 확정은 미확인.'),
 }
@@ -73,7 +73,7 @@ GIRO_JOBS = {
     'giro.payment.options': ('live_partial', '국세 상세·납부 가능 계좌 조회는 CLI에서 성공 확인. 웹 납부계좌 선택과 지방세·관세 상세는 미확인.'),
     'giro.payment.prepare': ('live_partial', '국세 단건 계좌 납부·추가 PIN 인증은 CLI에서 성공 확인. 웹 납부 실행과 지방세·관세 납부는 미확인.'),
     'giro.accounts.list': ('live_verified', '웹 등록계좌 목록·계좌 별칭 조회 성공 확인.'),
-    'giro.session.extend': ('live_partial', '이 연장 요청이 저장된 CLI 세션에서 수락되고 유휴 만료를 늦추는 것을 확인(요청 없이 290초 뒤 유지, 315초·320초 뒤 종료). 웹 작업 자체의 실사용은 미확인.'),
+    'giro.session.extend': ('live_partial', '이 연장 요청이 저장된 CLI 세션에서 수락되고 유휴 만료를 늦추는 것을 확인(요청 없이 295초 뒤 유지, 300초 뒤 종료). 웹 작업 자체의 실사용은 미확인.'),
     'giro.receipts.list': ('live_verified', '웹 납부내역 목록 조회 성공 확인. 관측한 기간·페이지 기준.'),
     'giro.receipts.detail': ('live_verified', '웹 납부내역 상세 조회 성공 확인. 관측한 납부내역 기준.'),
 }

@@ -81,6 +81,8 @@ class CorporateTests(HanaCase):
         self.assertTrue(job['result']['session_id'])
         self.assertNoLeak(job, passwords.PASSWORD, 'SYNTHETIC-MGMT', 'SYNTHETIC-CORPORATE')
         self.assertEqual(len(bank.calls), 6)
+        listed = next(r for r in self.get('/logins').json()['logins'] if r['id'] == self.connection['id'])
+        self.assertEqual(listed['session']['idle_seconds'], 590, 'no timeout was stated to this login')
         self.bank_exchange, self.cookies = self.exchange, [{'name': 'SYNTHETIC-CORPORATE'}]
         self.responses['accounts'] = {'outRec01': [{'ACCT_NO': '000101', 'PRD_NM': '합성 계좌', 'BAL': '001.00'}]}
         accounts = self.run_job(self.submit('hana.corporate.accounts', login_id=self.connection['id'])['id'])
@@ -93,6 +95,17 @@ class CorporateTests(HanaCase):
         self.assertEqual(self.post('/jobs', {'name': 'hana.accounts.list', 'login_id': self.connection['id']}).json()['error'], 'login_institution_mismatch')
         self.assertEqual(self.get('/credentials').json()['credentials'], [])
         self.assertNoLeak(self.get('/jobs').json(), passwords.PASSWORD, 'SYNTHETIC-MGMT')
+
+    def test_idpw_login_counts_the_session_timeout_the_bank_stated(self):
+        bank = passwords.Bank(self)
+        bank.modifiers['app-info'] = lambda v: {'data': {**v['data'], 'sessionTimeout': '10'}}
+        self.bank_exchange = bank
+        job = self.run_job(self.submit('hana.corporate.login-idpw', login_id=self.connection['id'])['id'],
+                           {'login_password': passwords.PASSWORD})
+        self.assertEqual(job['outcome'], 'success', job)
+        listed = next(r for r in self.get('/logins').json()['logins'] if r['id'] == self.connection['id'])
+        self.assertEqual(listed['session']['idle_seconds'], 600)
+        self.assertEqual(listed['session']['idle_expires_at'] - listed['session']['last_request_at'], 600)
 
     def test_explicit_login_rejection_and_success_with_followup_failure(self):
         bank = passwords.Bank(self)

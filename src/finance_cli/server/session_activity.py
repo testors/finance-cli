@@ -1,10 +1,13 @@
 """Local web idle policy for institution sessions; never changes an institution's session verdict."""
+import json
+
 from .db import now
 
 IDLE_SECONDS = 600
 # The longest idle gap each service was seen to keep a session through (live trials, 2026-10-10):
 # Giro kept 290 seconds and ended 315; Hana personal and corporate kept 590 and ended 620;
 # Hometax kept 1,790 and no longer knew the login after 1,830.
+# Hana corporate also states its timeout at login; a session that recorded it counts that instead.
 SERVICE_IDLE_SECONDS = {'giro': 290, 'hana': 590, 'hana_corporate': 590, 'hometax': 1790}
 EXPIRED = 'session_idle_expired'
 # A session of these services counts as logged out after its idle limit without a request, unless
@@ -14,13 +17,26 @@ SERVICES = ('hana', 'hana_corporate', 'giro', 'hometax')
 OBSERVED = ('hana',)
 
 
+def stated_seconds(session, service):
+    """The session timeout Hana corporate stated to this session's login, in seconds."""
+    if service != 'hana_corporate':
+        return None
+    try:
+        verdict = session['verdict']
+        verdict = json.loads(verdict) if isinstance(verdict, str) else verdict
+    except (KeyError, IndexError, ValueError):
+        return None
+    minutes = verdict.get('server_session_timeout_minutes') if isinstance(verdict, dict) else None
+    return minutes * 60 if type(minutes) is int and 1 <= minutes <= 1440 else None
+
+
 def metadata(con, session, service, at=None):
     row = con.execute('SELECT last_request_at FROM session_activity WHERE session_id=?',
                       (session['id'],)).fetchone()
     # Older sessions have no HTTP timestamp. Do not give them a fresh lifetime
     # on deployment or restart; their recorded creation time is the fallback.
     last = row['last_request_at'] if row else session['created_at']
-    limit = SERVICE_IDLE_SECONDS.get(service, IDLE_SECONDS)
+    limit = stated_seconds(session, service) or SERVICE_IDLE_SECONDS.get(service, IDLE_SECONDS)
     expires = last + limit
     return {'last_request_at': last, 'idle_seconds': limit, 'idle_expires_at': expires,
             'idle_expired': (now() if at is None else at) >= expires}

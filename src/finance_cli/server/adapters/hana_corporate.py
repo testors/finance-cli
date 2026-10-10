@@ -100,8 +100,10 @@ class Login(Corporate):
             with ctx.db.read() as con:
                 from .. import model
                 previous = model.current_session(con, ctx.login['id'])
+            stated = result.get('server_session_timeout_minutes')
             saved_id = ctx.register_session(store.session_path(name), move_pointer=True, name=name,
-                verdict={'accepted': True}, supersede=previous['id'] if previous else None)
+                verdict={'accepted': True, **({'server_session_timeout_minutes': stated} if type(stated) is int else {})},
+                supersede=previous['id'] if previous else None)
         return StepResult(**fields, result={'session_id': saved_id, 'login_method': self.methods[0],
                           'follow_up': pick(result.get('follow_up'), ('customer_guidance', 'app_fds', 'logout'))},
                           local=local(result))

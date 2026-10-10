@@ -207,6 +207,18 @@ def login_verdict(receipt, data):
     return None, 'login_unconfirmed'
 
 
+def session_timeout_minutes(value):
+    """APP_INFO's sessionTimeout as IntroVM reads it: a whole number of minutes, else no value."""
+    stated = value.get('sessionTimeout') if isinstance(value, dict) else None
+    if isinstance(stated, bool) or not isinstance(stated, (str, int)):
+        return None
+    stated = str(stated)
+    # Integer.parseInt failure and zero both leave the original on its own default.
+    if not (stated.isascii() and stated.isdecimal()) or not 1 <= int(stated) <= 1440:
+        return None
+    return int(stated)
+
+
 def check_bootstrap(stage, value):
     require(isinstance(value, dict), 'bootstrap_data_unavailable')
     if stage == 'emergency':

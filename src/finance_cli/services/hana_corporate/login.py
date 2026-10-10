@@ -54,9 +54,13 @@ def login(session, method, credential, *, send=False, inputs=None, exchange=send
             client.saved['login_method'] = method
             try:
                 for stage in ('emergency', 'app-info'):
-                    warnings = protocol.check_bootstrap(stage, client.request(stage, native=True, assessor=protocol.assess_data))
+                    data = client.request(stage, native=True, assessor=protocol.assess_data)
+                    warnings = protocol.check_bootstrap(stage, data)
                     if warnings:
                         result['stages'][-1]['warnings'] = warnings
+                    stated = protocol.session_timeout_minutes(data) if stage == 'app-info' else None
+                    if stated is not None:
+                        client.saved['server_session_timeout_minutes'] = result['server_session_timeout_minutes'] = stated
                 nonce = client.request('nonce', native=method == '2').get('delfinoNonce')
                 protocol.require(isinstance(nonce, str), 'nonce_unavailable')
                 if method == '2':

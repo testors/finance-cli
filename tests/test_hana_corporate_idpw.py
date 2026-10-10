@@ -335,6 +335,25 @@ class IdPasswordTests(unittest.TestCase):
         self.assertEqual(result['stages'][1]['warnings'], ['app_update_notice', 'app_notice'])
         self.assertNotIn('SYNTHETIC-PRIVATE', json.dumps(result))
 
+    def test_stated_session_timeout_is_kept_with_the_login_and_unusable_values_are_left_out(self):
+        for stated, kept in (('10', 10), (15, 15), ('0', None), ('', None), ('10.0', None), (10.5, None),
+                             (True, None), ('-1', None), ('1441', None), (None, None), ({}, None)):
+            with self.subTest(stated=stated):
+                self.assertEqual(protocol.session_timeout_minutes({'sessionTimeout': stated}), kept)
+        self.assertIsNone(protocol.session_timeout_minutes({}))
+        bank = self.prepare()
+        bank.modifiers['app-info'] = lambda v: {'data': {**v['data'], 'sessionTimeout': '10'}}
+        result = self.execute(bank)
+        self.assertTrue(result['accepted'], result)
+        self.assertEqual(result['server_session_timeout_minutes'], 10)
+        self.assertEqual(storage.read_json(store.session_path('company') / 'session.json')['server_session_timeout_minutes'], 10)
+
+    def test_login_without_a_stated_session_timeout_records_none(self):
+        result = self.execute(self.prepare())
+        self.assertTrue(result['accepted'], result)
+        self.assertNotIn('server_session_timeout_minutes', result)
+        self.assertNotIn('server_session_timeout_minutes', storage.read_json(store.session_path('company') / 'session.json'))
+
     def test_mandatory_update_preserves_original_stop(self):
         bank = self.prepare()
         bank.modifiers['app-info'] = lambda v: {'data': {'appInfo': {'minVerNo': '6.2.3', 'prsVerNo': '6.2.3'}}}

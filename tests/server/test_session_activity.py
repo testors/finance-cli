@@ -71,6 +71,25 @@ class SessionActivityTests(ServerCase):
                 with patch.object(session_activity, 'now', return_value=1000 + limit):
                     self.assertEqual(session_activity.refusal(con, self.adapter, self.sessions[0]), 'session_idle_expired')
 
+    def test_corporate_session_counts_the_timeout_its_login_was_told(self):
+        import json
+        told = {**self.sessions[0], 'verdict': json.dumps({'accepted': True, 'server_session_timeout_minutes': 10})}
+        with self.db.read() as con:
+            value = session_activity.metadata(con, told, 'hana_corporate', at=1599)
+            self.assertEqual((value['idle_seconds'], value['idle_expires_at'], value['idle_expired']), (600, 1600, False))
+            self.assertTrue(session_activity.metadata(con, told, 'hana_corporate', at=1600)['idle_expired'])
+            self.assertEqual(session_activity.metadata(con, {**told, 'verdict': {'server_session_timeout_minutes': 12}},
+                                                       'hana_corporate')['idle_seconds'], 720)
+            # Only Hana corporate states a timeout; the field means nothing for another service.
+            self.assertEqual(session_activity.metadata(con, told, 'hana')['idle_seconds'], 590)
+            for verdict in (None, '', 'not-json', '{}', json.dumps({'server_session_timeout_minutes': '10'}),
+                            json.dumps({'server_session_timeout_minutes': 0}), json.dumps({'server_session_timeout_minutes': True}),
+                            json.dumps({'server_session_timeout_minutes': 1441}), json.dumps([10])):
+                with self.subTest(verdict=verdict):
+                    self.assertEqual(session_activity.metadata(con, {**told, 'verdict': verdict}, 'hana_corporate')['idle_seconds'], 590)
+            legacy = {k: v for k, v in told.items() if k != 'verdict'}
+            self.assertEqual(session_activity.metadata(con, legacy, 'hana_corporate')['idle_seconds'], 590)
+
     def test_listing_can_leave_out_login_extension_jobs_before_its_limit(self):
         from finance_cli.server import jobs
         with self.db.write() as con:

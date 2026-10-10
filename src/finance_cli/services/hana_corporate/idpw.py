@@ -76,9 +76,13 @@ def login(session, identity, settings, *, send=False, inputs=None, exchange=send
             client.saved.update(login_method='1', user_id=identity, settings=settings)
             try:
                 for stage in ('emergency', 'app-info'):
-                    warnings = protocol.check_bootstrap(stage, client.request(stage, native=True, assessor=protocol.assess_data))
+                    data = client.request(stage, native=True, assessor=protocol.assess_data)
+                    warnings = protocol.check_bootstrap(stage, data)
                     if warnings:
                         result['stages'][-1]['warnings'] = warnings
+                    stated = protocol.session_timeout_minutes(data) if stage == 'app-info' else None
+                    if stated is not None:
+                        client.saved['server_session_timeout_minutes'] = result['server_session_timeout_minutes'] = stated
                 public = client.request('keypad-key', native=True, assessor=protocol.assess_data).get('publicKey')
                 protocol.require(isinstance(public, str) and bool(public), 'keypad_public_key_unavailable')
                 try:

@@ -213,6 +213,14 @@ class CorporateTests(unittest.TestCase):
         return login.login('company', method, 'shared' if method == '2' else 'shared-one', send=True,
                            inputs={'password': lambda: PASSWORD.encode() if method == '2' else PASSWORD, 'pin': lambda: PIN}, exchange=bank)
 
+    def test_certificate_login_keeps_the_stated_session_timeout(self):
+        bank = self.joint()
+        bank.modifiers['app-info'] = lambda v: {'data': {**v['data'], 'sessionTimeout': '10'}}
+        result = self.run_login(bank)
+        self.assertTrue(result['accepted'], result)
+        self.assertEqual(result['server_session_timeout_minutes'], 10)
+        self.assertEqual(storage.read_json(store.session_path('company') / 'session.json')['server_session_timeout_minutes'], 10)
+
     def test_joint_login_wire_cms_and_shared_store(self):
         bank = self.joint()
         before = (Registry().root / 'index.json').read_bytes()
@@ -223,6 +231,7 @@ class CorporateTests(unittest.TestCase):
         saved = storage.read_json(store.session_path('company') / 'session.json')
         self.assertEqual(saved['credential']['ref'], 'shared')
         self.assertEqual(saved['login_response']['USR_MGNT_NO'], 'SYNTHETIC-COMPANY')
+        self.assertNotIn('server_session_timeout_minutes', {**saved, **result})
         self.assertEqual((Registry().root / 'index.json').read_bytes(), before)
         for path in store.session_path('company').rglob('*'):
             if path.is_file():
