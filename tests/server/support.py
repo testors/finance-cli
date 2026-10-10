@@ -2,6 +2,7 @@
 import json
 import os
 from pathlib import Path
+import re
 import sys
 import tempfile
 import unittest
@@ -17,6 +18,9 @@ from finance_cli.server.app import create_app  # noqa: E402
 from finance_cli.server.db import Database  # noqa: E402
 
 ORIGIN = 'http://127.0.0.1:8740'
+# Timestamps and random identifiers the server generates. The digits of a short secret can occur
+# in them by chance, so they are blanked before a text is searched for one.
+GENERATED = re.compile(r'(?<![\w.])\d+\.\d+(?![\w.])|[0-9a-f]{16,}')
 
 
 class ServerCase(unittest.TestCase):
@@ -54,6 +58,13 @@ class ServerCase(unittest.TestCase):
 
     def get(self, path, **kwargs):
         return self.client.get('/api/v1' + path, **kwargs)
+
+    def assertAbsent(self, text, *needles):
+        """No needle occurs in the text outside the values the server generates."""
+        searched = GENERATED.sub(' ', text)
+        for needle in needles:
+            # A needle that reads as a generated value itself is searched in the text as it stands.
+            self.assertNotIn(needle, text if GENERATED.search(needle) else searched)
 
 
 def synthetic_certificate(alias='synthetic', password=b'Synthetic-Password!'):

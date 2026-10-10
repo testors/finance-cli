@@ -37,9 +37,7 @@ class HanaCase(ServerCase):
         return job
 
     def assertNoLeak(self, value, *needles):
-        text = json.dumps(value, ensure_ascii=False)
-        for needle in needles:
-            self.assertNotIn(needle, text)
+        self.assertAbsent(json.dumps(value, ensure_ascii=False), *needles)
 
     def register_account(self, login_id, job):
         ref = job['result']['accounts'][0]['ref']

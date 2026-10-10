@@ -190,15 +190,11 @@ class CertificateTests(ServerCase):
         self.assertNotIn(fixture.SOURCE, json.dumps(job['result']['account_diagnostic']))
 
     def assert_private(self, job, *needles):
-        text = json.dumps(job, ensure_ascii=False)
-        for value in needles:
-            self.assertNotIn(value, text)
+        self.assertAbsent(json.dumps(job, ensure_ascii=False), *needles)
         with self.db.read() as con:
             rows = con.execute('SELECT * FROM jobs').fetchall()
             events = con.execute('SELECT * FROM job_events').fetchall()
-        database = str([tuple(row) for row in [*rows, *events]])
-        for value in needles:
-            self.assertNotIn(value, database)
+        self.assertAbsent(str([tuple(row) for row in [*rows, *events]]), *needles)
 
     def test_options_authentication_and_allowlist(self):
         self.client.cookies.clear()

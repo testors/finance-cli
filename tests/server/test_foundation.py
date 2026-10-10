@@ -366,7 +366,7 @@ class WorkerTests(WorkerHelpers):
         text = json.dumps(dict(stored))
         with self.db.read() as con:
             text += json.dumps([dict(r) for r in con.execute('SELECT * FROM job_events')])
-        self.assertNotIn('123456', text)
+        self.assertAbsent(text, '123456')
         self.assertEqual(self.run_probe(adapter, job, {'pin': '1'})[0], 'skipped')
 
     def test_missing_step_secret_stops_before_work(self):
@@ -531,6 +531,24 @@ class ReviewRegressionTests(WorkerHelpers):
         from finance_cli.server.adapters.giro import BillsParse
         self.assertEqual(BillsParse().validate({'upload_id': 'up_x', 'tax_type': 'local', 'mode': 'due',
                                                 'within_days': 0})['within_days'], 0)
+
+
+class PrivacyCheckTests(ServerCase):
+    def test_short_secret_is_not_matched_in_generated_values_and_is_found_where_it_is_stored(self):
+        generated = json.dumps({'id': 'jb_c158200040d6049b', 'created_at': 1791628105.604931, 'at': 1791626049.5,
+                                'request_digest': 'f619b434b500a9b7e9e8aa32818955ddf73ac1906049eb4dbf2ba4b906cab640',
+                                'session': 'web3657d1c23d0bfd86049e1f5', 'version': '6.2.2', 'host': '127.0.0.1'})
+        self.assertEqual(generated.count('6049'), 5)
+        self.assertAbsent(generated, '6049')
+        self.assertAbsent(str((1791628105.604931, 'jb_c158200040d6049b', None)), '6049')
+        for stored in ({'local': {'account_password': '6049'}}, {'result': 'pw=6049'}, {'pin': 6049},
+                       {'note': '0006049'}, {'version': '6.2.6049'}):
+            with self.subTest(stored=stored), self.assertRaises(AssertionError):
+                self.assertAbsent(json.dumps(stored), '6049')
+        # A needle that reads as an identifier or a decimal itself is searched in the text as it stands.
+        for needle in ('c158200040d6049b', '1791628105.604931'):
+            with self.subTest(needle=needle), self.assertRaises(AssertionError):
+                self.assertAbsent(generated, needle)
 
 
 class GiroEndToEndTests(ServerCase):

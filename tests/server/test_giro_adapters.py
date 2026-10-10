@@ -91,10 +91,8 @@ class GiroTests(ServerCase):
         return self.run_job(job, fields)
 
     def assert_private(self, value):
-        text = json.dumps(value, ensure_ascii=False)
-        for secret in (BILL, ACCOUNT, 'SYNTHETIC-QUERY-KEY', 'SYNTHETIC-RECEIPT-KEY',
-                       'SYNTHETIC-DEVICE', 'SYNTHETIC-PAYER', '654321'):
-            self.assertNotIn(secret, text)
+        self.assertAbsent(json.dumps(value, ensure_ascii=False), BILL, ACCOUNT, 'SYNTHETIC-QUERY-KEY',
+                          'SYNTHETIC-RECEIPT-KEY', 'SYNTHETIC-DEVICE', 'SYNTHETIC-PAYER', '654321')
 
     def test_selection_confirmation_encryption_no_reinitialization_or_replay(self):
         job = self.prepare()
