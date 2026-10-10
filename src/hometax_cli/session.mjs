@@ -212,6 +212,18 @@ export class SavedSession {
   }
 }
 
+// The service has no extension request and states no expiry time. A session check it
+// accepts was observed to move the idle limit (live trial, 2026-10-10); a check it ends is
+// the original's own failure branch. Anything else leaves the extension unverified.
+export function extensionReport(branch) {
+  const accepted = branch === 'success' ? true : branch === 'failure' ? false : null;
+  return {method:'session-check', login_extension_accepted:accepted,
+    extension_effect:accepted ? 'idle_limit_reset_observed' : 'unverified',
+    session_ended:accepted === false,
+    session_current_validity:accepted ? 'valid' : accepted === false ? 'ended' : 'unverified',
+    server_expires_at:null, automatic_login:false, automatic_retry:false};
+}
+
 // Reusable live runtime for subsequent, separately implemented business flows.
 // Its window and cookie jar retain the server-verified session until close().
 export async function openSavedSession(config, dependencies = {}) {
@@ -278,6 +290,8 @@ export async function runSession(config, dependencies = {}) {
       }
     }
     record = runtime.record(config.operation);
+    // extend is the resume check itself, run once; the SSO token is not re-acquired.
+    if (config.operation === 'extend') Object.assign(record, extensionReport(record.branch));
     try {runtime.close();}
     catch (_) {record.warnings.push('DOM 정리 중 오류가 있습니다. 서비스 판정은 유지합니다.');}
     record.session_file_saved = true;
@@ -298,6 +312,7 @@ export async function runSession(config, dependencies = {}) {
   for (const warning of record.warnings) process.stderr.write('경고: ' + warning + '\n');
   return {scope:record.scope, operation:config.operation, branch:record.branch, reason:record.reason,
     session_binding_observed:record.session_binding_observed, refresh_started:record.refresh_started,
+    ...(config.operation === 'extend' ? extensionReport(record.branch) : {}),
     session_file:config.output, session_file_saved:record.session_file_saved};
 }
 

@@ -83,6 +83,8 @@ class CapabilityTests(ServerCase):
             self.assertEqual(adapters.get(name).verification, evidence['verification'])
         self.assertFalse(cli_capabilities()['services']['hana']['live_tested'])
         self.assertEqual(states['hometax-login']['verification'], 'live_untested')
+        self.assertEqual((states['hometax-extend']['placement'], states['hometax-extend']['verification']),
+                         ('settings', 'live_untested'))
         for feature in ('joint-issuance', 'financial-issuance', 'hana-otp-limit'):
             self.assertEqual(states[feature]['status'], 'planned')
         self.assertEqual(self.get('/jobs').json()['jobs'], [])

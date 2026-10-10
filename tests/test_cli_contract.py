@@ -182,6 +182,29 @@ class CliContractTests(unittest.TestCase):
                 self.assertTrue(config['timings'])
                 self.assertFalse((self.root / 'out.json').exists())
 
+    def test_hometax_session_extend_is_one_child_behind_the_send_gate(self):
+        args = ['hometax', 'session', 'extend', '--session', 'nonexistent', '--output', str(self.root / 'out.json')]
+        with patch('hometax_cli.__main__.subprocess.run') as child:
+            code, value, _ = self.result(args)
+        child.assert_not_called()
+        self.assertEqual((code, value['result']['error'], value['result']['network_used']), (2, 'send_required', False))
+        # The service did not state a verdict: exit 3 and an unverified extension, passed on as received.
+        summary = {'operation': 'extend', 'branch': 'no_action', 'reason': 'unobserved', 'method': 'session-check',
+                   'login_extension_accepted': None, 'extension_effect': 'unverified', 'session_ended': False,
+                   'session_current_validity': 'unverified', 'server_expires_at': None, 'automatic_retry': False}
+        with patch('hometax_cli.__main__.subprocess.run',
+                   return_value=subprocess.CompletedProcess([], 3, json.dumps(summary))) as child:
+            code, value, _ = self.result([*args, '--send'])
+        self.assertEqual((code, value['exit_code']), (3, 3))
+        self.assertEqual(value['result'], summary)
+        child.assert_called_once()
+        config = json.loads(child.call_args.kwargs['input'])
+        self.assertEqual((config['command'], config['operation']), ('session', 'extend'))
+        self.assertFalse((self.root / 'out.json').exists())
+        extension = self.result(['capabilities'])[1]['result']['services']['hometax']['session_extension']
+        self.assertEqual((extension['command'], extension['method'], extension['verification']),
+                         ('fin hometax session extend', 'session-check', 'implemented_live_untested'))
+
     def test_keyboard_interrupt_has_no_assumed_business_verdict(self):
         with patch('finance_cli.services.hana.cli.dispatch', side_effect=KeyboardInterrupt):
             code, value, _ = self.result(['hana', 'accounts', '--session', 'synthetic'])

@@ -301,7 +301,10 @@ export async function extendLogin(id) {
     }
     const final = await follow(job.id, null).catch(() => null);
     await refreshLogins().catch(() => {});
-    if (final?.outcome !== 'success') stopExtension(row, final ? ui.OUTCOME[final.outcome]?.[0] || final.status : '결과 미확인');
+    // A Hometax command saves its session under a new id: stop the session the login points to now.
+    const current = login(id);
+    if (final?.outcome !== 'success')
+      stopExtension(current?.current_session_id ? current : row, final ? ui.OUTCOME[final.outcome]?.[0] || final.status : '결과 미확인');
   } finally {
     extending.delete(id);
     scheduleExtensions();

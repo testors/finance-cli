@@ -25,6 +25,22 @@ def session_record(branch='success', **extra):
             'branch': branch, **extra}
 
 
+EXTENSION = ('login_extension_accepted', 'extension_effect', 'session_ended', 'server_expires_at',
+             'session_current_validity')
+
+
+def extend_record(branch, reason):
+    """What session.mjs saves for extend: its own verdict at the top level and the extension report."""
+    accepted = {'success': True, 'failure': False}.get(branch)
+    record = session_record(branch, scope='browserless_saved_session', operation='extend', reason=reason,
+                            refresh_started=False, method='session-check', login_extension_accepted=accepted,
+                            extension_effect='idle_limit_reset_observed' if accepted else 'unverified',
+                            session_ended=accepted is False, server_expires_at=None, automatic_retry=False,
+                            session_current_validity={True: 'valid', False: 'ended'}.get(accepted, 'unverified'))
+    del record['session_validation']
+    return record
+
+
 def tax_record(*, switched=False, **extra):
     checks = [{'operation': 'account.show', 'branch': 'success', 'reason': 'verified_session'}]
     if switched:
@@ -57,7 +73,7 @@ class FakeNode:
         elif record is not False:
             output.write_text(json.dumps(record))
             output.chmod(0o600)
-        return {k: record[k] for k in ('branch', 'reason', 'target_verified', 'target_check', 'timings')
+        return {k: record[k] for k in ('branch', 'reason', 'target_verified', 'target_check', 'timings', *EXTENSION)
                 if isinstance(record, dict) and k in record}, None
 
 
@@ -128,7 +144,7 @@ class HometaxAdapterTests(ServerCase):
         with patch.object(session_activity, 'now', return_value=4579):
             self.assertEqual(row()['readiness'], 'login_required')
             self.assertTrue(row()['session']['idle_expired'])
-            for name in ('hometax.session.refresh', 'hometax.targets.discover'):
+            for name in ('hometax.session.refresh', 'hometax.session.extend', 'hometax.targets.discover'):
                 response = self.post('/jobs', {'name': name, 'login_id': self.login['id']})
                 self.assertEqual(response.status_code, 409, response.text)
                 self.assertEqual(response.json()['error'], 'session_idle_expired')
@@ -150,6 +166,70 @@ class HometaxAdapterTests(ServerCase):
         self.assertEqual(result['outcome'], 'not_started', result)
         self.assertEqual(result['local']['stopped'], 'session_idle_expired')
         self.assertEqual(node.calls, [])
+
+    def login_row(self):
+        return next(r for r in self.get('/logins').json()['logins'] if r['id'] == self.login['id'])
+
+    def test_extension_is_one_session_check_whose_reservation_moves_the_idle_deadline(self):
+        with patch.object(session_activity, 'now', return_value=1000):
+            logged_in = self.login_session()
+        with patch.object(session_activity, 'now', return_value=2700):
+            job = self.submit('hometax.session.extend')
+            node = FakeNode({'session.mjs': extend_record('success', 'tokenOK')})
+            result = self.run_job(job['id'], node=node)
+            self.assertEqual(result['outcome'], 'success', result)
+            self.assertEqual([(key, c['command'], c['operation']) for key, c in node.calls],
+                             [('session.mjs', 'session', 'extend')], 'one check, no token refresh and no retry')
+            self.assertEqual(result['service_verdict'], {'branch': 'success', 'reason': 'tokenOK', 'refresh_started': False})
+            saved = result['result'].pop('session_id')
+            self.assertNotEqual(saved, logged_in['result']['session_id'])
+            self.assertEqual(result['result'], {'login_extension_accepted': True, 'session_ended': False,
+                                                'extension_effect': 'idle_limit_reset_observed',
+                                                'server_expires_at': None, 'session_current_validity': 'valid'})
+            row = self.login_row()
+            self.assertEqual((row['current_session_id'], row['readiness']), (saved, 'ready'))
+            self.assertEqual(row['session']['idle_expires_at'], 4490)
+            self.assertNoSecrets(result)
+        hidden = self.get('/jobs?hide=session_extend').json()['jobs']
+        self.assertNotIn(job['id'], [j['id'] for j in hidden])
+
+    def test_extension_keeps_the_check_verdict_for_an_ended_or_unobserved_session(self):
+        self.login_session()
+        ended = self.run_job(self.submit('hometax.session.extend')['id'],
+                             node=FakeNode({'session.mjs': extend_record('failure', 'no_sso_token')}))
+        self.assertEqual(ended['outcome'], 'rejected', ended)
+        self.assertEqual(ended['result'], {'login_extension_accepted': False, 'extension_effect': 'unverified',
+                                           'session_ended': True, 'server_expires_at': None,
+                                           'session_current_validity': 'ended', 'session_id': None})
+        self.assertEqual(self.login_row()['readiness'], 'login_required')
+        refused = self.post('/jobs', {'name': 'hometax.session.extend', 'login_id': self.login['id']})
+        self.assertEqual(refused.status_code, 409, refused.text)
+
+        self.login_session()
+        unobserved = self.run_job(self.submit('hometax.session.extend')['id'],
+                                  node=FakeNode({'session.mjs': extend_record('no_action', 'unobserved')}))
+        self.assertEqual(unobserved['outcome'], 'unknown', unobserved)
+        self.assertIsNone(unobserved['result']['login_extension_accepted'])
+        self.assertFalse(unobserved['result']['session_ended'])
+        self.assertEqual(unobserved['result']['session_current_validity'], 'unverified')
+        # No explicit refusal from the service: the session is not declared ended.
+        self.assertEqual(self.login_row()['session']['state'], 'usable')
+
+    def test_extension_accepted_by_the_service_survives_an_unsaved_session_file(self):
+        self.login_session()
+        job = self.submit('hometax.session.extend')
+
+        def node(script, config):
+            return {'branch': 'success', 'reason': 'tokenOK', 'login_extension_accepted': True,
+                    'extension_effect': 'idle_limit_reset_observed', 'session_ended': False,
+                    'server_expires_at': None, 'session_current_validity': 'valid', 'session_file_saved': False}, None
+
+        result = self.run_job(job['id'], node=node)
+        self.assertEqual((result['outcome'], result['local']['session_saved']), ('success', False))
+        self.assertEqual(result['service_verdict']['source'], 'stdout_summary')
+        self.assertTrue(result['result']['login_extension_accepted'])
+        self.assertIsNone(result['result']['session_id'])
+        self.assertEqual(self.login_row()['session']['state'], 'stale')
 
     def register(self, kind):
         discover, _ = jobs.submit(self.db, name='hometax.targets.discover', origin='web:test', login_id=self.login['id'])
@@ -318,6 +398,9 @@ class HometaxAdapterTests(ServerCase):
         self.patch_(f"/logins/{self.login['id']}", {'expected_revision': 1, 'signing': {
             'invoice_sign': {'method': 'joint_certificate', 'credential': 'invoice-cert'}}})
         refused = self.post('/jobs', {'name': 'hometax.tax.dues', 'login_id': self.login['id'], 'target_id': target['id']})
+        self.assertEqual(refused.json()['error'], 'session_stale')
+        # Only the session check re-validates a stale session; the extension does not stand in for it.
+        refused = self.post('/jobs', {'name': 'hometax.session.extend', 'login_id': self.login['id']})
         self.assertEqual(refused.json()['error'], 'session_stale')
         check = self.submit('hometax.session.refresh', input={'mode': 'resume'})
         node = FakeNode({'session.mjs': {**session_record(), 'session_validation': None}})

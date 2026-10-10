@@ -413,11 +413,11 @@ test('idle limits cover corporate, giro and hometax sessions, and allow a replac
   }
 });
 
-test('hometax activity refreshes the countdown without automatic session refresh', async t => {
+test('hometax activity refreshes the countdown and a session refresh is never the automatic extension', async t => {
   const app = await nearLimit(t, {institution: 'hometax'});
   app.state.capabilities.jobs.push('hometax.session.refresh');
   app.setAutoExtend(true);
-  assert.equal(app.extensionState(app.state.logins[0]), 'unsupported');
+  assert.equal(app.extensionState(app.state.logins[0]), 'unsupported', 'only the extension job extends');
   await app.extendLogin('selected');
   assert.equal(app.submissions, 0);
   await app.ctx.run('hometax.tax.dues', {login_id: 'selected'});
@@ -428,9 +428,10 @@ test('hometax activity refreshes the countdown without automatic session refresh
   assert.equal(app.asked.length, 0);
 });
 
-test('corporate and giro sessions are extended with their own job and need no store passphrase', async t => {
+test('corporate, giro and hometax sessions are extended with their own job and need no store passphrase', async t => {
   for (const [change, job] of [[{institution: 'hana_corporate', method: 'onesign', credential: {ref: 'store'}}, 'hana.corporate.session.extend'],
-    [{institution: 'giro', method: 'pin'}, 'giro.session.extend']]) {
+    [{institution: 'giro', method: 'pin'}, 'giro.session.extend'],
+    [{institution: 'hometax', method: 'joint_certificate'}, 'hometax.session.extend']]) {
     const app = await nearLimit(t, change);
     app.state.capabilities = {jobs: [job]};
     app.local = 5000; app.server = 1000;
@@ -503,4 +504,23 @@ test('an error an action did not handle itself is said on the screen, and its bu
     assert.match(app.document.querySelector('#main [role="alert"]').textContent, message);
     assert.equal(button.disabled, false);
   }
+});
+
+test('a hometax extension without a verdict stops for the session its command saved under a new id', async t => {
+  const app = await nearLimit(t, {institution: 'hometax'});
+  app.state.capabilities = {jobs: ['hometax.session.extend']};
+  app.local = 5000; app.server = 1000;
+  app.setAutoExtend(true);
+  app.local = 5520; app.server = 1520;
+  app.outcome = 'unknown';
+  // The check was sent: its reservation moved the limit and its output became the current session.
+  app.onFollow = () => Object.assign(app.row, {current_session_id: 'saved', session: {last_request_at: 1520, idle_expires_at: 3310}});
+  await app.extendLogin('selected');
+  assert.deepEqual(app.sent.map(j => j.name), ['hometax.session.extend']);
+  assert.equal(app.state.logins[0].current_session_id, 'saved');
+  assert.equal(app.extensionState(app.state.logins[0]), 'stopped');
+  assert.match(app.document.querySelector('#toast').textContent, /자동 로그인 연장이 되지 않았어요 \(결과 미확인\)/);
+  app.local = 7230; app.server = 3230;
+  await app.extendLogin('selected');
+  assert.equal(app.sent.length, 1, 'the saved session is not checked again near its own limit');
 });

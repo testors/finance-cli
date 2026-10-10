@@ -922,7 +922,7 @@ test('an idle hometax connection shows logout and offers login instead of discov
   assert.match(main.textContent, /로그아웃됨/);
   assert.equal(main.querySelector('[data-action="login"]').textContent, '로그인');
   assert.equal(main.querySelector('[data-action="discover"]'), null);
-  assert.equal(main.querySelector('[data-action="auto-extend-toggle"]'), null);
+  assert.match(main.querySelector('.connection-settings').textContent, /로그인 자동 연장꺼짐켜기/, 'the browser switch, as on the other connections');
   assert.equal(ui.calls.length, 0);
 });
 
@@ -945,7 +945,7 @@ test('automatic login extension is one switch for the browser and says what it d
       assert.match(main.textContent, text);
     }
   }
-  for (const [institution, method] of [['hana_corporate', 'id_password'], ['giro', 'pin']]) {
+  for (const [institution, method] of [['hana_corporate', 'id_password'], ['giro', 'pin'], ['hometax', 'joint_certificate']]) {
     Object.assign(ui.row, {institution, method});
     ui.state.extension = 'on';
     main.innerHTML = await ui.views.settings(ui.ctx);

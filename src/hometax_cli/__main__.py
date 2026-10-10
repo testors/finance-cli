@@ -73,7 +73,8 @@ def main(argv=None) -> int:
     session_parser = commands.add_parser("session", help="저장한 Node 세션 재사용·SSO 재확인; 실제 접속")
     session_commands = session_parser.add_subparsers(dest="operation", required=True)
     for operation, description in (("resume", "저장 쿠키와 storage 복구·서비스 세션 확인"),
-                                   ("refresh", "복구 후 서비스 SSO 토큰 재취득·재바인딩")):
+                                   ("refresh", "복구 후 서비스 SSO 토큰 재취득·재바인딩"),
+                                   ("extend", "세션 확인 1회로 로그인 연장; 토큰 재취득 없음")):
         session_command = session_commands.add_parser(operation, help=description)
         session_command.add_argument("--session", required=True, help="Node 로그인 또는 이전 session 명령의 JSON")
         session_command.add_argument("--output", required=True, help="갱신 상태를 저장할 새 파일; 기존 파일 덮어쓰기 없음")

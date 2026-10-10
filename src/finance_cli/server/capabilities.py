@@ -35,6 +35,7 @@ FEATURES = (
     ('banking', 'hana-tools', '인증 순서·서명·전문 인코딩 도구', 'local', ()),
     ('banking', 'hana-otp-limit', 'OTP 발급·한도 변경', 'planned', ()),
     ('tax', 'hometax-login', '인증서 로그인·세션 확인·갱신', 'settings', ('hometax.login', 'hometax.session.refresh')),
+    ('tax', 'hometax-extend', '로그인 연장', 'settings', ('hometax.session.extend',)),
     ('tax', 'hometax-targets', '사용자·사업장 확인·등록', 'settings', ('hometax.targets.discover',)),
     ('tax', 'hometax-tax', '납부할 세액·납부 내역·환급금·전자고지', 'work',
      ('hometax.tax.dues', 'hometax.tax.payments', 'hometax.tax.refunds', 'hometax.tax.notices')),

@@ -378,6 +378,25 @@ class SessionRefresh(HometaxAdapter):
                           result={'session_id': chain.session_id if chain.path else None})
 
 
+class SessionExtend(HometaxAdapter):
+    """One session check as the login extension. The service has no extension request and states
+    no expiry; the outcome is that check's verdict and a session it ends is registered as expired."""
+    name = 'hometax.session.extend'
+    title = '홈택스 로그인 연장'
+
+    def run(self, ctx, step):
+        check_runtime()
+        chain = Chain(ctx)
+        record, summary, output_error = chain.run('session.mjs', {'command': 'session', 'operation': 'extend',
+                                                                   'timeout': 60.0})
+        verdict = verdict_of(record, summary)
+        report = pick(record if isinstance(record, dict) else summary,
+                      ('login_extension_accepted', 'extension_effect', 'session_ended', 'server_expires_at',
+                       'session_current_validity')) or {}
+        return StepResult(service_verdict=verdict, outcome=outcome_of(verdict), local=chain.local(output_error),
+                          result={**report, 'session_id': chain.session_id if chain.path else None})
+
+
 class DiscoverTargets(HometaxAdapter):
     """Verification job: candidates come from the service, never from the browser."""
     name = 'hometax.targets.discover'
@@ -1016,6 +1035,6 @@ class InvoiceAmend(InvoiceDraft):
         return config
 
 
-ADAPTERS = (Login(), SessionRefresh(), DiscoverTargets(), TaxDues(), TaxPayments(), TaxRefunds(), TaxNotices(),
-            ReturnsList(), ReturnsStatus(), ReturnsForms(), ReturnsReceipt(), ReturnsDocument(), ReportResave(),
-            InvoiceList(), InvoiceDetail(), InvoicePrepare(), InvoiceAmend())
+ADAPTERS = (Login(), SessionRefresh(), SessionExtend(), DiscoverTargets(), TaxDues(), TaxPayments(), TaxRefunds(),
+            TaxNotices(), ReturnsList(), ReturnsStatus(), ReturnsForms(), ReturnsReceipt(), ReturnsDocument(),
+            ReportResave(), InvoiceList(), InvoiceDetail(), InvoicePrepare(), InvoiceAmend())

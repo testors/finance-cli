@@ -667,7 +667,7 @@ function signingLines(row) {
     lines.push(['앱 등록 정보', reg.app_profile?.configured && reg.login_input?.configured ? '연결됨' : '서버에서 연결 필요', null]);
   }
   // One switch for this browser; each connection with an idle limit shows what it does for its own session.
-  if (['hana', 'hana_corporate', 'giro'].includes(row.institution)) lines.push(['로그인 자동 연장', state.autoExtend ? extensionNote(row) || '켜짐 · 로그인해 있는 동안 만료 전에 연장' : '꺼짐', 'auto-extend-toggle']);
+  if (['hana', 'hana_corporate', 'giro', 'hometax'].includes(row.institution)) lines.push(['로그인 자동 연장', state.autoExtend ? extensionNote(row) || '켜짐 · 로그인해 있는 동안 만료 전에 연장' : '꺼짐', 'auto-extend-toggle']);
   return lines.map(([label, value, action, store]) => `<div class="connection-setting"><span>${esc(label)}</span><strong>${value ? esc(value) : '<em>미지정</em>'}</strong>${action ? `<button type="button" class="text-button" data-action="${action}" data-login="${esc(row.id)}" ${store ? `data-store="${esc(store)}"` : ''}>${action === 'unlock-vault' ? '잠금 해제' : action === 'lock-vault' ? '잠그기' : action === 'auto-extend-toggle' ? (state.autoExtend ? '끄기' : '켜기') : '변경'}</button>` : ''}</div>`).join('');
 }
 
@@ -1105,7 +1105,7 @@ export const actions = {
   'auto-extend-toggle': async () => {
     setAutoExtend(!state.autoExtend);
     ui.toast(state.autoExtend ? '자동 로그인 연장을 켰어요. 이 브라우저에서 앱을 열어 둔 동안 만료 전에 연장해요.'
-      : '자동 로그인 연장을 껐어요. 세션은 마지막 요청 뒤 유휴 제한(지로 4분 50초, 그 외 10분)이 지나면 로그아웃 처리돼요.');
+      : '자동 로그인 연장을 껐어요. 세션은 마지막 요청 뒤 유휴 제한(지로 4분 50초, 홈택스 29분 50초, 그 외 10분)이 지나면 로그아웃 처리돼요.');
     await render();
   },
   'cancel-job': async (ctx, button) => {
