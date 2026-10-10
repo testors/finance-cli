@@ -243,7 +243,22 @@ fin hana inquiry history --session main --input query.json --previous <이전 �
 fin hana inquiry detail  --session main --input query.json --previous <history 기록 이름> --row 1
 ```
 
-**일반 원화 계좌 거래내역 (`history`)** — 서버 시각과 계좌 정보를 먼저 조회한 뒤 페이지를 넘깁니다. 조건 파일에 `direction`(`all`, `deposit`, `withdrawal`), `order`(`desc`, `asc`), `search`(25자 이내)를 더할 수 있습니다.
+**일반 원화 계좌 거래내역 통합 조회 (`history`)** — 계좌와 기간을 지정하면 서버 기준일로 최근·과거 요청을 선택하고, 필요한 구간과 다음 페이지를 자동으로 조회해 `transactions`로 합칩니다.
+
+```sh
+fin hana history --name main --account ACCOUNT --start 2024-09-01 --end 2025-02-28 --send
+fin hana history --session main --account ACCOUNT --start 2024-09-01 --end 2025-02-28 --send
+```
+
+`--name`은 하나인증서 저장소이며 기존 서명 로그인 세션이 하나면 자동 선택합니다. 여러 세션이 있으면 `--session`도 지정합니다. `--name` 없이 `--session`만 지정하면 공동인증서 세션을 사용합니다. 해당 로그인에서 이미 조회한 계좌를 선택합니다. 하나인증서 저장소 암호는 숨김 입력이며 `--password-stdin`으로 한 줄을 받을 수도 있습니다. `--send`가 없으면 저장소를 열거나 암호를 묻지 않습니다.
+
+기간을 생략하면 오늘 포함 최근 7일, 순서는 최신순입니다. `--order oldest`, `--direction deposit|withdrawal`, `--search 값`을 사용할 수 있습니다. 개인 조회 기간은 3년 미만입니다. 서버 기준일의 2년 전 당일까지 과거, 다음 날부터 최근으로 분리하며 겹치지 않는 구간을 정렬 순서대로 이어 붙입니다. 동일한 행도 임의로 제거하지 않습니다.
+
+`complete: true`는 모든 구간·페이지를 끝냈다는 뜻입니다. 중간 실패·커서 이상·저장 오류가 발생하면 이미 받은 `transactions`와 확인한 `accepted`를 보존하고 `complete: false`와 단계별 `stages`를 반환합니다. `accepted: true`만으로 전체 기간 조회 완료를 판단하지 않습니다. 자동 재시도·재로그인은 하지 않습니다. 한 시점의 스냅샷을 보장하지는 않습니다.
+
+기업은 `fin hana corporate history --account ACCOUNT --start ... --end ... --send`를 사용합니다. 같은 방식으로 `transactions`와 `complete`를 반환하며, 기업의 기간 제한(최대 365일 차이)과 저장 구간 규칙을 따릅니다.
+
+**단계별 거래내역 조회 (기존 명령)** — 서버 시각과 계좌 정보를 먼저 조회한 뒤 페이지를 넘깁니다. 조건 파일에 `direction`(`all`, `deposit`, `withdrawal`), `order`(`desc`, `asc`), `search`(25자 이내)를 더할 수 있습니다.
 
 ```sh
 fin hana history clock   --session main --input query.json --send

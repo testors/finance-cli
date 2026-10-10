@@ -100,9 +100,17 @@ def build():
     item.add_argument('--snapshot')
     item.add_argument('--send', action='store_true')
 
-    item = sub.add_parser('history', help='일반 원화 계좌 거래내역: clock→account→page→detail·export')
-    item.add_argument('stage', choices=('clock', 'account', 'page', 'detail', 'export'))
-    item.add_argument('--session', required=True)
+    item = sub.add_parser('history', help='기간별 거래내역 통합 조회; 최근·과거와 다음 페이지 자동 수집')
+    item.add_argument('stage', nargs='?', default='list', choices=('list', 'clock', 'account', 'page', 'detail', 'export'))
+    item.add_argument('--session', help='공동인증서 세션 또는 하나인증서 세션 선택')
+    item.add_argument('--name', help='통합 조회: 하나인증서 저장소 이름')
+    item.add_argument('--account', help='통합 조회: 계좌번호')
+    item.add_argument('--start', help='조회 시작일 YYYY-MM-DD 또는 YYYYMMDD')
+    item.add_argument('--end', help='조회 종료일; 기본 오늘')
+    item.add_argument('--order', choices=('latest', 'oldest'), default='latest')
+    item.add_argument('--direction', choices=('all', 'deposit', 'withdrawal'), default='all')
+    item.add_argument('--search', default='')
+    item.add_argument('--password-stdin', action='store_true', help='하나인증서 저장소 암호 한 줄')
     item.add_argument('--input', type=Path)
     item.add_argument('--clock', help='서버 시각 기록 이름')
     item.add_argument('--account-info', help='계좌 정보 기록 이름')
@@ -207,6 +215,11 @@ def dispatch(args):
                            send=args.send, snapshot=args.snapshot)
     if args.operation == 'history':
         from . import ledger
+        if args.stage == 'list':
+            from . import ledger_query
+            return ledger_query.dispatch(args)
+        if not args.session:
+            raise ValueError('session_required')
         if args.stage == 'export':
             if args.send or not args.previous or not args.output:
                 raise ValueError('offline_export_needs_previous_and_output')

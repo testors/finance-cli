@@ -18,7 +18,7 @@ def capabilities():
         'hana': {'offline': ['protocol', 'shared-certificate-login-signature', 'onesign-vault-bundle',
                             'user-package-settings-extraction', 'onesign-identity-initialization', 'onesign-identity-removal', 'onesign-identity-rename', 'personal-transfer-csv-check'],
                  'live': ['app-authentication', 'joint-certificate-login', 'accounts', 'transfer-history-query',
-                          'ledger-history', 'security-inquiry', 'login-extension', 'onesign-new-issuance',
+                          'ledger-history', 'automatic-history-pagination', 'security-inquiry', 'login-extension', 'onesign-new-issuance',
                           'onesign-signed-login', 'onesign-login-extension', 'onesign-krw-transfer', 'onesign-krw-multi-transfer'],
                  'multi_transfer': {'command': 'fin hana transfer prepare-batch', 'max_items': 15,
                                     'withdrawal_accounts': 1, 'verification': 'implemented_live_untested',

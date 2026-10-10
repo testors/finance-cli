@@ -259,6 +259,85 @@ class HanaSessions(unittest.TestCase):
                                     '--account-info', info, '--previous', page, '--row', '1')
         self.assertEqual((code, detail['network_used']), (0, False))
 
+    def unified_history(self, **options):
+        args = ['history', '--session', 's1', '--account', ACCOUNT,
+                '--start', options.pop('start', '20241001'), '--end', options.pop('end', '20241020')]
+        for key, value in options.items():
+            args.extend(['--' + key, value])
+        return self.run_cli(*args, '--send')
+
+    def unified_setup(self):
+        self.logged_in()
+        self.run_cli('accounts', '--session', 's1', '--send')
+        self.bank.overrides['/retrieveCurrDtm'] = business({'dt': '20261010', 'tm': '120000', 'bussDdYn': 'Y'})
+        self.bank.overrides['/retrievetxnInoAmtPst'] = business({
+            'r01': [{'trscDt': '20241010', 'trscAmt': 5}], 'r01Rowcount': 1})
+
+    def test_unified_history_routes_and_merges_both_orders(self):
+        self.unified_setup()
+        for order, expected in [('latest', ['recent', 'past']), ('oldest', ['past', 'recent'])]:
+            with self.subTest(order=order):
+                before = len(self.bank.requests)
+                code, result = self.unified_history(order=order)
+                self.assertEqual((code, result['complete'], result['accepted']), (0, True, True), result)
+                self.assertEqual([row['kind'] for row in result['transactions']], expected)
+                calls = self.bank.requests[before:]
+                self.assertEqual(len(calls), 4)
+                bodies = {r[1].split('/')[-1]: json.loads(r[3]) for r in calls}
+                self.assertEqual(bodies['retrievetxnNrstTrsc']['inqStrDt'], '20241011')
+                self.assertEqual(bodies['retrievetxnInoAmtPst']['inqEndDt'], '20241010')
+                self.assertNotIn('USER-TOKEN', json.dumps(result))
+
+    def test_unified_history_only_requests_needed_period(self):
+        self.unified_setup()
+        for start, end, kind in [('20241011', '20241020', 'recent'), ('20241001', '20241010', 'past')]:
+            before = len(self.bank.requests)
+            _, result = self.unified_history(start=start, end=end)
+            self.assertTrue(result['complete'], result)
+            self.assertEqual([p['kind'] for p in result['pages']], [kind])
+            self.assertEqual(len(self.bank.requests) - before, 3)
+
+    def test_unified_history_keeps_rows_after_rejection_and_storage_error(self):
+        self.unified_setup()
+        self.bank.overrides['/retrievetxnInoAmtPst'] = (500, {}, b'{}')
+        _, result = self.unified_history()
+        self.assertTrue(result['accepted'])
+        self.assertFalse(result['complete'])
+        self.assertEqual(len(result['transactions']), 1)
+        self.assertFalse(result['stages'][-1]['accepted'])
+        original = store.write_new
+        def broken(path, value):
+            if path.name == 'body.bin' and 'account-history-recent-' in str(path):
+                raise OSError('SYNTHETIC-SECRET')
+            return original(path, value)
+        with patch.object(store, 'write_new', side_effect=broken):
+            _, result = self.unified_history(start='20241011')
+        self.assertTrue(result['accepted'], result)
+        self.assertFalse(result['complete'])
+        self.assertNotIn('SYNTHETIC-SECRET', json.dumps(result))
+
+    def test_unified_history_repeated_cursor_stops_preserving_duplicates(self):
+        self.unified_setup()
+        self.bank.overrides['/retrievetxnNrstTrsc'] = business({
+            'grid1': [{'trscDt': '20241012', 'trscAmt': 10}] * 20,
+            'recNcnt1': 20, 'nextTrscYn1': 'Y', 'trscSeqNo1': 9})
+        before = len(self.bank.requests)
+        _, result = self.unified_history()
+        self.assertTrue(result['accepted'], result)
+        self.assertFalse(result['complete'])
+        self.assertEqual(len(result['transactions']), 40)
+        self.assertEqual(len(self.bank.requests) - before, 4)
+        self.assertIn('continuation_cursor_requires_review', result['warnings'])
+
+    def test_unified_history_plan_does_not_open_store_or_prompt(self):
+        from finance_cli.services.hana import onesign_cli
+        with patch.object(store, 'session_path', side_effect=AssertionError('store accessed')), \
+             patch.object(onesign_cli, 'password', side_effect=AssertionError('secret requested')):
+            code, result = self.run_cli('history', '--name', 'missing', '--account', ACCOUNT, versioned=True)
+        self.assertEqual(code, 0)
+        self.assertFalse(result['result']['network_used'])
+        self.assertEqual(self.bank.requests, [])
+
     def test_security_query_is_two_step_and_reports_from_saved_bytes(self):
         self.logged_in()
         code, result = self.run_cli('security', 'limits', '--session', 's1', '--run', 'limits-1')

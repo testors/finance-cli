@@ -280,6 +280,35 @@ class OneSignPathTests(HanaCase):
         self.signed_in()
         return self.account_target()
 
+    def test_unified_cli_uses_encrypted_session_and_collects_all_pages(self):
+        from finance_cli.services.hana import cli, onesign_cli, ledger_protocol as lp
+        self.query_setup()
+        self.services.override[lp.PATHS['clock']] = {'dt': '20261010', 'tm': '120000', 'bussDdYn': 'Y'}
+        self.services.override[lp.PATHS['past']] = {'r01': [], 'r01Rowcount': 0}
+        original = self.services.__call__
+        requests = []
+        def pages(scope, method, url, headers, body, cookies, timeout):
+            if url.endswith(lp.PATHS['recent']):
+                values = json.loads(body)
+                requests.append(values)
+                more = values['trscSeqNo'] == 0
+                self.services.override[lp.PATHS['recent']] = {
+                    'grid1': [{'trscAmt': 10}] * (20 if more else 1),
+                    'recNcnt1': 20 if more else 1, 'nextTrscYn1': 'Y' if more else 'N', 'trscSeqNo1': 7}
+            return original(scope, method, url, headers, body, cookies, timeout)
+        from finance_cli.services.hana import onesign_queries
+        args = cli.build().parse_args(['history', '--name', 'synthetic', '--account', onesign_fixture.SOURCE,
+                                      '--start', '20241001', '--end', '20241020', '--send'])
+        with patch.object(onesign_cli, 'password', return_value=onesign_fixture.PASSWORD), \
+             patch.object(onesign_queries, 'send_http', side_effect=pages):
+            result = cli.dispatch(args)
+        self.assertTrue(result['complete'], result)
+        self.assertTrue(result['accepted'])
+        self.assertEqual(len(result['transactions']), 21)
+        self.assertEqual([p['kind'] for p in result['pages']], ['recent', 'recent', 'past'])
+        self.assertEqual([r['trscSeqNo'] for r in requests], [0, 7])
+        self.assertNoLeak(result, onesign_fixture.PASSWORD, 'SYNTHETIC-LOGIN')
+
     def query_job(self, target, suffix, parent=None, **input):
         if parent is None:
             input = {'start_date': time.strftime('%Y-%m-%d'), 'end_date': time.strftime('%Y-%m-%d'), **input}
