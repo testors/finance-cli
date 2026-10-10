@@ -518,6 +518,12 @@ class FlowTests(unittest.TestCase):
 
 
 class PlanTests(unittest.TestCase):
+    def setUp(self):
+        # A plan opens no state, but every CLI run is linked to the web history of its data home.
+        # Keep these runs out of the developer's own history.
+        home = self.enterContext(tempfile.TemporaryDirectory(prefix='finance-onesign-plan-'))
+        self.enterContext(patch.dict(os.environ, {'FINANCE_HOME': home}))
+
     def test_account_choice_shows_full_numbers_and_selects_by_index(self):
         from finance_cli.services.hana.onesign_cli import choose_account
         numbers = ['12345678901234', '98765432101234']
