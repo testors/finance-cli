@@ -2,8 +2,10 @@
 from .db import now
 
 IDLE_SECONDS = 600
-# Giro kept a session left idle for 290 seconds and ended one left for 315 (live trial, 2026-10-10).
-SERVICE_IDLE_SECONDS = {'giro': 290}
+# The longest idle gap each service was seen to keep a session through (live trials, 2026-10-10):
+# Giro kept 290 seconds and ended 315; Hana personal and corporate kept 590 and ended 620;
+# Hometax kept 1,790 and no longer knew the login after 1,830.
+SERVICE_IDLE_SECONDS = {'giro': 290, 'hana': 590, 'hana_corporate': 590, 'hometax': 1790}
 EXPIRED = 'session_idle_expired'
 # A session of these services counts as logged out after its idle limit without a request, unless
 # it is extended. Hana personal requests are observed one by one at the HTTP boundary; the other

@@ -25,7 +25,7 @@ class SessionActivityTests(ServerCase):
         ctx = object.__new__(worker.Context)
         ctx.db, ctx.adapter, ctx.session, ctx.step = self.db, self.adapter, self.sessions[0], 'run'
         ctx.last_bank_request_at, ctx.idle_blocked = None, False
-        with patch.object(session_activity, 'now', return_value=1599):
+        with patch.object(session_activity, 'now', return_value=1589):
             with request_activity.observe(ctx.before_hana_request):
                 request_activity.before_request('ra')
                 request_activity.before_request('ca')
@@ -34,10 +34,10 @@ class SessionActivityTests(ServerCase):
                 request_activity.before_request('bank')
             request_activity.before_request('bank')  # CLI/default context does nothing.
         with Database(self.db.file()).read() as con:
-            self.assertEqual(session_activity.metadata(con, self.sessions[0], 'hana', at=1600)['last_request_at'], 1599)
-            self.assertFalse(session_activity.metadata(con, self.sessions[0], 'hana', at=1600)['idle_expired'])
-            self.assertTrue(session_activity.metadata(con, self.sessions[1], 'hana', at=1600)['idle_expired'])
-        with patch.object(session_activity, 'now', return_value=2199):
+            self.assertEqual(session_activity.metadata(con, self.sessions[0], 'hana', at=1590)['last_request_at'], 1589)
+            self.assertFalse(session_activity.metadata(con, self.sessions[0], 'hana', at=1590)['idle_expired'])
+            self.assertTrue(session_activity.metadata(con, self.sessions[1], 'hana', at=1590)['idle_expired'])
+        with patch.object(session_activity, 'now', return_value=2179):
             with request_activity.observe(ctx.before_hana_request):
                 with self.assertRaisesRegex(request_activity.RequestBlocked, '^session_idle_expired$'):
                     request_activity.before_request('ra')
@@ -48,7 +48,7 @@ class SessionActivityTests(ServerCase):
             con.execute('DROP TABLE session_activity')  # Pre-feature schema version 1.
             con.execute('UPDATE sessions SET checked_at=3000')
         reopened = Database(self.db.file())
-        with reopened.read() as con, patch.object(session_activity, 'now', return_value=1600):
+        with reopened.read() as con, patch.object(session_activity, 'now', return_value=2790):
             self.assertEqual(session_activity.metadata(con, self.sessions[0], 'hana')['last_request_at'], 1000)
             for service in ('hana', 'hana_corporate', 'giro', 'hometax'):
                 self.adapter.service = service
@@ -58,9 +58,9 @@ class SessionActivityTests(ServerCase):
             con.execute('DELETE FROM sessions WHERE id=?', (self.sessions[0]['id'],))
             self.assertEqual(con.execute('SELECT count(*) FROM session_activity').fetchone()[0], 0)
 
-    def test_giro_counts_290_idle_seconds_and_the_others_ten_minutes(self):
+    def test_each_service_counts_the_idle_gap_it_was_seen_to_keep(self):
         with self.db.read() as con:
-            for service, limit in (('giro', 290), ('hana', 600), ('hana_corporate', 600), ('hometax', 600)):
+            for service, limit in (('giro', 290), ('hana', 590), ('hana_corporate', 590), ('hometax', 1790)):
                 self.adapter.service = service
                 value = session_activity.metadata(con, self.sessions[0], service, at=1000 + limit - 1)
                 self.assertEqual((value['idle_seconds'], value['idle_expires_at'], value['idle_expired']),

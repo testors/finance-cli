@@ -250,13 +250,14 @@ class CorporateTests(HanaCase):
                           'corporate-transfer'})
         self.assertTrue(all(f['status'] == 'available' for f in features if f['area'] == 'corporate'))
 
-    def test_login_extension_keeps_the_bank_verdict_and_ten_idle_minutes_count_as_logged_out(self):
+    def test_login_extension_keeps_the_bank_verdict_and_590_idle_seconds_count_as_logged_out(self):
         import time
         from finance_cli.server import session_activity
         from finance_cli.services.hana_corporate import session as extension
         self.adopt(self.session())
         row = lambda: next(r for r in self.get('/logins').json()['logins'] if r['id'] == self.connection['id'])
-        self.assertGreater(row()['session']['idle_expires_at'], time.time() + 590)
+        self.assertTrue(time.time() + 580 < row()['session']['idle_expires_at'] <= time.time() + 590)
+        self.assertEqual(row()['session']['idle_seconds'], 590)
         value = {'operation': 'session-extend', 'network_used': True, 'accepted': True, 'login_extension_accepted': True,
                  'session_ended': False, 'service_status': 'accepted', 'reason': 'login_extension_accepted',
                  'processing_status': 'completed', 'server_expires_at': None, 'warnings': [], 'stages': []}
@@ -266,7 +267,7 @@ class CorporateTests(HanaCase):
         self.assertEqual(sent.call_count, 1)
         self.assertEqual(sent.call_args.kwargs['send'], True)
         self.assertEqual(row()['readiness'], 'ready')
-        with patch.object(session_activity, 'now', return_value=time.time() + 601):
+        with patch.object(session_activity, 'now', return_value=time.time() + 591):
             self.assertEqual(row()['readiness'], 'login_required')
             with self.assertRaisesRegex(jobs.NotReady, '^session_idle_expired$'):
                 self.submit('hana.corporate.accounts', login_id=self.connection['id'])

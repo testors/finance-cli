@@ -83,12 +83,12 @@ class JointPathTests(HanaCase):
         with patch.object(session_activity, 'now', return_value=at):
             self.run_job(self.submit('hana.login', login_id=self.login['id'])['id'],
                          {'certificate_password': 'Synthetic-Password!'})
-        with patch.object(session_activity, 'now', return_value=at + 599):
+        with patch.object(session_activity, 'now', return_value=at + 589):
             self.run_job(self.submit('hana.accounts.list', login_id=self.login['id'])['id'])
             row = self.get('/logins').json()['logins'][0]
-            self.assertEqual(row['session']['last_request_at'], at + 599)
+            self.assertEqual(row['session']['last_request_at'], at + 589)
         count = len(self.bank.requests)
-        with patch.object(session_activity, 'now', return_value=at + 1199):
+        with patch.object(session_activity, 'now', return_value=at + 1179):
             refused = self.post('/jobs', {'name': 'hana.accounts.list', 'login_id': self.login['id']})
             self.assertEqual(refused.json()['error'], 'session_idle_expired')
         self.assertEqual(count, len(self.bank.requests))
@@ -457,7 +457,7 @@ class OneSignPathTests(HanaCase):
         at = time.time()
         with patch.object(session_activity, 'now', return_value=at):
             self.signed_in()
-        with patch.object(session_activity, 'now', return_value=at + 599):
+        with patch.object(session_activity, 'now', return_value=at + 589):
             queued = self.submit('hana.onesign.accounts', login_id=self.login['id'])
             row = self.get('/logins').json()['logins'][0]
             self.assertEqual(row['session']['last_request_at'], at)
@@ -465,7 +465,7 @@ class OneSignPathTests(HanaCase):
             self.get('/jobs')
             self.get('/vaults')
         count = len(self.services.calls)
-        with patch.object(session_activity, 'now', return_value=at + 600):
+        with patch.object(session_activity, 'now', return_value=at + 590):
             row = self.get('/logins').json()['logins'][0]
             self.assertEqual(row['readiness'], 'login_required')
             self.assertTrue(row['session']['idle_expired'])
@@ -482,7 +482,7 @@ class OneSignPathTests(HanaCase):
             self.signed_in()  # Explicit login is allowed; no automatic query follows it.
             fresh = self.get('/logins').json()['logins'][0]
             self.assertNotEqual(fresh['current_session_id'], row['current_session_id'])
-            self.assertEqual(fresh['session']['last_request_at'], at + 600)
+            self.assertEqual(fresh['session']['last_request_at'], at + 590)
             self.assertFalse(fresh['session']['idle_expired'])
 
     def test_idle_expiry_during_secret_entry_and_at_send_boundary(self):
@@ -490,11 +490,11 @@ class OneSignPathTests(HanaCase):
         with patch.object(session_activity, 'now', return_value=at):
             self.signed_in()
         count = len(self.services.calls)
-        with patch.object(session_activity, 'now', return_value=at + 599) as clock:
+        with patch.object(session_activity, 'now', return_value=at + 589) as clock:
             job = self.submit('hana.onesign.accounts', login_id=self.login['id'])
 
             def delayed_input(stream, names):
-                clock.return_value = at + 600
+                clock.return_value = at + 590
                 return dict(self.vault)
 
             with patch.object(worker, 'read_secrets', delayed_input):
@@ -502,12 +502,12 @@ class OneSignPathTests(HanaCase):
             self.assertEqual((stopped['outcome'], stopped['local']['stopped']), ('not_started', 'session_idle_expired'))
             self.assertEqual(count, len(self.services.calls))
             # A slow preparation after reserve() is checked again at HTTP send.
-            clock.return_value = at + 599
+            clock.return_value = at + 589
             job = self.submit('hana.onesign.accounts', login_id=self.login['id'])
             original = onesign.operate
 
             def delayed_send(*args, **kwargs):
-                clock.return_value = at + 600
+                clock.return_value = at + 590
                 return original(*args, **kwargs)
 
             with patch.object(onesign, 'operate', delayed_send):
@@ -518,10 +518,10 @@ class OneSignPathTests(HanaCase):
             self.assertEqual(count, len(self.services.calls))
             self.assertEqual(self.get('/logins').json()['logins'][0]['session']['last_request_at'], at)
             # Worker admission can also cross the deadline before its "ready" handshake.
-            clock.return_value = at + 599
+            clock.return_value = at + 589
 
             def delayed_worker(job_id, step, secrets):
-                clock.return_value = at + 600
+                clock.return_value = at + 590
                 worker.run(self.db, job_id, step, control=io.StringIO(), stdin=io.StringIO())
                 return 'skipped'
 
@@ -538,7 +538,7 @@ class OneSignPathTests(HanaCase):
             history = self.query_job(target, 'history.list')
             prepared = self.prepare(target)
         count = len(self.services.calls)
-        with patch.object(session_activity, 'now', return_value=at + 600):
+        with patch.object(session_activity, 'now', return_value=at + 590):
             with self.assertRaisesRegex(jobs.NotReady, '^session_idle_expired$'):
                 jobs.accept_confirmation(self.db, prepared['id'], prepared['awaiting']['digest'], 'web:test')
             final = self.get('/jobs/' + prepared['id']).json()
