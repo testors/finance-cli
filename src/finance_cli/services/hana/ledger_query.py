@@ -20,8 +20,11 @@ def controls(args):
     return config
 
 
-def collect(source, config, perform):
-    """The caller holds the session lock; perform sends exactly one prepared request."""
+def collect(source, config, perform, *, failure=None):
+    """The caller holds the session lock; perform sends exactly one prepared request.
+
+    failure receives the local error that stopped the collection; the result never carries its text.
+    """
     result = {'accepted': None, 'network_used': False, 'automatic_retry': False,
               'complete': False, 'transactions': [], 'pages': [], 'stages': [], 'warnings': [],
               'processing_status': 'running', 'atomic_snapshot_verified': False}
@@ -65,8 +68,10 @@ def collect(source, config, perform):
             if position is None:
                 result.update(complete=True, processing_status='completed')
                 return result
-    except (ValueError, OSError, KeyError, TypeError, AttributeError):
+    except (ValueError, OSError, KeyError, TypeError, AttributeError) as error:
         result.update(processing_status='stopped', error='history_processing_error')
+        if failure is not None:
+            failure(error)
         return result
 
 

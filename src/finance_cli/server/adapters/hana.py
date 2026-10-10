@@ -25,6 +25,8 @@ ACCOUNT_PASSWORD = re.compile(r'[0-9]{4}')
 # extension (services/hana/extend.py); a prepared transfer is not kept longer.
 CONFIRM_SECONDS = 600
 ROW_LIMIT = 1000
+DISPLAY_FIELDS = ('date', 'time', 'type', 'name', 'amount', 'balance', 'currency', 'variation', 'extra', 'memo')
+STAGE_FIELDS = ('accepted', 'reason', 'processing_status', 'service_status', 'row_count', 'diagnostics', 'warnings')
 
 
 def session_name():
@@ -310,62 +312,82 @@ class History(JointSessionAdapter):
         return input_file(ctx, 'history-input.json', value)
 
     def run(self, ctx, step):
-        from finance_cli.services.hana import ledger
+        from finance_cli.services.hana import ledger, ledger_query, store
         name = self.session(ctx)
         validate_history_controls(ctx)
         stages = ensure_query_accounts(ctx, name)
         path = self.config(ctx, name)
-        ctx.reserve()
-        receipts = {}
-        ctx.observe(outcome='unknown')
-        try:
-            for stage in ('clock', 'account'):
-                result = send_two_step(ledger.run, name, stage, path)
-                stages.append({'stage': stage, **verdict(result, ('accepted', 'reason'))})
-                ctx.observe(service_verdict={'stages': stages}, outcome=outcome(result.get('accepted'), completed=False))
-                if result.get('accepted') is not True:
-                    return StepResult(service_verdict={'stages': stages}, outcome=outcome(result.get('accepted')))
-                receipts[stage] = result['receipt_directory']
-            result = send_two_step(ledger.run, name, 'page', path, clock=receipts['clock'],
-                                   account_info=receipts['account'])
-        except (ValueError, OSError) as error:
-            raise Stop(safe_code(error), sent=True, detail={'stages': stages}) from None
-        stages.append({'stage': 'page', **verdict(result, ('accepted', 'reason', 'row_count', 'diagnostics'))})
-        return page_result(ctx, name, path, receipts, result, stages)
+        session = store.session_path(name)
+        return collect_history(ctx, session, ledger.read_config(path), ledger_query.joint_perform(session), stages,
+                               path=str(path))
 
 
-def page_result(ctx, name, path, receipts, result, stages):
-    from finance_cli.services.hana import ledger, ledger_protocol as protocol, transport, store
-    rows, complete, local = None, None, {}
-    ctx.observe(service_verdict={'stages': stages}, outcome=outcome(result.get('accepted')))
-    if result.get('accepted') is True:
-        receipts['page'] = result['receipt_directory']
-        try:
-            headers = {k.lower(): v for k, v in transport.read_receipt(store.session_path(name),
-                                                                        receipts['page'])[0]['headers'].items()}
-            pages, position = ledger.chain(store.session_path(name), receipts['page'], headers)
-            request, value, _ = pages[-1]
-            rows = [protocol.display_row(r) for r in protocol.rows(request['account_history']['kind'], value)]
-            complete = position is None
-            ctx.remember(history={'path': str(path), 'receipts': receipts, 'more': position not in (None, 'invalid')})
-        except (ValueError, OSError, KeyError, TypeError):
-            local['saved_rows_unreadable'] = True  # The accepted verdict stays as observed.
-    return StepResult(service_verdict={'stages': stages}, outcome=outcome(result.get('accepted')), local=local,
-                      result={'rows': [pick(r, ('date', 'time', 'type', 'name', 'amount', 'balance', 'currency',
-                                                'variation', 'extra', 'memo')) for r in (rows or [])[:ROW_LIMIT]]
-                              if rows is not None else None,
-                              'pagination_complete': complete, 'more_available': complete is False,
-                              'transfer_confirmed': False})
+def collect_history(ctx, source, config, perform, stages, **saved):
+    """Every period and page of one query through the CLI's collector; pages already received are kept."""
+    from finance_cli.services.hana import ledger_query
+    paged, errors = [], []
+
+    def send(draft, values, snapshot):
+        kind = draft[0]['account_history']['kind']
+        page = kind in ('recent', 'past')
+        if kind == 'clock':  # The first request of a collection.
+            saved['snapshot'] = snapshot
+            ctx.reserve()
+            ctx.observe(outcome='unknown')
+        result = perform(draft, values, snapshot)
+        accepted = result.get('accepted')
+        stages.append({'stage': 'page' if page else kind.removeprefix('loan-'), 'kind': kind,
+                       **verdict(result, STAGE_FIELDS)})
+        paged.append(page and accepted is True)
+        # An accepted page stays a partial result until the whole range is known to be complete.
+        ctx.observe(service_verdict={'stages': stages},
+                    outcome='partial_success' if any(paged) else outcome(accepted, completed=False))
+        return result
+
+    value = ledger_query.collect(source, config, send, failure=errors.append)
+    code = safe_code(errors[0], 'history_processing_error') if errors else None
+    if not any(paged):
+        if code:
+            raise Stop(code, sent=ctx.sent_in_step())
+        return StepResult(service_verdict={'stages': stages}, outcome=outcome(value['accepted'], completed=False))
+    pages, local = value['pages'], {}
+    if pages:
+        clock, account = (stage['receipt_directory'] for stage in value['stages'][:2])
+        ctx.remember(history={**saved, 'receipts': {'clock': clock, 'account': account, 'page': pages[-1]['receipt']},
+                              'pages': [[page['receipt'], page['received']] for page in pages]})
+    else:
+        local['saved_rows_unreadable'] = True  # The accepted verdict stays as observed.
+    if code:
+        local['stopped'] = code
+    elif not value['complete'] and 'continuation_cursor_requires_review' in value['warnings']:
+        local['stopped'] = 'continuation_cursor_requires_review'
+    return StepResult(service_verdict={'stages': stages}, local=local,
+                      outcome='success' if value['complete'] else 'partial_success',
+                      result={'rows': [pick(row, DISPLAY_FIELDS) for row in value['transactions']] if pages else None,
+                              'pagination_complete': value['complete'], 'transfer_confirmed': False})
+
+
+def history_row(history, row):
+    """The page receipt and the 1-based row in it for a row of the merged result."""
+    if 'pages' not in history:  # A single-page job recorded before the unified query.
+        return history['receipts']['page'], row
+    for receipt, received in history['pages']:
+        if row <= received:
+            return receipt, row
+        row -= received
+    raise Stop('detail_row_out_of_range')
 
 
 class HistoryFollowUp(JointSessionAdapter):
-    """Continues a history job on the same session; the cursor never leaves the server."""
+    """Follows a history job on the same session; receipts and cursors never leave the server."""
     requires_target = True
     session_from_parent = True
+    # Single-page jobs recorded before the unified query remain valid parents.
     parents = ('hana.history.list', 'hana.history.more')
 
     def check_parent(self, parent, value):
-        if parent['name'] not in self.parents or parent['status'] != 'finished' or parent['outcome'] != 'success':
+        if parent['name'] not in self.parents or parent['status'] != 'finished' \
+                or parent['outcome'] not in ('success', 'partial_success'):
             raise InputError('parent_history_job_required')
         if not (json.loads(parent['attempt'] or '{}').get('history') or {}).get('receipts', {}).get('page'):
             raise InputError('parent_history_page_required')
@@ -377,41 +399,22 @@ class HistoryFollowUp(JointSessionAdapter):
         return history
 
 
-class HistoryMore(HistoryFollowUp):
-    name = 'hana.history.more'
-    title = '거래 내역 다음 페이지'
-
-    def run(self, ctx, step):
-        from finance_cli.services.hana import ledger
-        from pathlib import Path
-        history = self.parent_history(ctx)
-        name = self.session(ctx)
-        receipts = dict(history['receipts'])
-        ctx.reserve()
-        try:
-            result = send_two_step(ledger.run, name, 'page', Path(history['path']), clock=receipts['clock'],
-                                   account_info=receipts['account'], previous=receipts['page'])
-        except (ValueError, OSError) as error:
-            raise Stop(safe_code(error), sent=True) from None
-        stages = [{'stage': 'page', **verdict(result, ('accepted', 'reason', 'row_count', 'diagnostics'))}]
-        return page_result(ctx, name, Path(history['path']), receipts, result, stages)
-
-
 class HistoryDetail(HistoryFollowUp):
     name = 'hana.history.detail'
     title = '거래 상세'
 
     def validate(self, value, login=None):
         value = dict_input(value, ('row',), ('row',))
-        return {'row': bounded_int(value['row'], 'row', 1, 1000)}
+        return {'row': bounded_int(value['row'], 'row', 1, 10 ** 6)}
 
     def run(self, ctx, step):
         from finance_cli.services.hana import ledger, store
         from pathlib import Path
         history = self.parent_history(ctx)
         name, receipts = self.session(ctx), history['receipts']
-        options = {'clock': receipts['clock'], 'account_info': receipts['account'], 'previous': receipts['page'],
-                   'row': ctx.input['row']}
+        page, row = history_row(history, ctx.input['row'])
+        options = {'clock': receipts['clock'], 'account_info': receipts['account'], 'previous': page,
+                   'row': row, 'snapshot': history.get('snapshot')}
         try:
             local = ledger.run(name, 'detail', Path(history['path']), send=False, **options)
         except (ValueError, OSError) as error:
@@ -453,8 +456,7 @@ class HistoryExport(HistoryFollowUp):
         except (ValueError, OSError) as error:
             raise Stop(safe_code(error)) from None
         report = json.loads(storage.read(output, 64 * 1024 * 1024))
-        fields = ('page', 'row', 'kind', 'date', 'time', 'type', 'name', 'amount', 'balance', 'currency', 'variation',
-                  'extra', 'memo')
+        fields = ('page', 'row', 'kind', *DISPLAY_FIELDS)
         filtered = {k: report[k] for k in ('page_count', 'row_count', 'pagination_complete', 'atomic_snapshot_verified',
                                            'transfer_confirmed', 'duplicates_removed', 'issues', 'csv_text_cells_escaped')}
         filtered['rows'] = [pick(r, fields) for r in report['rows']]
@@ -914,6 +916,6 @@ class TransferReconcile(OneSignAdapter):
                           reconciliation=reconciliation, result={'reconciliation': reconciliation})
 
 
-ADAPTERS = (Login(), Accounts(), History(), HistoryMore(), HistoryDetail(), HistoryExport(), TransferHistory(),
+ADAPTERS = (Login(), Accounts(), History(), HistoryDetail(), HistoryExport(), TransferHistory(),
             TransferHistoryDetail(), Security(), Extend(), OneSignLogin(), OneSignAccounts(), OneSignExtend(), Transfer(),
             TransferReconcile())

@@ -522,17 +522,21 @@ async function historyView(ctx) {
   const form = state.params?.form || {};
   const value = (name, fallback) => esc(form[name] ?? fallback);
   const options = (name, rows) => rows.map(([v, l]) => `<option value="${v}" ${form[name] === v ? 'selected' : ''}>${l}</option>`).join('');
-  return heading('거래 내역', '계좌별 입출금 내역을 조회해요.') + setupNotice('hana-history') +
+  return heading('거래 내역', '계좌별 입출금 내역을 조회해요. 최근·과거 구간과 다음 페이지도 자동으로 이어서 조회해요.') + setupNotice('hana-history') +
     `<section class="panel"><form class="filter-bar" data-submit="history-query">${accountSelect(list, chosen.id)}<label class="field-inline">시작일<input type="date" name="start_date" value="${value('start_date', bankDate(6))}" required></label><label class="field-inline">종료일<input type="date" name="end_date" value="${value('end_date', bankDate())}" required></label>${ui.periodPresets([['1주', 6], ['1개월', 30], ['3개월', 90]])}<label class="field-inline">구분<select name="direction">${options('direction', [['all', '전체'], ['deposit', '입금'], ['withdrawal', '출금']])}</select></label><label class="field-inline">정렬<select name="order">${options('order', [['desc', '최신순'], ['asc', '과거순']])}</select></label><label class="field-inline">검색<input name="search" maxlength="25" value="${value('search', '')}"></label><button class="button primary" type="submit">${icon('refresh')}조회</button><button class="button secondary" type="button" data-action="account-login">다시 로그인</button></form>${panel('job-panel', job)}<div id="results">${job?.status === 'finished' ? historyRows(job) : '<div class="empty-state">계좌와 기간을 정해 조회하세요.</div>'}</div></section>`;
 }
 
-function historyRows(job, append = false) {
-  const previous = append ? state.rows.history?.rows || [] : [];
-  const rows = [...previous, ...(job.result?.rows || [])];
-  rememberRows('history', rows, {job, pages: [...(append ? state.rows.history?.pages || [] : []), job.id]});
+/* One job holds every period and page it received. An unfinished range is said so, never shown as zero rows. */
+function historyRows(job) {
+  const rows = job.result?.rows || [];
+  rememberRows('history', rows, {job});
   const mapped = rows.map(r => ({일자: r.date, 시각: r.time, 구분: r.type, 내용: r.name, 금액: r.amount, 잔액: r.balance, 메모: r.memo}));
-  return outcomeNote(job) + (job.result?.rows ? ui.rowsTable(mapped, {group: 'history', keys: ['일자', '시각', '구분', '내용', '금액', '잔액']}) : '') +
-    `<div class="list-footer">${rows.length}건 · ${job.result?.more_available ? '다음 페이지 있음' : job.result?.pagination_complete ? '조회 범위 끝' : '페이지 상태 확인 필요'}</div><div class="section-actions">${job.result?.more_available ? ui.button('다음 페이지', `data-action="history-more" data-job="${esc(job.id)}"`) : ''}${job.outcome === 'success' ? ui.button('내역 저장 (JSON·CSV)', `data-action="history-export" data-job="${esc(job.id)}"`, 'secondary', 'download') : ''}</div>`;
+  const complete = job.result?.pagination_complete === true;
+  const received = job.result?.rows && ['success', 'partial_success'].includes(job.outcome);
+  const stopped = job.outcome === 'partial_success' && job.local?.stopped ? note(ui.message(job.local.stopped)) : '';
+  return outcomeNote(job) + stopped + (!job.result?.rows ? '' : !rows.length && !complete ? note('확인한 거래 내역이 아직 없어요. 조회가 완료된 것은 아니에요.')
+    : ui.rowsTable(mapped, {group: 'history', limit: rows.length, keys: ['일자', '시각', '구분', '내용', '금액', '잔액']})) +
+    `<div class="list-footer">${rows.length}건 · ${complete ? '조회 완료' : '조회 범위 미완료'}</div><div class="section-actions">${received ? ui.button('내역 저장 (JSON·CSV)', `data-action="history-export" data-job="${esc(job.id)}"`, 'secondary', 'download') : ''}</div>`;
 }
 
 async function transferView(ctx) {
@@ -999,17 +1003,12 @@ export const actions = {
     if (state.params) Object.assign(state.params, {target: chosen.id, form: {...input}});
     await runHanaQuery(ctx, 'history.list', {login_id: chosen.login_id, target_id: chosen.id, input}, {panel: 'job-panel', onDone: job => { document.getElementById('results').innerHTML = historyRows(job); }});
   },
-  'history-more': async (ctx, button) => {
-    const parent = state.rows.history?.job;
-    await runHanaQuery(ctx, 'history.more', {login_id: parent.login_id, target_id: parent.target_id, parent_job_id: button.dataset.job}, {panel: 'job-panel', onDone: job => { document.getElementById('results').innerHTML = historyRows(job, true); }});
-  },
   'history-detail': async (ctx, button) => {
     const entry = state.rows.history;
     const index = Number(button.dataset.index);
-    const page = entry.pages.length > 1 ? null : entry.job.id;
     ui.closeDialog();
-    if (!page) { ui.toast('상세 조회는 첫 페이지 조회 직후에만 지원해요.'); return; }
-    await runHanaQuery(ctx, 'history.detail', {login_id: entry.job.login_id, target_id: entry.job.target_id, parent_job_id: page, input: {row: index + 1}}, {panel: 'job-panel', onDone: job => ui.showDialog('거래 상세', outcomeNote(job) + ui.fieldsList(job.result?.detail) + `<p class="dialog-note">${job.result?.source === 'saved_ledger_row' ? '저장된 거래 행에서 보여줘요. 은행에 요청하지 않았어요.' : '은행 상세 조회 결과예요.'}</p><div class="dialog-actions"><button class="button primary" data-ui="close">닫기</button></div>`)});
+    // The row number counts through the merged list; the server finds the page it came from.
+    await runHanaQuery(ctx, 'history.detail', {login_id: entry.job.login_id, target_id: entry.job.target_id, parent_job_id: entry.job.id, input: {row: index + 1}}, {panel: 'job-panel', onDone: job => ui.showDialog('거래 상세', outcomeNote(job) + ui.fieldsList(job.result?.detail) + `<p class="dialog-note">${job.result?.source === 'saved_ledger_row' ? '저장된 거래 행에서 보여줘요. 은행에 요청하지 않았어요.' : '은행 상세 조회 결과예요.'}</p><div class="dialog-actions"><button class="button primary" data-ui="close">닫기</button></div>`)});
   },
   'history-export': async (ctx, button) => {
     const entry = state.rows.history;

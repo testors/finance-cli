@@ -119,7 +119,7 @@ class JointPathTests(HanaCase):
                                            input={'start_date': today, 'end_date': today})['id'])
         self.assertEqual(history['outcome'], 'success', history)
         self.assertEqual(history['result']['rows'][0]['amount'], 10)
-        self.assertFalse(history['result']['more_available'])
+        self.assertTrue(history['result']['pagination_complete'])
         self.assertEqual([s['stage'] for s in history['service_verdict']['stages']], ['clock', 'account', 'page'])
         export = self.run_job(self.submit('hana.history.export', login_id=self.login['id'], target_id=target['id'],
                                           parent_job_id=history['id'])['id'])
@@ -153,10 +153,107 @@ class JointPathTests(HanaCase):
         return self.run_job(self.submit('hana.login', login_id=self.login['id'])['id'],
                             {'certificate_password': 'Synthetic-Password!'})
 
-    def joint_query(self, target, name):
+    def joint_query(self, target, name, parent=None, **input):
         today = time.strftime('%Y-%m-%d')
-        return self.run_job(self.submit(name, login_id=self.login['id'], target_id=target['id'],
-                                        input={'start_date': today, 'end_date': today})['id'])
+        return self.run_job(self.submit(name, login_id=self.login['id'], target_id=target['id'], parent_job_id=parent,
+                                        input=input or (None if parent else {'start_date': today, 'end_date': today}))['id'])
+
+    def two_period_setup(self):
+        """A server day that puts 2024-10-10 on the past side of the two-year boundary."""
+        target = self.fresh_query_setup()
+        self.bank.overrides['/retrieveCurrDtm'] = joint_fixture.business({'dt': '20261010', 'tm': '120000', 'bussDdYn': 'Y'})
+        self.bank.overrides['/retrievetxnInoAmtPst'] = joint_fixture.business({
+            'r01': [{'trscDt': '20241010', 'trscAmt': 5}], 'r01Rowcount': 1})
+        return target, {'start_date': '2024-10-01', 'end_date': '2024-10-20'}
+
+    def test_history_collects_recent_and_past_in_one_job_and_follow_ups_reach_every_page(self):
+        target, period = self.two_period_setup()
+        count = len(self.bank.requests)
+        history = self.joint_query(target, 'hana.history.list', **period)
+        self.assertEqual(history['outcome'], 'success', history)
+        self.assertTrue(history['result']['pagination_complete'])
+        self.assertEqual([row['amount'] for row in history['result']['rows']], [10, 5])
+        self.assertEqual([(s['stage'], s['kind']) for s in history['service_verdict']['stages']],
+                         [('clock', 'clock'), ('account', 'account'), ('page', 'recent'), ('page', 'past')])
+        bodies = {r[1].split('/')[-1]: json.loads(r[3]) for r in self.bank.requests[count:]}
+        self.assertEqual(len(self.bank.requests), count + 4)
+        self.assertEqual(bodies['retrievetxnNrstTrsc']['inqStrDt'], '20241011')
+        self.assertEqual(bodies['retrievetxnInoAmtPst']['inqEndDt'], '20241010')
+        self.assertNoLeak(history, 'USER-TOKEN', 'account-history-')
+        count = len(self.bank.requests)
+        # A row is addressed in the merged list; the second row is the first row of the past page.
+        detail = self.joint_query(target, 'hana.history.detail', history['id'], row=2)
+        self.assertEqual((detail['outcome'], detail['result']['source']), ('success', 'saved_ledger_row'), detail)
+        self.assertEqual(detail['result']['detail']['amount'], 5)
+        beyond = self.joint_query(target, 'hana.history.detail', history['id'], row=3)
+        self.assertEqual((beyond['outcome'], beyond['local']['stopped']), ('not_started', 'detail_row_out_of_range'))
+        export = self.joint_query(target, 'hana.history.export', history['id'])
+        document = self.get(f"/artifacts/{export['artifacts'][0]['id']}").json()
+        self.assertEqual([row['kind'] for row in document['rows']], ['recent', 'past'])
+        self.assertTrue(document['pagination_complete'])
+        self.assertEqual(len(self.bank.requests), count)
+        # The next-page job is gone; the same query can be asked again in the same login.
+        self.assertEqual(self.post('/jobs', {'name': 'hana.history.more', 'login_id': self.login['id'],
+                                             'target_id': target['id'], 'parent_job_id': history['id']}).status_code, 404)
+        again = self.joint_query(target, 'hana.history.list', **period, order='asc')
+        self.assertEqual([row['amount'] for row in again['result']['rows']], [5, 10])
+        repeated = self.joint_query(target, 'hana.history.list', **period)
+        self.assertEqual(repeated['outcome'], 'success', repeated)
+        self.assertEqual(len(self.bank.requests), count + 8)
+
+    def test_history_keeps_received_pages_when_a_later_period_fails_and_never_retries(self):
+        target, period = self.two_period_setup()
+        self.bank.overrides['/retrievetxnInoAmtPst'] = (500, {}, b'{}')
+        count = len(self.bank.requests)
+        history = self.joint_query(target, 'hana.history.list', **period)
+        self.assertEqual(history['outcome'], 'partial_success', history)
+        self.assertFalse(history['result']['pagination_complete'])
+        self.assertEqual([row['amount'] for row in history['result']['rows']], [10])
+        self.assertEqual([s['accepted'] for s in history['service_verdict']['stages']], [True, True, True, False])
+        self.assertEqual(len(self.bank.requests), count + 4)
+        export = self.joint_query(target, 'hana.history.export', history['id'])
+        self.assertEqual(export['outcome'], 'success', export)
+        document = self.get(f"/artifacts/{export['artifacts'][0]['id']}").json()
+        self.assertEqual((document['row_count'], document['pagination_complete']), (1, False))
+        self.assertFalse(export['artifacts'][0]['complete'])
+        self.assertEqual(len(self.bank.requests), count + 4)
+
+    def test_history_stop_before_any_page_keeps_its_reason_and_the_accepted_stages(self):
+        target = self.fresh_query_setup()
+        self.bank.overrides['/retrieveSessAcctInfo'] = joint_fixture.business({'acctInfo': {
+            'acctNo': joint_fixture.ACCOUNT, 'curCd': 'USD', 'tailNo': '01'}})
+        count = len(self.bank.requests)
+        stopped = self.joint_query(target, 'hana.history.list')
+        self.assertEqual((stopped['outcome'], stopped['local']['stopped']),
+                         ('unknown', 'this_account_uses_a_different_ledger_screen'), stopped)
+        self.assertEqual([s['accepted'] for s in stopped['service_verdict']['stages']], [True, True])
+        self.assertIsNone(stopped['result'])
+        self.assertEqual(len(self.bank.requests), count + 2)
+
+    def test_single_page_job_recorded_before_the_unified_query_still_exports_and_shows_details(self):
+        from finance_cli.server.adapters.hana import send_two_step
+        from finance_cli.services.hana import ledger
+        target = self.fresh_query_setup()
+        job = self.submit('hana.history.list', login_id=self.login['id'], target_id=target['id'],
+                          input={'start_date': time.strftime('%Y-%m-%d'), 'end_date': time.strftime('%Y-%m-%d')})
+        with self.db.read() as con:
+            name = con.execute('SELECT name FROM sessions WHERE id=?', (job['session_id'],)).fetchone()[0]
+        path = self.root / 'earlier-input.json'
+        path.write_text(json.dumps({'account_index': 1, 'start_date': time.strftime('%Y%m%d'),
+                                    'end_date': time.strftime('%Y%m%d')}))
+        receipts = {}
+        for stage in ('clock', 'account', 'page'):
+            receipts[stage] = send_two_step(ledger.run, name, stage, path, **(
+                {'clock': receipts['clock'], 'account_info': receipts['account']} if stage == 'page' else {}))['receipt_directory']
+        with self.db.write() as con:
+            con.execute("UPDATE jobs SET status='finished', outcome='success', attempt=? WHERE id=?", (json.dumps(
+                {'history': {'path': str(path), 'receipts': receipts, 'more': False}}), job['id']))
+        count = len(self.bank.requests)
+        detail = self.joint_query(target, 'hana.history.detail', job['id'], row=1)
+        self.assertEqual((detail['outcome'], detail['result']['detail']['amount']), ('success', 10), detail)
+        export = self.joint_query(target, 'hana.history.export', job['id'])
+        self.assertEqual((export['outcome'], export['result']['row_count']), ('success', 1), export)
+        self.assertEqual(len(self.bank.requests), count)
 
     def test_history_and_inquiry_prime_fresh_joint_session_once(self):
         target = self.fresh_query_setup()
@@ -559,7 +656,7 @@ class OneSignPathTests(HanaCase):
         history = self.query_job(target, 'history.list')
         self.assertEqual(history['outcome'], 'success', history)
         self.assertEqual(history['result']['rows'][0]['amount'], 10)
-        self.assertFalse(history['result']['more_available'])
+        self.assertTrue(history['result']['pagination_complete'])
         count = len(self.services.calls)
         detail = self.query_job(target, 'history.detail', history['id'], row=1)
         self.assertEqual(detail['outcome'], 'success', detail)
@@ -602,29 +699,59 @@ class OneSignPathTests(HanaCase):
         with State('synthetic', onesign_fixture.PASSWORD) as state:
             self.assertTrue(any(s.get('transfer_attempted') for s in state.snapshot()['sessions'].values()))
 
-    def test_query_pagination_continues_once_and_export_keeps_duplicates(self):
-        from finance_cli.services.hana import ledger_protocol as lp
+    def paged_history(self, target, second):
+        """One list job whose first recent page names a next page; `second` answers that page."""
+        from finance_cli.services.hana import ledger_protocol as lp, onesign_queries
+        row = self.services.override[lp.PATHS['recent']]['grid1'][0]
+        sent = []
+
+        def pages(scope, method, url, *rest):
+            if url.endswith(lp.PATHS['recent']):
+                sent.append(json.loads(rest[1]))
+                if len(sent) == 1:
+                    self.services.override[lp.PATHS['recent']] = {'grid1': [row], 'recNcnt1': 20, 'nextTrscYn1': 'Y',
+                        'dtlsSeqNo1': 2, 'trscSeqNo1': 3, 'nextTrscDt1': '20260930'}
+                else:
+                    self.services.override[lp.PATHS['recent']] = {'grid1': [row], 'recNcnt1': 1, 'nextTrscYn1': 'N'}
+            reply = self.services(scope, method, url, *rest)
+            return second(reply) if url.endswith(lp.PATHS['recent']) and len(sent) == 2 else reply
+        with patch.object(onesign_queries, 'send_http', pages):
+            return self.query_job(target, 'history.list'), sent
+
+    def test_query_follows_every_page_once_and_export_keeps_duplicates(self):
         target = self.query_setup()
-        first = self.services.override[lp.PATHS['recent']]
-        first.update(recNcnt1=20, nextTrscYn1='Y', dtlsSeqNo1=2, trscSeqNo1=3, nextTrscDt1='20260930')
-        history = self.query_job(target, 'history.list')
-        self.assertEqual(history['outcome'], 'success', history)
-        self.assertTrue(history['result']['more_available'], history)
-        first.update(nextTrscYn1='N', recNcnt1=1)
         count = len(self.services.calls)
-        more = self.query_job(target, 'history.more', history['id'])
-        self.assertEqual(more['outcome'], 'success', more)
-        self.assertTrue(more['result']['pagination_complete'])
-        sent = json.loads(self.services.calls[-1][3])
-        self.assertEqual((sent['dtlsSeqNo'], sent['trscSeqNo']), (2, 3))
-        again = self.query_job(target, 'history.more', history['id'])
-        self.assertNotEqual(again['outcome'], 'success', again)
-        self.assertEqual(len(self.services.calls), count + 1)
-        exported = self.query_job(target, 'history.export', more['id'])
+        history, sent = self.paged_history(target, lambda reply: reply)
+        self.assertEqual(history['outcome'], 'success', history)
+        self.assertTrue(history['result']['pagination_complete'])
+        self.assertEqual(len(history['result']['rows']), 2)
+        self.assertEqual([s['stage'] for s in history['service_verdict']['stages']], ['clock', 'account', 'page', 'page'])
+        self.assertEqual([(body['dtlsSeqNo'], body['trscSeqNo']) for body in sent], [(0, 0), (2, 3)])
+        self.assertEqual(len(self.services.calls), count + 4)
+        self.assertEqual(self.post('/jobs', {'name': 'hana.onesign.history.more', 'login_id': self.login['id'],
+            'target_id': target['id'], 'parent_job_id': history['id'], 'secrets': self.vault}).status_code, 404)
+        detail = self.query_job(target, 'history.detail', history['id'], row=2)
+        self.assertEqual((detail['outcome'], detail['result']['source']), ('success', 'saved_ledger_row'), detail)
+        exported = self.query_job(target, 'history.export', history['id'])
         self.assertEqual(exported['result']['row_count'], 2)
         document = self.get('/artifacts/' + exported['artifacts'][0]['id']).json()
         self.assertFalse(document['duplicates_removed'])
         self.assertEqual(document['issues'][-1]['issue'], 'identical_row_preserved')
+        self.assertEqual(len(self.services.calls), count + 4)
+
+    def test_query_keeps_received_page_when_the_next_page_is_refused(self):
+        target = self.query_setup()
+        count = len(self.services.calls)
+        history, _ = self.paged_history(target, lambda reply: (403, *reply[1:]))
+        self.assertEqual(history['outcome'], 'partial_success', history)
+        self.assertEqual([s['accepted'] for s in history['service_verdict']['stages']], [True, True, True, False])
+        self.assertEqual(len(history['result']['rows']), 1)
+        self.assertFalse(history['result']['pagination_complete'])
+        self.assertEqual(len(self.services.calls), count + 4)
+        exported = self.query_job(target, 'history.export', history['id'])
+        self.assertEqual((exported['outcome'], exported['result']['row_count']), ('success', 1), exported)
+        self.assertFalse(exported['result']['pagination_complete'])
+        self.assertEqual(len(self.services.calls), count + 4)
 
     def test_query_bad_cursor_preserves_page_and_detail_uses_saved_identifiers(self):
         from finance_cli.services.hana import ledger_protocol as lp
@@ -634,14 +761,14 @@ class OneSignPathTests(HanaCase):
         value['grid1'][0].update(atfMgntNo='SYNTHETIC-DETAIL', balFlctDvCd='2', atfPrfRankCd='314')
         self.services.override[lp.PATHS['automatic']] = {'trnsAmt': 10, 'wdrwAcctNo': onesign_fixture.SOURCE,
                                                         'cookie': 'SYNTHETIC-COOKIE'}
-        history = self.query_job(target, 'history.list')
-        self.assertEqual(history['outcome'], 'success', history)
-        self.assertFalse(history['result']['more_available'])
-        self.assertFalse(history['result']['pagination_complete'])
         count = len(self.services.calls)
-        more = self.query_job(target, 'history.more', history['id'])
-        self.assertNotEqual(more['outcome'], 'success', more)
-        self.assertEqual(len(self.services.calls), count)
+        history = self.query_job(target, 'history.list')
+        self.assertEqual(history['outcome'], 'partial_success', history)
+        self.assertTrue(history['service_verdict']['stages'][-1]['accepted'])
+        self.assertEqual(len(history['result']['rows']), 1)
+        self.assertFalse(history['result']['pagination_complete'])
+        self.assertEqual(history['local']['stopped'], 'continuation_cursor_requires_review')
+        self.assertEqual(len(self.services.calls), count + 3)
         detail = self.query_job(target, 'history.detail', history['id'], row=1)
         self.assertEqual(detail['outcome'], 'success', detail)
         self.assertEqual(detail['result']['source'], 'bank_detail')
@@ -656,7 +783,9 @@ class OneSignPathTests(HanaCase):
         target = self.query_setup()
         self.services.override[lp.PATHS['recent']] = b'not JSON'
         malformed = self.query_job(target, 'history.list')
-        self.assertEqual(malformed['outcome'], 'success', malformed)
+        # The bank accepted the page; without readable rows the range is not known to be complete.
+        self.assertEqual(malformed['outcome'], 'partial_success', malformed)
+        self.assertTrue(malformed['service_verdict']['stages'][-1]['accepted'])
         self.assertIsNone(malformed['result']['rows'])
         self.assertTrue(malformed['local']['saved_rows_unreadable'])
         real_record = State.record

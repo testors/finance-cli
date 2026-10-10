@@ -216,6 +216,8 @@ const MESSAGES = {
   accounts_query_incomplete: '계좌 확인을 완료하지 못해 내역 조회를 중단했어요. 계좌 확인 결과를 확인해 주세요.',
   account_not_in_session_accounts: '현재 로그인에서 확인된 계좌 목록에 선택한 계좌가 없어요. 로그인과 선택한 계좌를 확인해 주세요.',
   invalid_history_controls: '조회 기간이나 검색어를 확인해 주세요. 미래 날짜는 조회할 수 없으며, 거래 내역은 3년 미만, 이체 내역은 최근 2년 이내로 조회할 수 있어요.',
+  continuation_cursor_requires_review: '은행 응답의 다음 페이지 정보를 확인할 수 없어 이어서 조회하지 않았어요. 받은 내역까지만 보여줘요.',
+  history_processing_error: '거래 내역을 처리하다가 멈췄어요. 받은 내역까지만 보여주며 은행에 다시 요청하지 않았어요.',
   job_not_cancellable: '이미 시작한 작업은 취소할 수 없어요.',
   credential_in_use: '이 인증서를 쓰는 연결이 있어요. 먼저 그 연결의 인증서를 바꾸세요.',
   credential_not_found: '보관함에 없는 인증서예요. 화면을 새로 고치세요.',

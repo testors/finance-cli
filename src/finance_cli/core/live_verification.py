@@ -9,12 +9,14 @@ are distributed. See docs/banking-verification.md for scope and limitations.
 REVIEWED_ON = '2026-10-01'
 HANA_LEVEL = 'live_partial'
 PREFLIGHT_NOTE = '하나인증서 조회 성공 확인. 재로그인 후 계좌 자동 확인은 합성 검증 완료, 실사용 재확인 전.'
+HISTORY_NOTE = ('하나인증서 조회 성공 확인(한 페이지씩 조회하던 때의 기록). 최근·과거 구간과 다음 페이지를 한 작업에서 이어 받는 '
+                '통합 조회와 재로그인 후 계좌 자동 확인은 합성 검증 완료, 실사용 재확인 전.')
 TRANSFER_NOTE = '은행의 이체 실행 성공 응답 확인. 연결된 결과 상세도 조회했으나 최종 이체 확정은 미확인.'
 
 HANA_JOBS = {
     'hana.onesign.login': ('live_verified', '하나인증서 서명 로그인 성공 확인.'),
     'hana.onesign.accounts': ('live_verified', '하나인증서 로그인으로 계좌 목록·잔액 응답 확인.'),
-    'hana.onesign.history.list': ('live_partial', PREFLIGHT_NOTE),
+    'hana.onesign.history.list': ('live_partial', HISTORY_NOTE),
     'hana.onesign.history.detail': ('live_verified', '하나인증서 거래 내역의 은행 상세 응답 확인. 상세 유형 전체를 검증한 것은 아님.'),
     'hana.onesign.inquiry.history': ('live_partial', PREFLIGHT_NOTE),
     'hana.onesign.security.query': ('live_partial', '하나인증서 이체한도 조회 성공 확인. 한도 예외·보안매체·OTP 세부 조회는 미확인.'),
@@ -31,7 +33,7 @@ for _stage in ('init', 'inspect', 'profile', 'consent', 'prepare-id'):
 
 HANA_FEATURE_NOTES = {
     'hana-accounts': '하나인증서 계좌·잔액 조회 성공 확인. 공동인증서 경로는 최근 기록에서 미확인.',
-    'hana-history': '하나인증서 목록·은행 상세 조회 성공 확인. 다음 페이지·JSON/CSV 저장·공동인증서 경로와 재로그인 후 계좌 자동 확인은 실사용 미확인.',
+    'hana-history': '하나인증서 목록(한 페이지)·은행 상세 조회 성공 확인. 최근·과거 구간과 다음 페이지의 자동 연결·JSON/CSV 저장·공동인증서 경로와 재로그인 후 계좌 자동 확인은 실사용 미확인.',
     'hana-inquiry': '하나인증서 이체 내역 목록 성공 확인. 상세·공동인증서 경로와 재로그인 후 계좌 자동 확인은 실사용 미확인.',
     'hana-transfer': TRANSFER_NOTE,
     'hana-security': '하나인증서 이체한도 조회 성공 확인. 공동인증서·한도 예외·보안매체·OTP 세부 조회는 실사용 미확인.',

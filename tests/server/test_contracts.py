@@ -66,10 +66,12 @@ class CapabilityTests(ServerCase):
         self.assertEqual(jobs['hana.session.extend']['verification'], 'live_untested')
         self.assertEqual(jobs['hana.onesign.accounts']['verification'], 'live_verified')
         self.assertEqual(jobs['hana.accounts.list']['verification'], 'live_untested')
-        self.assertEqual(jobs['hana.onesign.history.more']['verification'], 'live_untested')
+        self.assertNotIn('hana.onesign.history.more', jobs)  # One list job collects every period and page.
         self.assertEqual(jobs['hana.onesign.history.export']['verification'], 'live_untested')
         self.assertEqual(jobs['hana.onesign.inquiry.detail']['verification'], 'live_untested')
         self.assertEqual(jobs['hana.onesign.history.list']['verification'], 'live_partial')
+        self.assertIn('통합 조회', jobs['hana.onesign.history.list']['verification_note'])
+        self.assertIn('실사용 재확인 전', jobs['hana.onesign.history.list']['verification_note'])
         self.assertEqual(jobs['hana.onesign.security.query']['verification'], 'live_partial')
         self.assertIn('이체한도 조회 성공 확인', jobs['hana.onesign.security.query']['verification_note'])
         self.assertEqual(jobs['hana.transfer.prepare']['verification'], 'live_partial')

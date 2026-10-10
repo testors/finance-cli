@@ -33,8 +33,8 @@
 | --- | --- | --- |
 | 은행 로그인 | 앱 인증, 공동인증서 로그인, 하나인증서 서명 로그인 | 기관 로그인에 지정된 자격 증명·기기·앱 등록 정보를 사용하고 필요한 인증 단계 구별 |
 | 계좌 목록·잔액 | `hana accounts`, `hana onesign accounts` | 계좌 정보·조회 시각·금액 표시와 숨김 |
-| 거래 내역·상세 | `hana history clock/account/page/detail` | 기간·입출금·검색·정렬·페이지 조건; 다음 페이지는 사용자가 요청 |
-| 내역 저장 | `hana history export` | 조회한 페이지를 JSON·CSV로 저장 |
+| 거래 내역·상세 | `hana history`(통합 조회), `hana history detail` | 기간·입출금·검색·정렬 조건; 최근·과거 구간과 다음 페이지를 한 작업에서 이어 받고, 중간에 멈추면 받은 내역을 부분 성공으로 보존하며 다시 요청하지 않음 |
+| 내역 저장 | `hana history export` | 받은 페이지 전체를 JSON·CSV로 저장 |
 | 이체 내역·상세 | `hana inquiry history/detail` | 기존 이체와 서비스가 제공하는 결과 확인 |
 | 원화 이체 | `hana transfer prepare/show/execute/reconcile` | 수취인·금액·수수료 확인, 명시적 실행, 중복 실행 방지, 결과 재조회 |
 | 보안매체·한도 | `hana security`의 조회 기능 | 이체한도·예외·보안매체·OTP·사고·모바일 OTP 상태 조회 |

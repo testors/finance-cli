@@ -260,15 +260,16 @@ for (const method of ['onesign', 'joint_certificate']) {
     for (const view of ['history', 'inquiry']) {
       ui.document.querySelector('main').innerHTML = await ui.views[view](ui.ctx);
       await ui.actions[`${view}-query`](ui.ctx, ui.document.querySelector('form'));
-      ui.state.rows[view] = {job: {id: 'parent', login_id: 'login', target_id: 'target'}, pages: ['parent'], rows: []};
+      ui.state.rows[view] = {job: {id: 'parent', login_id: 'login', target_id: 'target'}, rows: []};
     }
     const button = {dataset: {job: 'parent', index: '0'}};
-    for (const action of ['history-more', 'history-detail', 'history-export', 'inquiry-detail']) {
+    assert.equal(ui.actions['history-more'], undefined, 'one history job collects every page');
+    for (const action of ['history-detail', 'history-export', 'inquiry-detail']) {
       await ui.actions[action](ui.ctx, button);
     }
-    assert.deepEqual(ui.calls.map(c => c.name), ['history.list', 'inquiry.history', 'history.more', 'history.detail',
+    assert.deepEqual(ui.calls.map(c => c.name), ['history.list', 'inquiry.history', 'history.detail',
       'history.export', 'inquiry.detail'].map(n => `hana.${method === 'onesign' ? 'onesign.' : ''}${n}`));
-    assert.equal(ui.asked.length, method === 'onesign' ? 6 : 0);
+    assert.equal(ui.asked.length, method === 'onesign' ? 5 : 0);
     for (const call of ui.calls) {
       assert.equal(call.fields.login_id, 'login');
       assert.equal(call.fields.target_id, 'target');
@@ -761,6 +762,46 @@ test('history returns with the account\'s last result and a period button sets K
   await ui.actions['history-query'](ui.ctx, main.querySelector('form'));
   assert.equal(ui.calls[0].options.key, 'hana.onesign.history.list||target|');
   assert.equal(ui.calls[0].fields.input.start_date, '2026-09-01');
+});
+
+test('history shows every collected row in one list and says when the range is unfinished', async t => {
+  const ui = await setup(t, 'onesign', 'ready');
+  const main = ui.document.querySelector('main');
+  const rows = Array.from({length: 250}, (_, i) => ({date: '2026-09-30', time: '10:00', type: '입금', name: `합성 ${i + 1}`, amount: 1000, balance: 5000}));
+  const show = async (outcome, result, local = {}) => {
+    ui.state.cache.set('hana.onesign.history.list||target|', {id: 'list', name: 'hana.onesign.history.list', status: 'finished',
+      outcome, login_id: 'login', target_id: 'target', result, local});
+    ui.state.params = {target: 'target'};
+    main.innerHTML = await ui.views.history(ui.ctx);
+  };
+  await show('success', {rows, pagination_complete: true});
+  assert.equal(main.querySelectorAll('tr[data-row^="history:"]').length, 250);
+  assert.match(main.querySelector('#results .list-footer').textContent, /250건 · 조회 완료/);
+  assert.equal(main.querySelector('[data-action="history-more"]'), null);
+  assert.ok(main.querySelector('[data-action="history-export"][data-job="list"]'));
+  // A row of a later page is addressed by its place in the merged list, on the same job.
+  await ui.actions['history-detail'](ui.ctx, {dataset: {index: '149'}});
+  assert.equal(ui.calls[0].name, 'hana.onesign.history.detail');
+  assert.equal(ui.calls[0].fields.parent_job_id, 'list');
+  assert.equal(ui.calls[0].fields.input.row, 150);
+
+  await show('partial_success', {rows: rows.slice(0, 3), pagination_complete: false}, {stopped: 'continuation_cursor_requires_review'});
+  assert.match(main.querySelector('#results .list-footer').textContent, /3건 · 조회 범위 미완료/);
+  assert.match(main.textContent, /일부만 성공했어요/);
+  assert.match(main.textContent, /다음 페이지 정보를 확인할 수 없어/);
+  assert.ok(main.querySelector('[data-action="history-export"]'), 'received pages can still be saved');
+
+  await show('partial_success', {rows: [], pagination_complete: false});
+  assert.match(main.textContent, /확인한 거래 내역이 아직 없어요/);
+  assert.doesNotMatch(main.textContent, /조회 결과가 0건이에요/);
+
+  await show('partial_success', {rows: null, pagination_complete: false}, {stopped: 'history_processing_error'});
+  assert.equal(main.querySelector('[data-action="history-export"]'), null);
+  assert.equal(main.querySelector('#results table'), null);
+
+  await show('success', {rows: [], pagination_complete: true});
+  assert.match(main.textContent, /조회 결과가 0건이에요/);
+  assert.match(main.querySelector('#results .list-footer').textContent, /0건 · 조회 완료/);
 });
 
 test('a first Hometax login goes on to the user and business check; a later login does not', async t => {

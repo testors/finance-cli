@@ -2,14 +2,13 @@
 import json
 import time
 
-from finance_cli.services.hana import inquiry, ledger, ledger_protocol as protocol, onesign, onesign_queries, security
+from finance_cli.services.hana import inquiry, ledger, onesign, onesign_queries, security
 from .base import InputError, Step, StepResult, Stop, mask_account, pick
 from .hana import (OneSignReadAdapter, History, HistoryDetail, TransferHistory, Security, account_number,
-                   compact, observe_accounts, outcome, require_accounts_result, safe_code,
-                   validate_history_controls, verdict, ROW_LIMIT)
+                   collect_history, compact, history_row, observe_accounts, outcome, require_accounts_result,
+                   safe_code, validate_history_controls, verdict, DISPLAY_FIELDS, ROW_LIMIT)
 from .hometax import scalar_row
 
-DISPLAY_FIELDS = ('date', 'time', 'type', 'name', 'amount', 'balance', 'currency', 'variation', 'extra', 'memo')
 # Fields displayed by the original ledger detail / TRNB0701001001 screens.
 # Receipts and authentication metadata are never a browser response schema.
 BANK_FIELDS = (
@@ -69,31 +68,6 @@ def perform(ctx, source, draft, config, observation):
     return source.perform(*draft, config, observation, send=True)
 
 
-def stage_verdict(stage, result):
-    return {'stage': stage, **verdict(result, ('accepted', 'reason', 'processing_status', 'service_status',
-                                              'row_count', 'diagnostics', 'warnings'))}
-
-
-def page_result(ctx, source, receipts, result, stages):
-    rows, complete, more, local = None, None, False, {}
-    service = {'stages': stages}
-    ctx.observe(service_verdict=service, outcome=outcome(result['accepted']))
-    if result['accepted'] is True:
-        receipts['page'] = result['receipt_directory']
-        try:
-            pages, position = ledger.chain(source, receipts['page'], source.headers())
-            request, value, _ = pages[-1]
-            rows = [pick(protocol.display_row(row), DISPLAY_FIELDS)
-                    for row in protocol.rows(request['account_history']['kind'], value)][:ROW_LIMIT]
-            complete, more = position is None, position not in (None, 'invalid')
-            ctx.remember(history={'receipts': receipts, 'more': more})
-        except (ValueError, OSError, KeyError, TypeError, AttributeError):
-            local['saved_rows_unreadable'] = True
-    return StepResult(service_verdict=service, outcome=outcome(result['accepted']), local=local,
-                      result={'rows': rows, 'pagination_complete': complete, 'more_available': more,
-                              'transfer_confirmed': False})
-
-
 class OneSignHistory(Query):
     name = 'hana.onesign.history.list'
     title = History.title
@@ -102,45 +76,26 @@ class OneSignHistory(Query):
     def query(self, ctx, source):
         validate_history_controls(ctx)
         stages = self.ensure_accounts(ctx, source)
-        config, receipts = self.config(ctx, source), {}
-        for stage in ('clock', 'account', 'page'):
-            draft = ledger.prepare(source, stage, config, clock=receipts.get('clock'), account_info=receipts.get('account'))
-            result = perform(ctx, source, draft, config, ctx.job['id'])
-            stages.append(stage_verdict(stage, result))
-            if stage == 'page':
-                return page_result(ctx, source, receipts, result, stages)
-            ctx.observe(service_verdict={'stages': stages}, outcome=outcome(result['accepted'], completed=False))
-            if result['accepted'] is not True or result['processing_status'] != 'completed':
-                return StepResult(service_verdict={'stages': stages}, outcome=outcome(result['accepted'], completed=False))
-            receipts[stage] = result['receipt_directory']
+        return collect_history(ctx, source, self.config(ctx, source),
+                               lambda draft, config, label: source.perform(*draft, config, label, send=True), stages)
 
 
 class HistoryFollowUp(Query):
     session_from_parent = True
+    # Single-page jobs recorded before the unified query remain valid parents.
     parents = ('hana.onesign.history.list', 'hana.onesign.history.more')
 
     def check_parent(self, parent, value):
-        if parent['name'] not in self.parents or parent['status'] != 'finished' or parent['outcome'] != 'success':
+        if parent['name'] not in self.parents or parent['status'] != 'finished' \
+                or parent['outcome'] not in ('success', 'partial_success'):
             raise InputError('parent_history_job_required')
         if not json.loads(parent['attempt']).get('history', {}).get('receipts', {}).get('page'):
             raise InputError('parent_history_page_required')
 
     def history(self, ctx, source):
-        receipts = dict(json.loads(ctx.parent['attempt'])['history']['receipts'])
-        metadata = source.metadata(receipts['page'])
-        return receipts, metadata['config'], metadata['observation']
-
-
-class OneSignHistoryMore(HistoryFollowUp):
-    name = 'hana.onesign.history.more'
-    title = '거래 내역 다음 페이지'
-
-    def query(self, ctx, source):
-        receipts, config, observation = self.history(ctx, source)
-        draft = ledger.prepare(source, 'page', config, clock=receipts['clock'], account_info=receipts['account'],
-                               previous=receipts['page'])
-        result = perform(ctx, source, draft, config, observation)
-        return page_result(ctx, source, receipts, result, [stage_verdict('page', result)])
+        saved = json.loads(ctx.parent['attempt'])['history']
+        metadata = source.metadata(saved['receipts']['page'])
+        return saved, metadata['config'], metadata['observation']
 
 
 class OneSignHistoryDetail(HistoryFollowUp):
@@ -149,9 +104,11 @@ class OneSignHistoryDetail(HistoryFollowUp):
     validate = HistoryDetail.validate
 
     def query(self, ctx, source):
-        receipts, config, observation = self.history(ctx, source)
+        saved, config, observation = self.history(ctx, source)
+        receipts = saved['receipts']
+        page, row = history_row(saved, ctx.input['row'])
         draft = ledger.prepare(source, 'detail', config, clock=receipts['clock'], account_info=receipts['account'],
-                               previous=receipts['page'], row=ctx.input['row'])
+                               previous=page, row=row, snapshot=saved.get('snapshot'))
         meta = draft[0]['account_history']
         if meta['kind'] == 'local':
             return StepResult(outcome='success', observed=False, result={'source': 'saved_ledger_row',
@@ -175,8 +132,8 @@ class OneSignHistoryExport(HistoryFollowUp):
     steps = {'run': Step('run', secrets=('vault_passphrase',), sends=False)}
 
     def query(self, ctx, source):
-        receipts, _, _ = self.history(ctx, source)
-        report, csv_bytes = ledger.export_report(source, receipts['page'])
+        saved, _, _ = self.history(ctx, source)
+        report, csv_bytes = ledger.export_report(source, saved['receipts']['page'])
         filtered = pick(report, (*SUMMARY_FIELDS, 'duplicates_removed', 'issues', 'csv_text_cells_escaped'))
         filtered['rows'] = [pick(row, ('page', 'row', 'kind', *DISPLAY_FIELDS)) for row in report['rows']]
         stamp = time.strftime('%Y%m%d-%H%M%S')
@@ -271,5 +228,5 @@ class OneSignSecurity(Query):
                           result={'kind': kind, 'observation': view, 'state_change_requested': False})
 
 
-ADAPTERS = (OneSignHistory(), OneSignHistoryMore(), OneSignHistoryDetail(), OneSignHistoryExport(),
+ADAPTERS = (OneSignHistory(), OneSignHistoryDetail(), OneSignHistoryExport(),
             OneSignTransferHistory(), OneSignTransferDetail(), OneSignSecurity())
