@@ -61,7 +61,7 @@ def capabilities():
                     'live': ['certificate-login', 'session', 'account', 'business', 'tax-query',
                              'returns', 'report', 'invoice'],
                     'requirements': ['Node runtime', 'JDK 17+ for invoice signing'],
-                    'session': {'extension_request': None, 'idle_basis': 'unverified',
+                    'session': {'extension_request': None, 'idle_basis': 'observed', 'session_check_extends': True,
                                 'idle_limit_observed_seconds': {'kept_after': 1790, 'ended_after': 1830}},
                     'migration_live_tested': False},
         'giro': {'offline': ['auth-plan', 'registration-plan', 'request-plan', 'bills', 'payment-accounts', 'payment-plan',
