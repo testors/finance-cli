@@ -128,6 +128,27 @@ def mask_fields(value, keys):
     return {k: (mask_account(v) if k in keys else v) for k, v in value.items()}
 
 
+# Login extension -----------------------------------------------------------
+
+# What a login extension job may report. Each institution sends its own request and keeps its
+# own verdict; a field its service function does not state stays absent.
+EXTENSION_FIELDS = ('request_accepted', 'login_extension_accepted', 'extension_effect', 'session_ended',
+                    'native_client_timer_reset_ms', 'server_expires_at', 'session_current_validity')
+
+
+def extension_result(ctx, value, *extra, mark_ended=True):
+    """The allowlisted scalar result of a login extension job.
+
+    A session the institution reported as ended is marked expired, so it is neither used nor
+    extended again. Pass ``mark_ended=False`` where the adapter's own flow already records that.
+    """
+    if not isinstance(value, dict):
+        return None
+    if mark_ended and value.get('session_ended') is True:
+        ctx.mark_session(ctx.session['id'], 'expired', 'institution_session_ended')
+    return {key: scalar(value[key]) for key in EXTENSION_FIELDS + extra if key in value}
+
+
 # Input helpers ------------------------------------------------------------
 
 def dict_input(value, allowed, required=()):

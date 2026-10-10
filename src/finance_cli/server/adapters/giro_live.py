@@ -21,7 +21,8 @@ from giro.payment import account_options
 from giro.payment_flow import PaymentWorkflow, WorkflowStopped
 from giro.session_store import SessionStore
 
-from .base import Adapter, InputError, Step, StepResult, Stop, bounded_int, choice, dict_input, iso_date, pick, text
+from .base import (Adapter, InputError, Step, StepResult, Stop, bounded_int, choice, dict_input, extension_result,
+                   iso_date, pick, text)
 from .giro import bill_row
 from .hana import digest
 from .. import model
@@ -298,11 +299,9 @@ class Extend(Session):
         with self.store(ctx) as store:
             ctx.reserve()
             value = service.extend(send=True, store=store)
-            if value.get('session_ended') is True and value.get('callback') != 'disconnected_session':
-                ctx.mark_session(ctx.session['id'], 'expired', 'institution_session_ended')
-            return query_result(ctx, value, pick(value, ('request_accepted', 'login_extension_accepted', 'extension_effect',
-                                                         'session_ended', 'server_expires_at',
-                                                         'session_current_validity')))
+            # query_result itself marks a session the service disconnected.
+            result = extension_result(ctx, value, mark_ended=value.get('callback') != 'disconnected_session')
+            return query_result(ctx, value, result)
 
 
 def query_result(ctx, value, result):

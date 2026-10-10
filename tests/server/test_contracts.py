@@ -288,5 +288,48 @@ class RemovalTests(ServerCase):
         self.assertFalse(path.exists())
 
 
+class ExtensionResultTests(unittest.TestCase):
+    """Every login extension job reports through one helper. No server, no institution."""
+
+    class Ctx:
+        def __init__(self):
+            self.session, self.marked = {'id': 'ss_synthetic'}, []
+
+        def mark_session(self, session_id, state, note=None):
+            self.marked.append((session_id, state, note))
+
+    def test_only_shared_fields_and_named_extras_leave_as_scalars_in_one_order(self):
+        from finance_cli.server.adapters.base import extension_result
+        ctx = self.Ctx()
+        value = {'cookies_saved': True, 'session_current_validity': 'valid', 'server_expires_at': None,
+                 'login_extension_accepted': True, 'request_accepted': True, 'extension_effect': {'nested': 'SYNTHETIC'},
+                 'events': [{'url': 'SYNTHETIC-PRIVATE'}], 'warnings': ['SYNTHETIC-PRIVATE'], 'observed_at': 'later'}
+        result = extension_result(ctx, value, 'cookies_saved')
+        self.assertEqual(list(result.items()), [('request_accepted', True), ('login_extension_accepted', True),
+                                                ('extension_effect', None), ('server_expires_at', None),
+                                                ('session_current_validity', 'valid'), ('cookies_saved', True)])
+        self.assertIsNone(extension_result(ctx, None))
+        self.assertEqual(ctx.marked, [])
+
+    def test_an_ended_session_is_marked_expired_unless_the_adapter_records_it_itself(self):
+        from finance_cli.server.adapters.base import extension_result
+        for value, options, marked in (({'session_ended': True}, {}, True),
+                                       ({'session_ended': True}, {'mark_ended': False}, False),
+                                       ({'session_ended': False}, {}, False),
+                                       ({'session_ended': 'Y'}, {}, False),     # only the service's own True
+                                       ({'login_extension_accepted': False}, {}, False)):
+            ctx = self.Ctx()
+            self.assertEqual(extension_result(ctx, value, **options), value)
+            self.assertEqual(ctx.marked, [('ss_synthetic', 'expired', 'institution_session_ended')] if marked else [])
+
+    def test_every_extension_job_uses_the_shared_result(self):
+        import inspect
+        names = [name for name in adapters.names() if name.endswith('.session.extend')]
+        self.assertEqual(names, ['giro.session.extend', 'hana.corporate.session.extend', 'hana.onesign.session.extend',
+                                 'hana.session.extend', 'hometax.session.extend'])
+        for name in names:
+            self.assertIn('extension_result(', inspect.getsource(type(adapters.get(name)).run), name)
+
+
 if __name__ == '__main__':
     unittest.main()

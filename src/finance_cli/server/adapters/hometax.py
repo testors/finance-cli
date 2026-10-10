@@ -20,8 +20,8 @@ import subprocess
 
 from finance_cli.core import storage
 
-from .base import (Adapter, InputError, Step, StepResult, Stop, bounded_int, choice, dict_input, iso_date, mask_account,
-                   pick, text)
+from .base import (Adapter, InputError, Step, StepResult, Stop, bounded_int, choice, dict_input, extension_result,
+                   iso_date, mask_account, pick, text)
 
 NODE_TIMEOUT = 900
 ROW_LIMIT = 1000
@@ -390,9 +390,8 @@ class SessionExtend(HometaxAdapter):
         record, summary, output_error = chain.run('session.mjs', {'command': 'session', 'operation': 'extend',
                                                                    'timeout': 60.0})
         verdict = verdict_of(record, summary)
-        report = pick(record if isinstance(record, dict) else summary,
-                      ('login_extension_accepted', 'extension_effect', 'session_ended', 'server_expires_at',
-                       'session_current_validity')) or {}
+        # The chain has already registered an ended session as expired under its new id.
+        report = extension_result(ctx, record if isinstance(record, dict) else summary, mark_ended=False) or {}
         return StepResult(service_verdict=verdict, outcome=outcome_of(verdict), local=chain.local(output_error),
                           result={**report, 'session_id': chain.session_id if chain.path else None})
 

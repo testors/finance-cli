@@ -15,8 +15,8 @@ import time
 
 from finance_cli.core import storage
 
-from .base import (Adapter, InputError, Step, StepResult, Stop, bounded_int, choice, dict_input, iso_date, mask_account,
-                   pick, text)
+from .base import (Adapter, InputError, Step, StepResult, Stop, bounded_int, choice, dict_input, extension_result,
+                   iso_date, mask_account, pick, text)
 from .hometax import scalar_row
 
 PIN = re.compile(r'[0-9]{6}')
@@ -606,8 +606,7 @@ class Extend(JointSessionAdapter):
         return StepResult(service_verdict=verdict(result, ('accepted', 'login_extension_accepted', 'reason',
                                                            'warnings')),
                           outcome=outcome(result.get('accepted')),
-                          result=pick(result, ('login_extension_accepted', 'native_client_timer_reset_ms',
-                                               'server_expires_at', 'session_current_validity', 'observed_at')))
+                          result=extension_result(ctx, result, 'observed_at'))
 
 
 # OneSign path -------------------------------------------------------------
@@ -736,8 +735,7 @@ class OneSignExtend(OneSignReadAdapter):
         return StepResult(service_verdict=verdict(result, ('accepted', 'login_extension_accepted', 'reason',
                                                            'service_status', 'processing_status', 'error', 'warnings')),
                           outcome=outcome(result.get('accepted'), completed=result.get('processing_status') == 'completed'),
-                          result=pick(result, ('login_extension_accepted', 'native_client_timer_reset_ms',
-                                               'server_expires_at', 'session_current_validity', 'cookies_saved')))
+                          result=extension_result(ctx, result, 'cookies_saved'))
 
 
 def transfer_preview(preview):

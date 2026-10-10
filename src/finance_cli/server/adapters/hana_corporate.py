@@ -7,7 +7,8 @@ import time
 from finance_cli.core import storage
 from finance_cli.services.hana_corporate import idpw, login, queries, store, transfers, transfer_protocol
 
-from .base import Adapter, InputError, Step, StepResult, Stop, choice, dict_input, iso_date, scalar, text
+from .base import (Adapter, InputError, Step, StepResult, Stop, choice, dict_input, extension_result, iso_date, scalar,
+                   text)
 from .hana import account_number, check_credential, digest
 
 
@@ -185,10 +186,7 @@ class Extend(Session):
         ctx.reserve()
         value = service.extend(session=self.session(ctx), send=True)
         fields = observed(ctx, value)
-        if value.get('session_ended') is True:
-            ctx.mark_session(ctx.session['id'], 'expired', 'institution_session_ended')
-        return StepResult(**fields, result=pick(value, ('login_extension_accepted', 'session_ended', 'server_expires_at',
-                                                        'session_current_validity')), local=local(value))
+        return StepResult(**fields, result=extension_result(ctx, value), local=local(value))
 
 
 class History(Session):
