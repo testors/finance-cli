@@ -9,7 +9,7 @@ from giro.client import AuthenticatedClient
 from giro.errors import GiroError
 from giro.payment_cli import run_payment
 from giro.payment_flow import PaymentJournal
-from giro.query_flow import collect_bills, list_bills, list_receipts, registered_accounts, receipt_detail
+from giro.query_flow import collect_bills, list_bills, list_receipts, list_regions, registered_accounts, receipt_detail
 from giro.session_store import SessionStore
 import test_login as support
 from test_bills import page
@@ -81,6 +81,29 @@ class LiveWorkflowTests(unittest.TestCase):
             self.assertEqual(result['next_action'], 'local_region_unavailable')
         self.assertNotIn('local.districts', self.server.steps)
         self.assertNotIn('local.list', self.server.steps)
+
+    def test_region_codes_command_lists_codes_on_the_saved_session_and_queries_no_bill(self):
+        from giro.__main__ import parser, run
+        before = len(self.server.steps)
+        result = list_regions('local', send=True, store=self.store)
+        self.assertTrue(result['app_success'], result)
+        self.assertEqual(result['provinces'], [{'area_code': 'SYNTHETIC-AREA', 'name': '합성시도'}])
+        self.assertEqual(result['districts'], [{'district_code': 'SYNTHETIC-SORT', 'district_giro_no': 'SYNTHETIC-GIRO',
+                                                'name': '합성지자체'}])
+        self.assertEqual(result['session_processing_issues'], [])
+        self.assertNotIn('SYNTHETIC', str(result['events']))
+        self.assertEqual(self.server.steps[before:], ['local.provinces', 'local.districts'])
+        self.assertEqual(self.server.calls[-1][1]['areaCode'], ['SYNTHETIC-AREA'])
+        with patch('giro.query_flow.SessionStore', return_value=self.store):
+            result, code = run(parser().parse_args(['bills', 'regions', '--type', 'local', '--area-code', 'SYNTHETIC-AREA', '--send']))
+            self.assertEqual((code, result['area_code']), (0, 'SYNTHETIC-AREA'))
+            result, code = run(parser().parse_args(['bills', 'regions', '--type', 'local', '--area-code', 'UNLISTED', '--live']))
+            self.assertEqual((code, result['next_action'], result['districts']), (0, 'local_region_unavailable', None))
+            self.server.responses['local.provinces'] = (200, {'responseCode': '311'})
+            result, code = run(parser().parse_args(['bills', 'regions', '--type', 'local', '--send']))
+            self.assertEqual((code, result['app_success'], result['provinces']), (2, False, None))
+        self.assertNotIn('local.list', self.server.steps)
+        self.assertEqual(self.server.steps.count('auth.pin'), 1, 'the saved login is used as it is')
 
     def test_missing_own_uid_stops_at_registration_prompt_without_query(self):
         self.session.info.pop('hasUIDInfoYn')

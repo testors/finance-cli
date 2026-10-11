@@ -569,6 +569,8 @@ CLI에 기기 등록·PIN 로그인·세금 조회·등록계좌 국세·지방�
 fin giro bills types
 fin giro bills summary --send
 fin giro bills list --type traffic --send
+fin giro bills regions --type local --send                     # 시도 코드와 첫 시도의 지자체 코드
+fin giro bills regions --type local --area-code CODE --send    # 그 시도의 지자체 코드
 fin giro bills list --type kepco --search-input /path/to/query-numbers.json --send
 fin giro bills due --type social --search-input /path/to/query-numbers.json --within-days 7 --send
 fin giro bills show --type kepco --input /path/to/bill-identifiers.json --send
@@ -578,7 +580,7 @@ fin giro bills show --type kepco --input /path/to/bill-identifiers.json --send
 
 통합조회는 지방세·세외수입·환경개선부담금과 국고금의 **항목별 건수·금액·응답 코드**를 반환합니다. `categories`는 항목별 값이고, `totals`는 지로가 항목과 따로 알려 주는 지방세입(`localtax`: 지방세·세외수입·환경개선부담금)·국고금(`ntax`)·전체(`total`) 합계입니다. 지방세 항목은 응답의 `local`이며 지방세입 합계와 구별합니다. 지로 화면은 건수 `-1`을 조회 불가로 표시하고 금액 `-2`는 표시하지 않습니다. CLI는 받은 값을 그대로 반환하고 웹은 같은 규칙으로 표시합니다. 목록과 상세는 해당 항목에서 별도로 조회합니다. 항목의 실패 응답이나 누락된 건수를 0건으로 바꾸지 않으며, 납부집중일 제한을 받으면 개별 조회를 안내합니다. 전기·통신·TV·사회보험은 페이지 없는 목록이고, 나머지 페이지형 조회는 기본 최대 100페이지(`--max-pages`)까지 수집합니다. 일반지로는 첫 페이지만 조회하며 다음 페이지가 있으면 `giro_next_page_unavailable`과 미완료 상태로 남깁니다. 후속 페이지 오류가 나면 이미 받은 고지와 성공 판정을 유지합니다.
 
-지방세·환경개선부담금·세외수입은 서버의 첫 시도·지자체를 기본 선택하고 결과에 조회 지역을 표시합니다. CLI에서는 `--area-code`, `--district-code`, `--district-giro-no`로 서버가 제공한 지역 코드를 선택할 수 있습니다. 웹에서는 **지역 선택**을 누르면 시도 목록과 첫 시도의 지자체 목록을 불러오고, 시도를 바꾸면 그 시도의 지자체 목록을 다시 불러옵니다(`giro.bills.regions`; 목록 요청 두 번이며 고지는 조회하지 않습니다). 고른 시도·지자체는 **고지 조회**에 함께 보내고, 다음에 화면을 열면 마지막으로 조회한 지자체가 선택되어 있습니다. 고지 조회는 CLI와 같이 지역 목록을 다시 받아 고른 코드와 대조하며, 목록에 없으면 고지를 조회하지 않고 `local_region_unavailable`로 끝냅니다. 화면을 여는 것만으로는 지역 목록을 요청하지 않고, 지역을 고르지 않은 조회는 첫 시도·지자체로 보냅니다. 본인정보 신규 등록, 사업자/법인번호 조회, 인지대·송달료 및 일반지로 직접 입력 납부는 이 조회 기능에 포함하지 않습니다. 일반지로가 조회납부를 지원하지 않으면 `direct_input_payment_required`로 종료합니다.
+지방세·환경개선부담금·세외수입은 서버의 첫 시도·지자체를 기본 선택하고 결과에 조회 지역을 표시합니다. CLI에서는 `--area-code`, `--district-code`, `--district-giro-no`로 서버가 제공한 지역 코드를 선택할 수 있습니다. 코드는 `fin giro bills regions --type local|env|nontax --send`로 확인합니다. 결과의 `provinces`는 시도별 `area_code`와 이름이고, `districts`는 결과의 `area_code`가 가리키는 시도(생략하면 첫 시도, `--area-code`로 다른 시도)의 지자체별 `district_code`·`district_giro_no`와 이름입니다. 이 값을 그대로 `bills list`의 세 옵션에 넣습니다. 목록 요청 두 번만 보내며 고지는 조회하지 않고, `--send`가 없으면 계획만 출력합니다. 목록에 없는 시도 코드는 지자체 목록을 요청하지 않고 `local_region_unavailable`로 끝납니다. 지자체 목록만 거절되면 받은 시도 목록을 유지하고 `partial_success`로 남깁니다. 웹에서는 **지역 선택**을 누르면 시도 목록과 첫 시도의 지자체 목록을 불러오고, 시도를 바꾸면 그 시도의 지자체 목록을 다시 불러옵니다(`giro.bills.regions`; 목록 요청 두 번이며 고지는 조회하지 않습니다). 고른 시도·지자체는 **고지 조회**에 함께 보내고, 다음에 화면을 열면 마지막으로 조회한 지자체가 선택되어 있습니다. 고지 조회는 CLI와 같이 지역 목록을 다시 받아 고른 코드와 대조하며, 목록에 없으면 고지를 조회하지 않고 `local_region_unavailable`로 끝냅니다. 화면을 여는 것만으로는 지역 목록을 요청하지 않고, 지역을 고르지 않은 조회는 첫 시도·지자체로 보냅니다. 본인정보 신규 등록, 사업자/법인번호 조회, 인지대·송달료 및 일반지로 직접 입력 납부는 이 조회 기능에 포함하지 않습니다. 일반지로가 조회납부를 지원하지 않으면 `direct_input_payment_required`로 종료합니다.
 
 웹의 **고지·납부**에서 요금 종류를 고르면 필요한 번호 입력칸이 나타납니다. 상하수도요금은 전자수용가번호와 고객번호(서울시) 중 하나만 입력합니다. 번호는 작업의 일반 입력·로그에 저장하지 않습니다. **통합조회** 결과는 전체 합계 아래에 지방세입과 국고금으로 묶어 보여 주며, 항목을 선택하고 **고지 조회 → 상세**로 확인할 수 있습니다. 상세에는 목록의 항목에 더해 상세 응답에만 있는 납기내·납기후 기한과 금액, 기납부한 금액·납부할 잔여금액을 받은 경우에 표시합니다. 전기·통신·TV의 상세 응답에는 이 항목이 없습니다. 새 공과금은 조회만 지원하며 **납부하기**는 기존 국세·지방세·관세에만 표시합니다.
 

@@ -11,7 +11,7 @@ from giro.client import AuthenticatedClient, AuthenticatedSession, WireResponse
 from giro.crypto import decrypt_text
 from giro.errors import GiroError
 from giro.protocol import ENDPOINTS
-from giro.query_flow import collect_bills, collect_detail, collect_regions, collect_summary, list_bills
+from giro.query_flow import collect_bills, collect_detail, collect_regions, collect_summary, list_bills, list_regions
 from giro.__main__ import parser, run
 
 KEY = bytes(range(16))
@@ -212,10 +212,13 @@ class Queries(unittest.TestCase):
             for kind in BILL_TYPES:
                 self.assertTrue(list_bills(kind)['plan_only'])
             for argv in (['bills', 'types'], ['bills', 'summary'], ['bills', 'show', '--type', 'water'],
-                         ['bills', 'list', '--type', 'tv']):
+                         ['bills', 'list', '--type', 'tv'], ['bills', 'regions', '--type', 'env', '--area-code', '01']):
                 result, code = run(parser().parse_args(argv))
                 self.assertEqual(code, 0)
                 self.assertFalse(result['network_used'])
+            for kind, code in (('national', None), ('local', '')):
+                with self.assertRaises(GiroError): list_regions(kind, code, send=True)
+            with self.assertRaises(SystemExit): parser().parse_args(['bills', 'regions', '--type', 'water'])
         with self.assertRaises(GiroError): collect_bills(self.client, 'water')
         with self.assertRaises(GiroError): collect_bills(self.client, 'kepco', search={'pin': 'SECRET'})
         self.assertEqual(self.calls, [])

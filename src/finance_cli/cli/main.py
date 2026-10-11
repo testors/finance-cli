@@ -73,7 +73,7 @@ def capabilities():
         'giro': {'offline': ['auth-plan', 'registration-plan', 'request-plan', 'bills', 'payment-accounts', 'payment-plan',
                             'payment-result', 'certificate-validation', 'codeguard'],
                  'live': ['explicit PIN-free bootstrap probes', 'pinned-public-root-preparation',
-                          'device-registration', 'pin-login', 'own-tax-queries', 'utility-bill-queries', 'integrated-bill-summary', 'bill-detail', 'single-national-account-payment',
+                          'device-registration', 'pin-login', 'own-tax-queries', 'utility-bill-queries', 'bill-query-regions', 'integrated-bill-summary', 'bill-detail', 'single-national-account-payment',
                           'single-local-account-payment', 'single-customs-account-payment', 'payment-review',
                           'registered-account-list', 'receipt-list', 'receipt-detail', 'session-extension-query'],
                  'session_extension': {'command': 'fin giro session extend', 'method': 'registered-accounts-query',

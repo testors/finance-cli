@@ -38,16 +38,20 @@ def validate_search(tax_type, search=None, *, require_inputs=True):
     return search
 
 
+def validate_region(tax_type, area_code=None):
+    if tax_type not in REGION_TYPES:
+        raise GiroError('지역을 선택하는 고지 종류가 아닙니다.')
+    if area_code is not None and (not isinstance(area_code, str) or not area_code or len(area_code) > 100):
+        raise GiroError('시도 코드 형식을 확인하세요.')
+
+
 def collect_regions(client, tax_type, area_code=None):
     """The provinces and one province's districts, as the query screen loads them before a bill query.
 
     The first province is the screen's initial choice; `area_code` is another one from the list.
     No bill is queried, and the bill query that follows names the district.
     """
-    if tax_type not in REGION_TYPES:
-        raise GiroError('지역을 선택하는 고지 종류가 아닙니다.')
-    if area_code is not None and (not isinstance(area_code, str) or not area_code or len(area_code) > 100):
-        raise GiroError('시도 코드 형식을 확인하세요.')
+    validate_region(tax_type, area_code)
     client.require_active()
     response = client.query(tax_type+'.provinces', {}, send=True)
     result = dict(response_report(response), tax_type=tax_type, network_used=True, stage=tax_type+'.provinces',
@@ -78,6 +82,20 @@ def collect_regions(client, tax_type, area_code=None):
     if rows is not None:
         result['districts'] = [None if row is None else dict(district_code=row.get('sortCode'),
             district_giro_no=row.get('giroNo'), name=row.get('sigunguName')) for row in rows]
+    return result
+
+
+def list_regions(tax_type, area_code=None, *, send=False, store=None):
+    """The codes a regional bill query takes: every province, and the districts of one of them."""
+    validate_region(tax_type, area_code)
+    if not send:
+        return dict(plan_only=True, network_used=False, tax_type=tax_type, operation='bills.regions',
+                    maximum_requests=2, automatic_login=False, payment=False)
+    store = store if store is not None else SessionStore()
+    with store.use() as (session, issues):
+        client = AuthenticatedClient(session)
+        result = collect_regions(client, tax_type, area_code)
+        result.update(session_processing_issues=issues, events=list(client.events))
     return result
 
 

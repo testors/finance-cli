@@ -43,6 +43,7 @@ class CliContractTests(unittest.TestCase):
             (['giro', 'auth', 'bootstrap'], ''),
             (['giro', 'auth', 'login'], ''),
             (['giro', 'bills', 'list', '--type', 'national', '--input', '-'], '{"responseCode":"999"}'),
+            (['giro', 'bills', 'regions', '--type', 'local'], ''),
         ]
         for args, stdin in cases:
             with self.subTest(command=args):

@@ -77,7 +77,7 @@ OTP 발급·한도 변경은 실행 범위에 포함하지 않는다. 이체에�
 | PIN 로그인 | `giro auth login` | 기존 CLI 기기 사용, 별도 웹 세션 암호화 보관 |
 | 고지 조회·납부 | `giro bills list`, `giro payment` | 국세·지방세·관세; 고지 → 계좌 별칭 선택 → 고정 내용 확인 → 비밀번호 입력·단건 전송 |
 | 통합조회·공과금 조회·상세 | `giro bills summary`, `giro bills list/show` | 19종 조회만 지원; 통합조회는 전체·지방세입·국고금 합계와 항목별 건수·금액; 조회 번호는 비밀 입력으로 전달하고 저장하지 않음; 상세는 봉인한 목록의 항목 참조로 조회 |
-| 조회 지역 선택 | `giro bills list`의 `--area-code`·`--district-code`·`--district-giro-no` | 지방세·환경개선부담금·세외수입; 사용자가 요청할 때만 시도·지자체 목록을 불러오고(`giro.bills.regions`) 고지는 조회하지 않음; 고지 조회가 목록을 다시 받아 대조 |
+| 조회 지역 선택 | `giro bills regions`, `giro bills list`의 `--area-code`·`--district-code`·`--district-giro-no` | 지방세·환경개선부담금·세외수입; 사용자가 요청할 때만 시도·지자체 목록을 불러오고(`giro.bills.regions`) 고지는 조회하지 않음; 고지 조회가 목록을 다시 받아 대조 |
 | 등록계좌·납부내역 | 계좌·영수증 목록/상세 | 등록계좌 별칭, 기간/페이지별 내역과 상세 조회 |
 | 기기 등록·보호 자료 준비 | `giro auth register`·자료 설치 | 서버에서 CLI로 관리; 웹 로그인에서 재등록하지 않음 |
 

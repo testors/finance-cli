@@ -98,7 +98,7 @@ def giro_report():
                          'own-national-tax-query', 'payment-review', 'single-national-account-payment',
                          'registered-account-list', 'receipt-list', 'receipt-detail'],
             'unverified': ['own-local-tax-query', 'own-customs-query', 'utility-bill-queries',
-                           'integrated-bill-summary', 'bill-detail',
+                           'bill-query-regions', 'integrated-bill-summary', 'bill-detail',
                            'single-local-account-payment', 'single-customs-account-payment',
                            'web-query-with-bills', 'web-payment-execution'],
             'jobs': {name: giro_job(name) for name in GIRO_JOBS},

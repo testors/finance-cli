@@ -8,7 +8,7 @@ from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 from finance_cli.cli.output import ArgumentParser, emit
 
 from .bills import TAX_TYPES, due_bills, normalize_detail, normalize_pages
-from .bill_catalog import PAYMENT_TYPES, INPUT_LABELS
+from .bill_catalog import PAYMENT_TYPES, INPUT_LABELS, REGION_TYPES
 from .compat import loads
 from .errors import GiroError, ResponseError
 from .protocol import ENDPOINTS, auth_plan, request_plan
@@ -130,6 +130,10 @@ def parser():
     bill_sub.add_parser('types', help='조회 종류와 필요한 입력')
     summary = bill_sub.add_parser('summary', help='본인 공과금 통합조회: 항목별 건수·금액')
     summary.add_argument('--send', '--live', dest='live', action='store_true')
+    regions = bill_sub.add_parser('regions', help='지역별 고지 조회에 쓰는 시도·지자체 코드 목록; 고지는 조회하지 않음')
+    regions.add_argument('--type', choices=REGION_TYPES, required=True)
+    regions.add_argument('--area-code', help='지자체 목록을 볼 시도 코드; 생략하면 첫 시도')
+    regions.add_argument('--send', '--live', dest='live', action='store_true')
     for action in ("list", "due", "show"):
         item = bill_sub.add_parser(action)
         item.add_argument("--type", choices=TAX_TYPES, required=True)
@@ -139,7 +143,8 @@ def parser():
             item.add_argument('--max-pages', type=int, default=100)
             item.add_argument('--search-input', help='조회 번호를 담은 JSON 파일 또는 -; 명령행 값 대신 사용 가능')
             for key, label in INPUT_LABELS.items():
-                item.add_argument('--'+key.replace('_', '-'), help=label)
+                item.add_argument('--'+key.replace('_', '-'), help=label + (
+                    '; bills regions에서 확인' if key in ('area_code', 'district_code', 'district_giro_no') else ''))
         if action == "due":
             item.add_argument("--within-days", type=int, default=7)
             item.add_argument("--today", type=date.fromisoformat, help="기준일 YYYY-MM-DD; 기본 Asia/Seoul")
@@ -153,6 +158,10 @@ def run(args):
         from .query_flow import integrated_summary
         result = catalog() if args.action == 'types' else integrated_summary(send=args.live)
         return result, 0 if args.action == 'types' or result.get('plan_only') or result.get('app_success') else 2
+    if args.command == 'bills' and args.action == 'regions':
+        from .query_flow import list_regions
+        result = list_regions(args.type, args.area_code, send=args.live)
+        return result, 0 if result.get('plan_only') or result.get('app_success') else 2
     if args.command == 'bills' and args.action == 'show' and (args.live or args.input is None):
         from .query_flow import bill_detail
         if args.live and args.input is None:
