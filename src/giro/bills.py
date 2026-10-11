@@ -6,7 +6,8 @@ import re
 from .compat import java_int, string_value, successful_response
 from .errors import GiroError
 
-TAX_TYPES = ("national", "local", "customs")
+from .bill_catalog import BILL_TYPES, SIMPLE_TYPES
+TAX_TYPES = BILL_TYPES
 
 
 def _tax_type(tax_type):
@@ -41,7 +42,8 @@ def _bill(item, tax_type):
     if not isinstance(item, dict):
         raise GiroError("paymentList 항목은 객체여야 합니다.")
     due_raw = _string(item, "payLimitDate")
-    amount_raw = _string(item, "payMny")
+    amount_raw = _string(item, "napbuMny" if tax_type in ('kepco', 'ktcomm', 'tv', 'giro')
+                         and 'napbuMny' in item else "payMny")
     amount = None
     if amount_raw is not None:
         value = amount_raw.strip()
@@ -51,9 +53,12 @@ def _bill(item, tax_type):
             except ValueError:
                 # E.g. Python's integer digit limit: normalization only.
                 pass
+    identifiers = {k: _string(item, k) for k in ("elecNo", "giroNo", "sortCode", "key")}
+    if tax_type in ('social', 'annuity'):
+        identifiers['customerNo'] = _string(item, 'customerNo')
     return {
         "tax_type": tax_type,
-        "identifiers": {k: _string(item, k) for k in ("elecNo", "giroNo", "sortCode", "key")},
+        "identifiers": identifiers,
         "issuer": _string(item, "companyName"), "tax_name": _string(item, "taxName"),
         "amount": amount, "amount_raw": amount_raw,
         "due_date": parse_date(due_raw), "due_date_raw": due_raw,
@@ -71,6 +76,21 @@ def normalize_pages(document, tax_type):
     pages = document if isinstance(document, list) else [document]
     if not pages:
         raise GiroError("빈 응답 배열은 조회 성공을 증명하지 않습니다.")
+    if tax_type in SIMPLE_TYPES:
+        if len(pages) != 1:
+            raise GiroError('이 항목은 페이지 구분 없는 단일 목록 응답입니다.')
+        response = successful_response(pages[0], tax_type + '.list')
+        items = response.get('paymentList')
+        rows = None if items is None else [None if r is None else _bill(r, tax_type) for r in items]
+        issues = ['paymentList null/누락'] if rows is None else []
+        if rows is not None and any(r is None for r in rows): issues.append('null 항목 유지')
+        if rows is not None and any(r and r['amount_raw'] is not None and r['amount'] is None for r in rows):
+            issues.append('금액 정규화 불가; 원문 유지')
+        return dict(source='offline-json', tax_type=tax_type, app_success=True, response_code='000',
+            complete=not issues, issues=issues, bills=rows, pages=[], page_navi_raw=[],
+            total_count=None, loaded_count=None if rows is None else len(rows),
+            list_states=['list' if items is not None else 'null' if 'paymentList' in pages[0] else 'missing'],
+            missing_pages=[], missing_page_count=None, missing_pages_truncated=False)
     bills, page_info, issues, raw_nav, list_states = [], [], [], [], []
     for document_page in pages:
         response = successful_response(document_page, f"{tax_type}.list")

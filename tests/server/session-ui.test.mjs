@@ -524,3 +524,56 @@ test('a hometax extension without a verdict stops for the session its command sa
   await app.extendLogin('selected');
   assert.equal(app.sent.length, 1, 'the saved session is not checked again near its own limit');
 });
+
+test('a work screen of an area with a live login offers a new login beside its heading, in one place', async t => {
+  const app = await setup(t);
+  const main = app.document.querySelector('#main');
+  const rows = [{id: 'bank', institution: 'hana', readiness: 'ready', display_name: '합성 은행'},
+    {id: 'bank2', institution: 'hana', readiness: 'login_required', display_name: '합성 둘째'},
+    {id: 'giro', institution: 'giro', readiness: 'login_required', display_name: '합성 지로'}];
+  const draw = (view, mode, logins = rows) => {
+    Object.assign(app.state, {view, mode, logins: structuredClone(logins)});
+    main.innerHTML = '<div class="page-heading"><h1>합성 화면</h1><div class="heading-actions"><button data-own>화면 버튼</button></div></div>';
+    app.renderLoginNotice();
+    return [...main.querySelectorAll('.heading-actions .session-actions [data-action="login"]')].map(b => [b.dataset.login, b.textContent]);
+  };
+  for (const view of ['accounts', 'history', 'inquiry', 'transfer', 'security'])
+    assert.deepEqual(draw(view, 'banking'), [['bank', '다시 로그인']], view);
+  assert.equal(main.querySelector('.login-notice'), null, 'a live login: no notice asks for one');
+  assert.ok(main.querySelector('[data-own]'), 'the actions of the screen itself stay');
+  // Several live logins are named, as the notice names several logged-out ones.
+  assert.deepEqual(draw('accounts', 'banking', [rows[0], {...rows[1], readiness: 'query_only'}]),
+    [['bank', '합성 은행 다시 로그인'], ['bank2', '합성 둘째 다시 로그인']]);
+  // A logged-out area asks in its notice instead; a shared screen or one that needs no session offers neither.
+  assert.deepEqual(draw('giro-live', 'giro'), []);
+  assert.ok(main.querySelector('.login-notice [data-action="login"]'));
+  assert.deepEqual(draw('settings', 'banking'), []);
+  assert.deepEqual(draw('girostatus', 'giro', [{...rows[2], readiness: 'ready'}]), []);
+  // Drawn again, it is replaced rather than added to.
+  draw('accounts', 'banking'); app.renderLoginNotice();
+  assert.equal(main.querySelectorAll('.session-actions').length, 1);
+  main.querySelector('.session-actions button').click();
+  await new Promise(resolve => setTimeout(resolve));
+  assert.equal(app.asked.at(-1).login, 'bank');
+  assert.equal(app.gets.length, 0, 'showing or pressing it asks the server for nothing by itself');
+});
+
+test('a tab loaded from an older copy of the app says so and leaves the reload to the person', async t => {
+  const app = await setup(t);
+  const main = app.document.querySelector('#main');
+  Object.assign(app.state, {view: 'settings', mode: 'banking'});
+  main.innerHTML = '<div class="page-heading"><h1>합성 화면</h1></div><form><input name="typed"></form>';
+  main.querySelector('input').value = '합성 입력';
+  app.renderLoginNotice();
+  assert.equal(main.querySelector('.login-notice'), null);
+  app.outdated();
+  const notice = main.querySelector('.login-notice.outdated');
+  assert.match(notice.textContent, /새 버전이 배포됐어요/);
+  assert.equal(notice.previousElementSibling.className, 'page-heading');
+  assert.equal(notice.querySelector('button').dataset.ui, 'reload');
+  assert.equal(main.querySelector('input').value, '합성 입력', 'what was being typed is left alone');
+  // It stays through later redraws of the notices, once.
+  app.renderLoginNotice();
+  assert.equal(main.querySelectorAll('.login-notice.outdated').length, 1);
+  assert.equal(app.sent.length, 0);
+});

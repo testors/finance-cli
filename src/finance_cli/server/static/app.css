@@ -523,3 +523,14 @@ label.check input{margin-top:4px}
   /* Two dates share a row while both fit at that size; on a narrower phone each takes its own. */
   .filter-bar .field-inline:has(input[type=date]),.filter-bar .field:has(input[type=date]){flex-basis:140px}
 }
+
+/* Shell pieces beside and under a heading: the new-login buttons join the heading's own actions,
+   and the notice of a newer copy is told apart from the login notice. */
+.session-actions{display:contents}
+.login-notice.outdated{background:#eaf0fc;border-color:#d3defa;color:#3f5296}
+/* A small clock says what the time beside an area tab is. */
+.tab-countdown::before{content:"";display:inline-block;width:9px;height:9px;margin-right:3px;vertical-align:-1px;background:currentColor;
+  -webkit-mask:url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='black' stroke-width='3' stroke-linecap='round'%3E%3Ccircle cx='12' cy='12' r='9.5'/%3E%3Cpath d='M12 7v5l3.5 2'/%3E%3C/svg%3E") center/contain no-repeat;
+  mask:url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='black' stroke-width='3' stroke-linecap='round'%3E%3Ccircle cx='12' cy='12' r='9.5'/%3E%3Cpath d='M12 7v5l3.5 2'/%3E%3C/svg%3E") center/contain no-repeat}
+/* Up to four screens and the full menu share the bottom bar. */
+@container finance (max-width:700px){.bottom-nav .nav-item{flex:1 1 0;width:auto;min-width:0}}

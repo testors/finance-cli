@@ -151,15 +151,37 @@ function loginNotice() {
   return `<div class="login-notice" role="status">${ui.icon('info')}<p><strong>${ui.esc(ui.INSTITUTION[area.institution])}에 로그인되어 있지 않아요.</strong> ${area.guide}</p><div class="login-notice-actions">${buttons}</div></div>`;
 }
 
+/* A work screen of an area with a live login offers a new login beside its heading: the one place
+   for it on every screen, as the notice under the heading is the one place for a logged-out area. */
+function sessionActions() {
+  if (!state.view || common(state.view) || NO_SESSION.includes(state.view)) return '';
+  const rows = liveLogins(state.mode);
+  return rows.map(row => ui.button(rows.length > 1 ? `${row.display_name} 다시 로그인` : '다시 로그인',
+    `data-action="login" data-login="${ui.esc(row.id)}"`)).join('');
+}
+
+/* A tab keeps running the files it was loaded with. Once the server answers from a newer copy the
+   screen says so and leaves the reload to the person, who may be in the middle of typing. */
+function outdatedNotice() {
+  if (!state.outdated) return '';
+  return `<div class="login-notice outdated" role="status">${ui.icon('refresh')}<p><strong>새 버전이 배포됐어요.</strong> 이 탭은 이전 화면으로 동작하고 있어요. 입력하던 내용을 마친 뒤 새로고침하세요.</p><div class="login-notice-actions">${ui.button('새로고침', 'data-ui="reload"', 'primary')}</div></div>`;
+}
+
+export function outdated() {
+  state.outdated = true;
+  renderLoginNotice();
+}
+
 /* Drawn apart from the screen itself, so a logout shows at once without redrawing a form. */
 export function renderLoginNotice() {
   const page = main();
   if (!page) return;
-  page.querySelector('.login-notice')?.remove();
-  const html = loginNotice();
-  if (!html) return;
+  page.querySelectorAll('.login-notice,.session-actions').forEach(node => node.remove());
   const heading = page.querySelector('.page-heading');
-  if (heading) heading.insertAdjacentHTML('afterend', html); else page.insertAdjacentHTML('afterbegin', html);
+  const html = outdatedNotice() + loginNotice();
+  if (html) { if (heading) heading.insertAdjacentHTML('afterend', html); else page.insertAdjacentHTML('afterbegin', html); }
+  const actions = sessionActions(), slot = heading?.querySelector('.heading-actions');
+  if (actions && slot) slot.insertAdjacentHTML('beforeend', `<span class="session-actions">${actions}</span>`);
 }
 
 let tabTimer = null;
@@ -348,12 +370,13 @@ function renderChrome() {
   const area = AREAS[state.mode];
   const items = navigation(state.mode);
   renderTabs();
-  document.querySelector('.workspace-label').textContent = area.service;
+  // A shared screen belongs to no area; the menu beside it is the area last worked in.
+  document.querySelector('.workspace-label').textContent = common(state.view) ? `최근 영역 · ${area.short}` : area.service;
   const here = entry => state.view === entry.id || NESTED[state.view]?.[1] === entry.id;
   const item = (entry, mobile = false) => `<button class="nav-item ${here(entry) ? 'active' : ''} ${entry.available ? '' : 'unavailable'}" ${entry.available ? `data-view="${entry.id}"` : 'disabled aria-disabled="true"'} ${here(entry) ? 'aria-current="page"' : ''}>${ui.icon(entry.icon)}<span>${ui.esc(mobile ? entry.short : entry.name)}</span>${entry.available ? '' : '<small class="soon-label">준비 중</small>'}</button>`;
   document.querySelector('.main-nav').innerHTML = items.map(e => item(e)).join('');
   document.querySelector('.common-nav').innerHTML = COMMON.map(([id, name, , iconName]) => item({id, name, icon: iconName, available: true})).join('');
-  document.querySelector('.bottom-nav').innerHTML = items.filter(e => e.available).slice(0, 3).map(e => item(e, true)).join('')
+  document.querySelector('.bottom-nav').innerHTML = items.filter(e => e.available).slice(0, 4).map(e => item(e, true)).join('')
     + `<button class="nav-item" data-ui="more" aria-haspopup="dialog">${ui.icon('grid')}<span>전체 메뉴</span></button>`;
   document.querySelector('#stage').dataset.workspace = state.mode;
   const current = profile();
@@ -662,6 +685,7 @@ document.addEventListener('click', async event => {
     case 'close': ui.closeDialog(); return;
     case 'choose-profile': chooseProfile(); return;
     case 'more': moreMenu(); return;
+    case 'reload': location.reload(); return;
   }
   const action = target.dataset.action || (target.dataset.row ? 'row' : null);
   if (action === 'job-detail') { showJob(target.dataset.job); return; }
@@ -733,6 +757,12 @@ function fitTables(again = false) {
     if (narrow || wrap.scrollWidth > wrap.clientWidth + 1) wrap.classList.add('stacked');
   }
 }
+// The server names its copy of the app on every answer; a tab that comes back into view asks once.
+api.onOutdated?.(outdated);
+document.addEventListener('visibilitychange', () => {
+  if (document.visibilityState === 'visible' && !state.outdated && state.server?.enrolled) api.get('/auth/state').catch(() => {});
+});
+
 const arriving = new MutationObserver(() => fitTables());
 for (const box of [main(), document.querySelector('#dialog-content')]) if (box) arriving.observe(box, {childList: true, subtree: true});
 window.addEventListener('resize', () => fitTables(true));

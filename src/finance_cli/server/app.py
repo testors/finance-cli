@@ -5,6 +5,7 @@ values. Proxy headers are read only
 from loopback peers and only for the client address.
 """
 from contextlib import asynccontextmanager
+import hashlib
 from importlib.resources import files
 import json
 import re
@@ -40,6 +41,14 @@ APP_CSP = ("default-src 'none'; script-src 'self'; style-src 'self'; img-src 'se
 DOCUMENT_CSP = "sandbox; default-src 'none'; img-src data:; style-src 'unsafe-inline'; frame-ancestors 'self'"
 
 
+def assets_version():
+    """One short name for this copy of the app's files, the same until a new copy is installed."""
+    digest, base = hashlib.sha256(), files('finance_cli.server').joinpath('static')
+    for name in sorted(STATIC):
+        digest.update(name.encode() + b'\0' + base.joinpath(name).read_bytes() + b'\0')
+    return digest.hexdigest()[:16]
+
+
 class ApiError(Exception):
     def __init__(self, status, code, *, reasons=()):
         super().__init__(code)
@@ -66,6 +75,7 @@ def create_app(config, *, db=None, dispatcher=True, vaults=None):
     db = db or Database()
     worker = Dispatcher(db) if dispatcher else None
     vaults = vaults if vaults is not None else Vaults()
+    assets = assets_version()
 
     @asynccontextmanager
     async def lifespan(app):
@@ -130,6 +140,8 @@ def create_app(config, *, db=None, dispatcher=True, vaults=None):
         response.headers.setdefault('X-Frame-Options', 'DENY')
         if path.startswith(API + '/'):
             response.headers.setdefault('Cache-Control', 'no-store')
+            # A tab compares this with the copy it was loaded from and offers a reload when they differ.
+            response.headers['X-Finance-Assets'] = assets
         return response
 
     async def body(request, limit=JSON_LIMIT):

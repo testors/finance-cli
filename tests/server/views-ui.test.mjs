@@ -256,11 +256,9 @@ for (const method of ['onesign', 'joint_certificate']) {
     assert.equal(ui.calls[0].fields.target_id, undefined);
     assert.equal(ui.asked.length, method === 'onesign' ? 1 : 0);
     if (method === 'onesign') assert.equal(ui.asked[0][3].store, 'synthetic');
-    const button = form.querySelector('[data-action="security-login"]');
-    assert.equal(button.type, 'button');
-    await ui.actions['security-login'](ui.ctx, button);
-    assert.equal(ui.calls[1].name, method === 'onesign' ? 'hana.onesign.login' : 'hana.login');
-    assert.equal(ui.calls[1].fields.login_id, 'login');
+    // A new login is offered by the shell beside the heading, not by a button inside the form.
+    assert.equal(form.querySelector('[data-action="login"],[data-action="security-login"]'), null);
+    assert.equal(ui.calls.length, 1);
   });
 
   test(`${method} accounts can be selected in both history screens`, async t => {
@@ -365,12 +363,16 @@ test('limit medium and exception messaging retain the original typed predicates'
   }
 });
 
-test('after transfer, accounts and settings offer queries and optional manual login', async t => {
+// A work screen leaves a live session's new login to the shell's heading; a connection card keeps its own.
+const ownLogin = (ui, view, label) => assert.equal(ui.document.querySelector('main [data-action="login"]')?.textContent,
+  view === 'settings' ? label : undefined, view);
+
+test('after transfer, accounts and settings offer queries and the connection card a manual login', async t => {
   const ui = await setup(t);
   for (const view of ['accounts', 'settings']) {
     ui.document.querySelector('main').innerHTML = await ui.views[view](ui.ctx);
     assert.match(ui.document.body.textContent, /조회용 세션 있음/);
-    assert.equal(ui.document.querySelector('[data-action="login"]').textContent, '다시 로그인');
+    ownLogin(ui, view, '다시 로그인');
     assert.ok(ui.document.querySelector('[data-action="accounts-query"]'));
   }
   ui.document.querySelector('main').innerHTML = await ui.views.transfer(ui.ctx);
@@ -472,11 +474,17 @@ test('a confirmed transfer ends on a redrawn empty form; one refused before send
   assert.equal(ui.posted.length, 4, 'opening it sends nothing');
 });
 
-test('expired login still asks for login in accounts', async t => {
+test('an expired login offers no query in accounts; the login is asked once, by the shell notice', async t => {
   const ui = await setup(t, 'onesign', 'login_required');
-  ui.document.querySelector('main').innerHTML = await ui.views.accounts(ui.ctx);
-  assert.ok(ui.document.querySelector('[data-action="login"]'));
-  assert.equal(ui.document.querySelector('[data-action="accounts-query"]'), null);
+  const main = ui.document.querySelector('main');
+  main.innerHTML = await ui.views.accounts(ui.ctx);
+  assert.equal(main.querySelector('[data-action="login"]'), null, 'no second login button under the notice');
+  assert.equal(main.querySelector('[data-action="accounts-query"]'), null);
+  // Beside a login that is still live there is no notice, so the logged-out one offers its own login.
+  ui.state.logins.push({...ui.row, id: 'live', readiness: 'ready', display_name: '합성 둘째'});
+  main.innerHTML = await ui.views.accounts(ui.ctx);
+  assert.deepEqual([...main.querySelectorAll('[data-action="login"]')].map(b => b.dataset.login), ['login']);
+  assert.deepEqual([...main.querySelectorAll('[data-action="accounts-query"]')].map(b => b.dataset.login), ['live']);
 });
 
 test('cancelling the store password sends no query', async t => {
@@ -510,7 +518,7 @@ test('ready sessions keep a visible login action without requesting credentials 
   const ui = await setup(t, 'onesign', 'ready', {pin: '123456'});
   for (const view of ['accounts', 'settings']) {
     ui.document.querySelector('main').innerHTML = await ui.views[view](ui.ctx);
-    assert.equal(ui.document.querySelector('[data-action="login"]').textContent, '다시 로그인');
+    ownLogin(ui, view, '다시 로그인');
     assert.ok(ui.document.querySelector('[data-action="accounts-query"]'));
   }
   assert.equal(ui.asked.length, 0);
@@ -525,39 +533,47 @@ test('ready sessions keep a visible login action without requesting credentials 
     'a successful bank login reads balances once and replays nothing else');
 });
 
-test('a rejected account query leaves manual re-login available without assuming expiry', async t => {
+test('a rejected account query leaves the session as it is, without assuming expiry', async t => {
   const ui = await setup(t);
   ui.state.cache.set('hana.onesign.accounts|login||', {id: 'failed', status: 'finished', outcome: 'rejected',
     session_id: 'session', result: {accounts: []}, service_verdict: {accepted: false}, local: {}});
   ui.document.querySelector('main').innerHTML = await ui.views.accounts(ui.ctx);
   assert.match(ui.document.body.textContent, /기관이 실패로 판정/);
-  assert.equal(ui.document.querySelector('[data-action="login"]').textContent, '다시 로그인');
+  // Still a live session: the query stays, and the shell keeps offering a new login beside the heading.
+  assert.match(ui.document.body.textContent, /조회용 세션 있음/);
+  assert.equal(ui.document.querySelector('main [data-action="login"]'), null);
   assert.ok(ui.document.querySelector('[data-action="accounts-query"]'));
   assert.equal(ui.row.readiness, 'query_only');
   assert.equal(ui.calls.length, 0);
 });
 
-test('banking screens re-login to the selected account, without running a query or transfer', async t => {
+test('banking screens carry no login button of their own, and a login from the transfer screen keeps what was typed', async t => {
   const ui = await setup(t, 'onesign', 'ready', {pin: '123456'});
   ui.state.logins.push({...ui.row, id: 'other-login', credential: {ref: 'other-store'}});
   ui.state.targets.push({...ui.state.targets[0], id: 'other-target', login_id: 'other-login'});
-  for (const view of ['history', 'inquiry', 'transfer']) {
-    ui.document.querySelector('main').innerHTML = await ui.views[view](ui.ctx);
-    ui.document.querySelector('[name="target_id"]').value = 'other-target';
-    const button = ui.document.querySelector('[data-action="account-login"]');
-    assert.equal(button.type, 'button', 're-login must not submit the banking form');
-    await ui.actions['account-login'](ui.ctx, button);
-    assert.equal(ui.calls.at(-1).name, 'hana.onesign.login');
-    assert.equal(ui.calls.at(-1).fields.login_id, 'other-login');
-    assert.equal(ui.asked.at(-1)[3].store, 'other-store');
+  const main = ui.document.querySelector('main');
+  for (const view of ['history', 'inquiry', 'transfer', 'security']) {
+    main.innerHTML = await ui.views[view](ui.ctx);
+    assert.equal(main.querySelector('[data-action$="login"]'), null, view + ': the shell offers the new login beside the heading');
   }
-  assert.equal(ui.calls.length, 3);
+  // The shell's button names the login; the login runs for that one and sends nothing else.
+  main.innerHTML = await ui.views.transfer(ui.ctx);
+  main.querySelector('[name="account"]').value = '00012345678'; main.querySelector('[name="amount"]').value = '12,000';
+  await ui.actions.login(ui.ctx, {dataset: {login: 'other-login'}});
+  assert.deepEqual(ui.calls.map(c => [c.name, c.fields.login_id]), [['hana.onesign.login', 'other-login']]);
+  assert.equal(ui.asked.at(-1)[3].store, 'other-store');
+  // A login redraws the screen: the transfer form comes back with what was typed.
+  main.innerHTML = await ui.views.transfer(ui.ctx);
+  assert.equal(main.querySelector('[name="account"]').value, '00012345678');
+  assert.equal(main.querySelector('[name="amount"]').value, '12,000');
 });
 
 test('new and disabled logins show appropriate actions', async t => {
   const ui = await setup(t, 'onesign', 'login_required');
   ui.row.current_session_id = null;
   ui.document.querySelector('main').innerHTML = await ui.views.accounts(ui.ctx);
+  assert.equal(ui.document.querySelector('main [data-action="login"]'), null, 'a first login is asked by the shell notice');
+  ui.document.querySelector('main').innerHTML = await ui.views.settings(ui.ctx);
   assert.equal(ui.document.querySelector('[data-action="login"]').textContent, '로그인');
   ui.row.disabled = true;
   for (const view of ['accounts', 'settings']) {
@@ -662,6 +678,79 @@ function hometax(ui, kind = 'business') {
   ui.row.institution = 'hometax'; ui.state.targets[0].kind = kind; ui.state.params = {};
   return ui.document.querySelector('main');
 }
+
+const taxJob = (name, items) => ({id: name, name, login_id: 'login', target_id: 'target', status: 'finished', outcome: 'success',
+  result: {items, pagination: {complete: true}}});
+const lines = box => [...box.querySelectorAll(':scope > .summary-line')].map(line => [line.querySelector('span').textContent, line.querySelector('strong').textContent]);
+
+test('a paid tax is named as paid, in the order the tax office lists it', async t => {
+  const ui = await setup(t, 'joint_certificate', 'ready');
+  const main = hometax(ui, 'personal');
+  ui.state.cache.set('hometax.tax.payments||target|', taxJob('hometax.tax.payments', [{atchRomAmt: '0', attrYr: '2026',
+    bankElctPmtNo: '0126-****', elctPmtNo: '2026****', hmtxYn: 'Y', itrfCdNm: '합성 세목', mataTxprNm: '합성 이름', romAmt: '1234567',
+    romDt: '20261001', romFnnOrgnNm: '합성 수납점', txhfOgzCd: '000', txhfOgzNm: '합성세무서'}]));
+  main.innerHTML = await ui.views.payments(ui.ctx);
+  const results = main.querySelector('#results');
+  assert.deepEqual([...results.querySelectorAll('th')].map(n => n.textContent), ['세목', '수납관서', '납부일자', '납부세액']);
+  assert.deepEqual([...results.querySelectorAll('tbody td')].map(n => n.textContent), ['합성 세목', '합성세무서', '2026-10-01', '1,234,567']);
+  assert.equal(results.querySelector('th:last-child').className, 'num');
+  assert.doesNotMatch(results.textContent, /납부할 세액|atchRomAmt/, 'an amount already paid is not shown as an amount still due');
+  ui.actions.row(ui.ctx, results.querySelector('tbody tr'));
+  const detail = ui.document.querySelector('#dialog-content');
+  assert.deepEqual(lines(detail.querySelector('.summary-lines')), [['세목', '합성 세목'], ['수납관서', '합성세무서'], ['납부일자', '2026-10-01'],
+    ['납부세액', '1,234,567'], ['귀속연도', '2026'], ['전자납부번호', '0126-****'],
+    ['전자납부번호(세목년월+결정구분+세목코드+발행번호)', '2026****'], ['수납점포', '합성 수납점'], ['관서코드', '000']]);
+  assert.match(detail.querySelector('details summary').textContent, /그 밖의 항목 3개/);
+  assert.deepEqual(lines(detail.querySelector('.folded-fields .summary-lines')), [['atchRomAmt', '0'], ['hmtxYn', 'Y'], ['mataTxprNm', '합성 이름']],
+    'a field the tax office names nowhere, or only as unpaid, keeps its own name and value');
+  assert.equal(ui.calls.length, 0);
+});
+
+test('refund, notice and return rows carry the names, dates and code names of their own screens', async t => {
+  const ui = await setup(t, 'joint_certificate', 'ready');
+  const main = hometax(ui, 'personal');
+  ui.state.cache.set('hometax.tax.refunds||target|', taxJob('hometax.tax.refunds', [{attrYm: '202609', bokTrtRsltCd: '01', itrfNm: '합성 세목',
+    rfamtPymnAmt: '50000', rfndDcsDfntDt: '20261002', txhfOgzNm: '합성세무서'}, {bokTrtRsltCd: '77', itrfNm: '합성 세목 2', rfamtPymnAmt: 7, rfndDcsDfntDt: '합성'}]));
+  main.innerHTML = await ui.views.refunds(ui.ctx);
+  assert.deepEqual([...main.querySelectorAll('#results th')].map(n => n.textContent), ['세목명', '환급일자', '환급금액', '지급구분']);
+  assert.deepEqual([...main.querySelectorAll('#results tbody td')].map(n => n.textContent),
+    ['합성 세목', '2026-10-02', '50,000', '미수령', '합성 세목 2', '합성', '7', '77'], 'a code or a date of another shape stays as received');
+  ui.actions.row(ui.ctx, main.querySelector('#results tbody tr'));
+  assert.deepEqual(lines(ui.document.querySelector('#dialog-content .summary-lines')), [['세목명', '합성 세목'], ['환급일자', '2026-10-02'],
+    ['환급금액', '50,000'], ['지급구분', '미수령'], ['귀속년월', '2026-09'], ['세무서명', '합성세무서']]);
+  ui.state.cache.set('hometax.tax.notices||target|', taxJob('hometax.tax.notices', [{elctNtfPrslDtm: '20261003091500', elctPmtNo: '2026****',
+    itrfNm: '합성 세목', pmtDdt: '20261031', pmtTxamt: '30000', pmtYn: '미납', txprNm: '합성 상호'}]));
+  main.innerHTML = await ui.views.notices(ui.ctx);
+  assert.deepEqual([...main.querySelectorAll('#results th')].map(n => n.textContent), ['세목명', '납부기한', '납부할 세액', '납부여부']);
+  ui.actions.row(ui.ctx, main.querySelector('#results tbody tr'));
+  assert.deepEqual(lines(ui.document.querySelector('#dialog-content .summary-lines')), [['세목명', '합성 세목'], ['납부기한', '2026-10-31'],
+    ['납부할 세액', '30,000'], ['납부여부', '미납'], ['열람일시', '2026-10-03 09:15:00'], ['전자납부번호', '2026****'], ['상호(성명)', '합성 상호']]);
+  ui.state.cache.set('hometax.returns.list||target|', taxJob('hometax.returns.list', [{cvaAplnDtm: '20261004101112', rtnClNm: '정기신고',
+    rtnCvaId: 'R1', stmnKndNm: '합성 신고서', txnrmYm: '202609', userId: 'synthetic'}]));
+  main.innerHTML = await ui.views.returns(ui.ctx);
+  assert.deepEqual([...main.querySelectorAll('#results th')].map(n => n.textContent), ['신고서종류', '과세연월', '신고구분', '접수일시']);
+  assert.deepEqual([...main.querySelectorAll('#results tbody td')].map(n => n.textContent), ['합성 신고서', '2026-09', '정기신고', '2026-10-04 10:11:12']);
+  ui.actions.row(ui.ctx, main.querySelector('#results tbody tr'));
+  assert.deepEqual(lines(ui.document.querySelector('#dialog-content .summary-lines')).slice(4), [['신고 ID', 'R1'], ['제출자ID', 'synthetic']]);
+});
+
+test('a corporate ledger row opens with the names of the bank\'s own detail screen', async t => {
+  const ui = await setup(t, 'id_password', 'ready');
+  const main = ui.document.querySelector('main');
+  ui.state.rows['corporate-history'] = {rows: [{AMT_TYP_CD: 'S1', BAL_FLCT_DV_CD: '2', MEMO_CTT: '합성 메모', RMRK: '합성 적요',
+    TRSC_AF_BAL: '000000000900000.500', TRSC_AMT: '000000000100000.000', TRSC_DT: '20261001', TRSC_TM: '093000'}]};
+  main.innerHTML = '<table><tbody><tr data-row="corporate-history:0"></tr></tbody></table>';
+  ui.actions.row(ui.ctx, main.querySelector('tr'));
+  const detail = ui.document.querySelector('#dialog-content');
+  assert.deepEqual(lines(detail.querySelector('.summary-lines')), [['잔액변동구분', '출금'], ['추가메모', '합성 메모'], ['적요', '합성 적요'],
+    ['거래 후 잔액', '900,000.5'], ['거래금액', '100,000'], ['거래일자', '2026-10-01'], ['거래시각', '09:30:00']]);
+  assert.deepEqual(lines(detail.querySelector('.folded-fields .summary-lines')), [['AMT_TYP_CD', 'S1']]);
+  // A field name is data from the institution: one that matches a built-in name is still only a field.
+  ui.state.rows['corporate-history'] = {rows: [{BAL_FLCT_DV_CD: 'constructor', RMRK: '합성 적요', constructor: '합성', toString: '합성 2'}]};
+  ui.actions.row(ui.ctx, main.querySelector('tr'));
+  assert.deepEqual(lines(detail.querySelector('.summary-lines')), [['잔액변동구분', 'constructor'], ['적요', '합성 적요']]);
+  assert.deepEqual(lines(detail.querySelector('.folded-fields .summary-lines')), [['constructor', '합성'], ['toString', '합성 2']]);
+});
 
 test('each invoice tab shows only its own direction, with known field names in Korean', async t => {
   const ui = await setup(t, 'joint_certificate', 'ready');
@@ -927,7 +1016,7 @@ test('a session past its idle limit shows as logged out and offers only a login'
     main.innerHTML = await ui.views[view](ui.ctx);
     assert.match(main.textContent, /로그아웃됨/);
     assert.doesNotMatch(main.textContent, /세션 있음|로그인됨\s*확인/);
-    assert.equal(main.querySelector('[data-action="login"]').textContent, '로그인');
+    ownLogin(ui, view, '로그인');
     assert.equal(main.querySelector('[data-action="accounts-query"]'), null);
   }
   assert.equal(ui.calls.length, 0);
@@ -1007,7 +1096,7 @@ test('the activity list filters on the server and adds older pages under the row
   assert.equal(main.querySelector('#activity-area').value, 'giro');
   assert.equal(main.querySelector('#activity-origin').value, 'cli');
   assert.equal(main.querySelectorAll('.operation-row').length, 50);
-  assert.match(main.querySelector('.list-footer').textContent, /명령어와 종료코드만/);
+  assert.match(main.querySelector('.list-footer').textContent, /전송 승인\(--send\) 여부, 종료코드만/);
   const more = main.querySelector('[data-action="activity-more"]');
   await ui.actions['activity-more'](ui.ctx, more);
   assert.equal(ui.apiCalls.at(-1), `${ACTIVITY}&area=giro&origin=cli&before=${1790000000 - 49}`);
@@ -1067,20 +1156,41 @@ test('transfer rows use the field names this project reads and leave the rest to
   const ui = await setup(t, 'onesign', 'ready');
   const main = ui.document.querySelector('main');
   const job = {id: 'inquiry', name: 'hana.onesign.inquiry.history', login_id: 'login', target_id: 'target', status: 'finished', outcome: 'success',
-    result: {rows: [{achvChnlNm: '합성 채널', lstTrscDt: '20261001', rcvAcctNo: '00012345', rcvBnkNm: '합성은행', rmteNm: '합성 수취인',
-      trscAmt: 100, trscDt: '20261001', trscStNm: '완료', trscTm: '093000'}]}};
+    result: {rows: [{achvChnlNm: '합성 채널', chnlSvcCd: 'S00', lstTrscDt: '20261002', lstTrscTm: '101500', rcvAcctNo: '00012345',
+      rcvBnkNm: '합성은행', rmteNm: '합성 수취인', trscAmt: '1234500', trscDt: '20261001', trscStNm: '완료', trscTm: '093000'}]}};
   ui.state.cache.set('hana.onesign.inquiry.history||target|', job);
   ui.state.params = {};
   main.innerHTML = await ui.views.inquiry(ui.ctx);
   assert.deepEqual([...main.querySelectorAll('#results th')].map(n => n.textContent),
-    ['거래일자', '거래시각', '받는 분', '입금은행', '입금계좌번호', '거래금액', '처리 상태']);
+    ['거래일자', '거래시각', '받는 분', '입금은행', '입금계좌번호', '이체금액', '처리 상태']);
   assert.deepEqual([...main.querySelectorAll('#results tbody td')].map(n => n.textContent),
-    ['2026-10-01', '09:30:00', '합성 수취인', '합성은행', '00012345', '100', '완료']);
-  ui.actions.row(ui.ctx, main.querySelector('#results tr[data-row]'));
-  const dialog = ui.document.querySelector('#detail-dialog');
-  assert.match(dialog.textContent, /수취인명/);
-  assert.match(dialog.querySelector('details.verdict summary').textContent, /그 밖의 항목 2개/, 'fields with no established name stay as sent');
-  assert.match(dialog.querySelector('.folded-fields').textContent, /achvChnlNm.*lstTrscDt20261001/s);
+    ['2026-10-01', '09:30:00', '합성 수취인', '합성은행', '00012345', '1,234,500', '완료']);
+  const opened = () => {
+    ui.actions.row(ui.ctx, main.querySelector('#results tr[data-row]'));
+    return ui.document.querySelector('#detail-dialog');
+  };
+  const named = dialog => Object.fromEntries([...dialog.querySelector('.summary-lines').querySelectorAll(':scope > .summary-line')]
+    .map(line => [line.querySelector('span').textContent, line.querySelector('strong').textContent]));
+  let dialog = opened();
+  assert.deepEqual(named(dialog), {거래구분: '합성 채널', 처리일자: '2026-10-02', 처리시각: '10:15:00', 입금계좌번호: '00012345', 입금은행: '합성은행',
+    '받는 분': '합성 수취인', 이체금액: '1,234,500', 거래일자: '2026-10-01', '처리 상태': '완료', 거래시각: '09:30:00'});
+  assert.match(dialog.querySelector('details.verdict summary').textContent, /그 밖의 항목 1개/, 'a field the bank shows under no name stays as sent');
+  assert.match(dialog.querySelector('.folded-fields').textContent, /chnlSvcCdS00/);
+  // The bank names the last date by the transfer's state; a state it has no name for keeps the field name.
+  const row = job.result.rows[0];
+  for (const [state, kind, name] of [['완료', '즉시이체', '이체일자'], ['오류', '합성 채널', '오류일자'], ['취소', '합성 채널', '취소일자']]) {
+    Object.assign(row, {trscStNm: state, achvChnlNm: kind});
+    main.innerHTML = await ui.views.inquiry(ui.ctx);
+    assert.equal(named(opened())[name], '2026-10-02', state);
+  }
+  for (const state of ['대기', 'constructor']) {
+    Object.assign(row, {trscStNm: state});
+    main.innerHTML = await ui.views.inquiry(ui.ctx);
+    dialog = opened();
+    assert.match(dialog.querySelector('.folded-fields').textContent, /lstTrscDt2026-10-02/, state);
+  }
+  assert.match(dialog.querySelector('.folded-fields').textContent, /lstTrscDt2026-10-02.*lstTrscTm10:15:00/s);
+  assert.match(dialog.querySelector('details.verdict summary').textContent, /그 밖의 항목 3개/);
   // Rows of a shape this project does not read keep the generic table and the bank's own names.
   job.result.rows = [{anyNm: '합성', otherDt: '20260101'}];
   main.innerHTML = await ui.views.inquiry(ui.ctx);
@@ -1088,20 +1198,20 @@ test('transfer rows use the field names this project reads and leave the rest to
   assert.match(main.querySelector('#results tbody').textContent, /20260101/);
 });
 
-test('a logged-out account offers 로그인 rather than 다시 로그인, and an empty security screen says what to do', async t => {
+test('an empty security screen says what to do, and a CLI record says whether it carried the send approval', async t => {
   const ui = await setup(t, 'onesign', 'ready');
   const main = ui.document.querySelector('main');
-  ui.state.params = {};
-  main.innerHTML = await ui.views.history(ui.ctx);
-  assert.equal(main.querySelector('[data-action="account-login"]').textContent, '다시 로그인');
-  ui.state.idleExpired = true;
-  for (const view of ['history', 'inquiry']) {
-    main.innerHTML = await ui.views[view](ui.ctx);
-    assert.equal(main.querySelector('[data-action="account-login"]').textContent, '로그인', view);
-  }
   main.innerHTML = await ui.views.security(ui.ctx);
-  assert.equal(main.querySelector('[data-action="security-login"]').textContent, '로그인');
   assert.match(main.querySelector('#results .empty-state').textContent, /조회 항목을 고르고 조회하세요/);
+  const row = local => ({id: 'cli', name: 'cli.hana', title: 'CLI 실행', origin: 'cli', status: 'finished', outcome: 'unknown',
+    created_at: 1790000000, command: ['hana', 'transfer', 'execute'], local});
+  ui.state.params = {};
+  for (const [local, shown] of [[{exit_code: 0, send_requested: true}, /전송 승인\(--send\)종료코드 0/],
+    [{exit_code: 0, send_requested: false}, /전송 승인 없음종료코드 0/], [{exit_code: 0}, /^CLI 실행 기록종료코드 0$/]]) {
+    ui.state.listed = () => [row(local)];
+    main.innerHTML = await ui.views.activity(ui.ctx);
+    assert.match(main.querySelector('.operation-row .pill-row').textContent, shown);
+  }
   assert.equal(ui.calls.length, 0);
 });
 

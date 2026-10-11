@@ -5,6 +5,7 @@ payment completion are never inferred; ``complete`` and ``issues`` are kept.
 """
 from datetime import date, datetime
 from zoneinfo import ZoneInfo
+from giro.bill_catalog import BILL_TYPES
 
 from .base import Adapter, InputError, Step, StepResult, Stop, bounded_int, choice, dict_input, iso_date, mask_account
 
@@ -65,7 +66,7 @@ class BillsParse(Adapter):
         if not isinstance(include, bool):
             raise InputError('invalid_include_overdue')
         return {'upload_id': value['upload_id'],
-                'tax_type': choice(value['tax_type'], 'tax_type', ('national', 'local', 'customs')),
+                'tax_type': choice(value['tax_type'], 'tax_type', BILL_TYPES),
                 'mode': mode, 'today': iso_date(value.get('today'), 'today'),
                 'within_days': bounded_int(value.get('within_days'), 'within_days', 0, 36500)
                 if mode == 'due' else None,

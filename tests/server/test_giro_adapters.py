@@ -331,3 +331,48 @@ class GiroTests(ServerCase):
                           job['result']['session_current_validity']), (False, True, 'ended'))
         self.assertEqual(self.get('/logins').json()['logins'][0]['readiness'], 'login_required')
         self.assertEqual(len(self.calls), 1)
+
+    def test_number_query_and_detail_keep_inputs_and_identifiers_sealed(self):
+        number = 'SYNTHETIC-CUSTOMER-12345678'
+        self.responses['kepco.list'] = {'responseCode': '000', 'paymentList': [None,
+            {'sortCode': '01', 'giroNo': 'SYNTHETIC', 'key': 'SYNTHETIC-QUERY-KEY',
+             'napbuMny': '2000', 'payLimitDate': '20261031'}]}
+        self.responses['kepco.detail'] = DETAIL
+        job = self.run_job(self.submit('giro.bills.search', input={'tax_type': 'kepco'}),
+                           {'query_numbers': json.dumps({'number': number})})
+        self.assertEqual(job['outcome'], 'partial_success', job)
+        self.assertEqual(job['result']['bills'][1]['ref'], '1')
+        self.assertEqual(self.calls[0][1]['elecNo'], [number])
+        detail = self.run_job(self.submit('giro.bills.detail', parent_job_id=job['id'], input={'ref': '1'}))
+        self.assertEqual(detail['outcome'], 'success', detail)
+        self.assertFalse(detail['result']['payment_sent'])
+        for value in (job, detail, self.get('/jobs').json()):
+            self.assert_private(value)
+            self.assertNotIn(number, json.dumps(value))
+        with self.db.read() as con:
+            saved = con.execute('SELECT input FROM jobs WHERE id=?', (job['id'],)).fetchone()['input']
+        self.assertNotIn(number, saved)
+        for path in (self.home / 'server' / 'jobs').glob('*/*'):
+            if path.is_file(): self.assertNotIn(number.encode(), path.read_bytes())
+        self.assertEqual([n for n, _ in self.calls], ['kepco.list', 'kepco.detail'])
+
+    def test_added_own_bill_cannot_enter_existing_payment_flow(self):
+        self.responses['traffic.list'] = PAGE
+        job = self.run_job(self.submit('giro.bills.list', input={'tax_type': 'traffic'}))
+        before = len(self.calls)
+        payment = self.run_job(self.submit('giro.payment.options', parent_job_id=job['id'], input={'ref': '0'}))
+        self.assertEqual(payment['local']['stopped'], 'giro_payment_type_not_supported')
+        self.assertEqual(len(self.calls), before)
+
+    def test_summary_preserves_item_status_without_leaking_search_keys(self):
+        self.responses['integrated.initialize'] = {'responseCode': '000', 'busyDayYn': 'N', 'searchNoList': [BILL]}
+        self.responses['integrated.summary'] = {'responseCode': '000',
+            'nts': {'count': '1', 'amount': '2000', 'respCode': '000'}, 'traffic': {'respCode': '999'}}
+        job = self.run_job(self.submit('giro.bills.summary'))
+        self.assertEqual(job['outcome'], 'success', job)
+        self.assertEqual(job['verification'], 'live_untested')
+        rows = {r['tax_type']: r['summary'] for r in job['result']['categories']}
+        self.assertEqual(rows['traffic']['respCode'], '999')
+        self.assertIsNone(rows['local'])
+        self.assert_private(job)
+        self.assertEqual([n for n, _ in self.calls], ['integrated.initialize', 'integrated.summary'])

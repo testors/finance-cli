@@ -122,6 +122,16 @@ function account(a, kind = 'krw') {
     identity: {account_number: '000104', account_type: kind}});
 }
 
+test('a stored ledger row is one flat row, with the display fields the bank sent in place', async t => {
+  const a = await setup(t); account(a);
+  a.state.cache.set('corporate:history:account', {id: 'history', status: 'finished', outcome: 'success', result: {complete: true,
+    transactions: [{TRSC_DT: '20261001', RMRK: '합성 적요', display: {RMRK: '합성 표시'}}]}});
+  const html = await a.corporateViews['corporate-history'](a.ctx);
+  assert.match(html, /합성 표시/);
+  assert.equal(JSON.stringify(a.state.rows['corporate-history'].rows), JSON.stringify([{TRSC_DT: '20261001', RMRK: '합성 표시'}]),
+    'the row detail never meets a nested object');
+});
+
 test('history preserves exact amounts and shows completed empty versus partial pages', async t => {
   const a = await setup(t); account(a);
   const job = {id: 'history', status: 'finished', outcome: 'success', result: {transactions: [], complete: true}};

@@ -625,6 +625,8 @@ class CliHistoryTests(ServerCase):
         self.assertEqual(len(rows), 1)
         self.assertEqual(loads(rows[0]['snapshot'])['command'], ['giro', 'bills', 'list'])
         self.assertEqual(loads(rows[0]['local'])['exit_code'], baseline[0])
+        # Whether the run carried the send approval is a flag, not a value; this one only read a file.
+        self.assertIs(loads(rows[0]['local'])['send_requested'], False)
         self.assertNotIn('SECRET-LOOKING-NAME', json.dumps(rows))
         with patch('finance_cli.server.jobs.record_cli', side_effect=RuntimeError('database broken')):
             self.assertEqual(self.fin(['giro', 'bills', 'list', '--type', 'national', '--input', str(path)]), baseline)
@@ -634,6 +636,11 @@ class CliHistoryTests(ServerCase):
         with patch.dict(os.environ, {'FINANCE_REQUEST_ORIGIN': 'agent'}):
             self.fin(['giro', 'bills', 'list', '--type', 'national', '--input', str(path)])
         self.assertEqual(self.get('/jobs').json()['jobs'][0]['origin'], 'agent')
+        from finance_cli.cli.main import record_history
+        record_history('hana', ['transfer', 'execute', '--name', 'SECRET-LOOKING-VALUE', '--send'], 0)
+        approved = self.get('/jobs').json()['jobs'][0]
+        self.assertEqual((approved['command'], approved['local']['send_requested']), (['hana', 'transfer', 'execute'], True))
+        self.assertNotIn('SECRET-LOOKING-VALUE', json.dumps(approved))
 
 
 class JobListingTests(ServerCase):
@@ -656,3 +663,13 @@ class JobListingTests(ServerCase):
         older = self.get(f"/jobs?limit=5&before={newest[-1]['created_at']!r}").json()['jobs']
         self.assertEqual(older[-1]['id'], old['id'])
         self.assertFalse({j['id'] for j in newest} & {j['id'] for j in older})
+
+    def test_api_answers_name_the_served_copy_of_the_app(self):
+        """A tab compares the name with the one it started with; static files themselves carry none."""
+        from finance_cli.server.app import assets_version
+        name = self.get('/auth/state').headers['X-Finance-Assets']
+        self.assertRegex(name, r'^[0-9a-f]{16}$')
+        self.assertEqual(name, assets_version())
+        self.enroll()
+        self.assertEqual(self.get('/logins').headers['X-Finance-Assets'], name)
+        self.assertNotIn('X-Finance-Assets', self.client.get('/static/app.js').headers)

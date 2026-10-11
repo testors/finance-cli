@@ -3,6 +3,8 @@
 import {during} from './busy.js';
 
 let csrf = null;
+// The server's name for its copy of the app's files, as first seen, and who to tell when it changes.
+let copy = null, outdated = null;
 
 export class ApiError extends Error {
   constructor(status, code, reasons = []) {
@@ -28,6 +30,10 @@ async function request(method, path, body, headers = {}) {
   } catch (error) {
     throw new ApiError(0, 'network_unreachable');
   }
+  // A tab loaded from an older copy keeps working; it is told once, so the person can reload.
+  const served = response.headers?.get?.('X-Finance-Assets');
+  if (served && copy === null) copy = served;
+  else if (served && served !== copy && outdated) { const notify = outdated; outdated = null; notify(); }
   let value = null;
   try { value = await response.json(); } catch (error) { value = null; }
   if (!response.ok) throw new ApiError(response.status, value && value.error || 'http_' + response.status, value?.reasons);
@@ -54,6 +60,7 @@ export const api = {
     csrf = value.csrf_token;
     return value;
   },
+  onOutdated(notify) { outdated = notify; },
   get: path => request('GET', path),
   post: (path, body = {}, options) => change('POST', path, body, {}, options),
   patch: (path, body, options) => change('PATCH', path, body, {}, options),

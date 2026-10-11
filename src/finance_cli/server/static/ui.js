@@ -125,7 +125,7 @@ export const ORIGIN = {web: '웹', cli: 'CLI', agent: '에이전트'};
 
 /* Giro answers a bill query that has nothing billed with “고지내용 없음” on its failure path. The
    summary says that instead of "기관 거절"; the recorded verdict and outcome stay as received. */
-const noBills = job => job.name === 'giro.bills.list'
+const noBills = job => ['giro.bills.list', 'giro.bills.search', 'giro.bills.detail'].includes(job.name)
   && Boolean(job.service_verdict?.no_bills_reported ?? job.result?.no_bills_reported);
 
 export function outcomeLabel(job) {
@@ -133,7 +133,12 @@ export function outcomeLabel(job) {
 }
 
 export function statusTags(job) {
-  if (job.name?.startsWith('cli.')) return `<span class="pill-row">${tag('CLI 실행 기록', 'neutral')}${tag('종료코드 ' + (job.local?.exit_code ?? '—'), 'neutral')}</span>`;
+  if (job.name?.startsWith('cli.')) {
+    // Whether the run carried the transmission approval; older records do not say.
+    const sent = job.local?.send_requested;
+    const approval = sent === true ? tag('전송 승인(--send)', 'info') : sent === false ? tag('전송 승인 없음', 'neutral') : '';
+    return `<span class="pill-row">${tag('CLI 실행 기록', 'neutral')}${approval}${tag('종료코드 ' + (job.local?.exit_code ?? '—'), 'neutral')}</span>`;
+  }
   const [status, tone] = STATUS[job.status] || [job.status, 'neutral'];
   const [outcome, outcomeTone] = outcomeLabel(job);
   // The service verdict of a finished job says more than "완료"; a verdict seen while running keeps both.
@@ -319,47 +324,139 @@ export function details(summary, value) {
   return `<details class="verdict"><summary>${esc(summary)}</summary>${json(value)}</details>`;
 }
 
-/* Korean names for institution fields this project already reads by name (dues rows,
-   invoice drafts, return and form ids). A name that is not listed stays exactly as the
-   institution sent it; nothing here guesses the meaning of an unknown field. */
+/* Korean names for institution fields, each one the name the institution's own screens give
+   that field. A name that is not listed stays exactly as the institution sent it; nothing
+   here guesses the meaning of an unknown field. */
 export const FIELD_LABELS = {
-  itrfNm: '세목', itrfCd: '세목 코드', pmtDdt: '납부기한', romAmt: '납부할 세액', txhfOgzNm: '관서명', txtnClNm: '과세구분',
-  bankElctPmtPblNo: '전자납부번호', rtnCvaId: '신고 ID', tnmNm: '상호', txprNm: '납세자명', txprDscmNo: '사업자등록번호',
-  userNm: '이름', frmlNm: '서식명', frmlCd: '서식 코드',
-  splrTxprDscmNo: '공급자 사업자번호', splrTnmNm: '공급자 상호', splrRprsFnm: '공급자 대표자', splrPfbAdr: '공급자 주소',
-  splrBcNm: '공급자 업태', splrItmNm: '공급자 종목', splrChrgEmlAdr: '공급자 이메일',
-  dmnrTxprDscmNo: '공급받는 자 사업자번호', dmnrTnmNm: '공급받는 자 상호', dmnrRprsFnm: '공급받는 자 대표자',
-  dmnrPfbAdr: '공급받는 자 주소', dmnrBcNm: '공급받는 자 업태', dmnrItmNm: '공급받는 자 종목',
+  // Hometax dues and payments, and the parts of an electronic payment number.
+  itrfNm: '세목', itrfCdNm: '세목', itrfCd: '세목 코드', itrfYm: '세목년월', pmtDdt: '납부기한', romAmt: '납부할 세액',
+  romDt: '납부일자', romFnnOrgnNm: '수납점포', txhfOgzNm: '관서명', txhfOgzCd: '관서코드', txtnClNm: '과세구분', attrYr: '귀속연도',
+  bankElctPmtPblNo: '전자납부번호', bankElctPmtNo: '전자납부번호', elctPmtNo: '전자납부번호', elctPmtPblNo: '전자납부발행번호',
+  dcsClCd: '결정구분', impsTrgtTin: '부과대상 TIN', pmtDutyTin: '납부의무 TIN', txprFnm: '성명(상호)', txprClsfCd: '납세자분류코드',
+  tmsnDtm: '전송일시', cardPmtCnclFeeCnfrYn: '카드납부취소수수료확인여부',
+  // Hometax refunds.
+  rfndDcsDfntDt: '환급일자', rfamtPymnAmt: '환급금액', bokTrtRsltCd: '지급구분', pymnDt: '지급일', bankNm: '은행',
+  accnoEncCntn: '계좌번호', attrYm: '귀속년월', rmtnBrkdId: '송금내역ID', rmtnBrkdImpsTrgtTin: '송금내역의 부과대상TIN',
+  icmAmsDt: '수입편입일자', rfamtPymnRqtClCd: '환급금지급요구구분코드', frsRfamtPymnRqtDt: '최초지급요구일자',
+  actlBokTrtRsltCd: '한국은행처리결과코드', bokErrTypeCd: '한국은행오류유형코드', rfamtPymnCmplDt: '환급금지급완료일자',
+  gdncFrwBrkdId: '안내발송내역ID',
+  // Hometax electronic notices.
+  pmtTxamt: '납부할 세액', dungPmtDdt: '독촉납부기한', txprDscmNoEncCntn: '사업자(주민)등록번호', dlvDt: '송달일',
+  ntfTxamt: '고지세액', endtApplcYn: '전자고지 세액공제', rdcTxamt: '감액세액', pmtYn: '납부여부', elctNtfPrslDtm: '열람일시',
+  chrgTxhfOgzNm: '관할관서', chrgMem: '담당자(연락처)',
+  // Hometax returns and their forms.
+  rtnCvaId: '신고 ID', txnrmYm: '과세연월', stmnKndNm: '신고서종류', stmnKndCd: '신고서종류코드', rtnClNm: '신고구분',
+  rtnClDetailNm: '신고유형', rtnClDetailCd: '신고구분상세코드', txprNo: '사업자(주민)등록번호', rcatMthdCd: '접수방법',
+  cvaAplnDtm: '접수일시', rcatNo: '접수번호', rcatDt: '접수일자', apndDcumRcpnScnt: '접수서류', stmnWrtMthdCd: '신고서작성방법코드',
+  ogntxSbtrPmtTxamt: '본세차감납부세액', edctxSbtrPmtTxamt: '교육세차감납부세액', fnftxSbtrPmtTxamt: '농어촌특별세차감납부세액',
+  ogntxWhlScpmTxamt: '본세총괄납부예정세액', edctxWhlScpmTxamt: '교육세총괄납부예정세액', fnftxWhlScpmTxamt: '농어촌특별세총괄납부예정세액',
+  mdfAddVlpySchuTxamt: '수정추가자진납부세액', edctxAddVlpySchuTxamt: '교육세추가자진납부세액',
+  fnftxAddVlpySchuTxamt: '농어촌특별세추가자진납부세액', aprpAfthPmtTxamt: '충당금이후금액', pmtCmpoTypeCd: '납부대사유형코드',
+  cvaAgnRltCdNm: '제출자구분', rtnDt: '신고일자', lcltxResidEnc: '지방소득세', stmnSbmsScnt: '신고건수',
+  tnmNm: '상호', txprNm: '상호(성명)', txprDscmNo: '사업자(주민)등록번호', userNm: '이름', frmlNm: '서식명', frmlCd: '서식 코드',
+  // Hometax tax invoices: the list, one invoice, and its items.
+  rprsFnm: '성명', sumSplCftStr: '공급가액', sumTxamtStr: '세액', isnDtm: '발급일자', tmsnDt: '전송일자', etxivSq1RmrkCntn: '비고',
+  etan: '승인번호', etxivMdfRsnNm: '수정사유', sumSplCft: '공급가액', sumTxamt: '세액', totaAmt: '합계금액',
+  splrTxprDscmNo: '공급자 사업자번호', splrMpbNo: '공급자 종사업장번호', splrTnmNm: '공급자 상호', splrRprsFnm: '공급자 대표자',
+  splrPfbAdr: '공급자 주소', splrBcNm: '공급자 업태', splrItmNm: '공급자 종목', splrChrgEmlAdr: '공급자 이메일',
+  splrMchrgEmlAdr: '공급자 이메일',
+  dmnrTxprDscmNo: '공급받는 자 사업자번호', dmnrMpbNo: '공급받는 자 종사업장번호', dmnrTnmNm: '공급받는 자 상호',
+  dmnrRprsFnm: '공급받는 자 대표자', dmnrPfbAdr: '공급받는 자 주소', dmnrBcNm: '공급받는 자 업태', dmnrItmNm: '공급받는 자 종목',
   dmnrMchrgEmlAdr: '공급받는 자 이메일', dmnrSchrgEmlAdr: '공급받는 자 이메일 2',
+  cstnTxprDscmNo: '수탁자 사업자번호', cstnMpbNo: '수탁자 종사업장번호', cstnTnmNm: '수탁자 상호', cstnRprsFnm: '수탁자 대표자',
+  cstnPfbAdr: '수탁자 주소', cstnBcNm: '수탁자 업태', cstnItmNm: '수탁자 종목', cstnMchrgEmlAdr: '수탁자 이메일',
   lsatSplDt: '공급일자', lsatSplMm: '월', lsatSplDd: '일', lsatNm: '품목', lsatRszeNm: '규격', lsatQty: '수량',
   lsatUtprc: '단가', lsatSplCft: '공급가액', lsatTxamt: '세액', lsatRmrkCntn: '품목 비고',
   wrtDt: '작성일', sumAmt: '합계', splCft: '공급가액', txamt: '세액', rmrkCntn: '비고',
   recApeClCd: '청구·영수 코드', etxivClsfCd: '계산서 분류 코드', etxivKndCd: '계산서 종류 코드',
-  // Hana transfer and ledger fields, by the names its own receipts and transaction list use.
+  // Hana transfers and ledger rows.
   trscDt: '거래일자', trscTm: '거래시각', trscAmt: '거래금액', trscAfBal: '거래 후 잔액', curCd: '통화', trscStNm: '처리 상태',
-  wdrwAcctNo: '출금계좌번호', rcvBnkCd: '입금은행코드', rcvBnkNm: '입금은행', rcvAcctNo: '입금계좌번호', trnsAmt: '이체금액',
-  rduAfComm: '수수료', rcvPsbkMarkCtt: '받는분에게표기', wdrwPsbkMarkCtt: '나에게표기', rmteNm: '수취인명', rmtrNm: '송금인명',
-  memoCtt: '메모', rmrk: '적요',
+  achvChnlNm: '거래구분', trnsDt: '처리일', trnsScheDt: '이체예정일자', trnsScheTm: '이체예정시각', rsvAcpnDt: '신청일자',
+  rsvAcpnTm: '신청시각', canDt: '취소일자', canTm: '취소시각',
+  wdrwAcctNo: '출금계좌번호', rcvBnkCd: '입금은행코드', rcvBnkNm: '입금은행', rcvAcctNo: '입금계좌번호', thrAcctNo: '상대 계좌번호',
+  trnsAmt: '이체금액', rduAfComm: '수수료', commAmt: '수수료', rcvPsbkMarkCtt: '받는분에게표기', wdrwPsbkMarkCtt: '나에게표기',
+  rcvAcctRmrkCtt: '받는분에게 표시', wdrwAcctRmrkCtt: '나에게 표시', rmteNm: '받는 분', rmtrNm: '보내는 분',
+  memoCtt: '추가메모', rmrk: '적요',
+  // Hana corporate ledger rows, which arrive in upper case.
+  TRSC_DT: '거래일자', TRSC_TM: '거래시각', TRSC_AMT: '거래금액', TRSC_AF_BAL: '거래 후 잔액', TRSC_AF_BAL_CTT: '잔액',
+  BAL_FLCT_DV_CD: '잔액변동구분', NW_SUMM_PSBK_RMRK: '구분', RMRK: '적요', MEMO_CTT: '추가메모', CUR_CD: '통화',
+  TRSC_SPCL_MTTR: '거래특이사항', COMM_AMT: '중도상환수수료', ORGN_INT: '이자', RPAY_AMT: '실행/상환금액',
+  TRSC_SEQ_NO: '거래일련번호', DTLS_SEQ_NO: '상세일련번호',
 };
-export const label = key => FIELD_LABELS[key] || key;
 
-/* Dates and times that arrive as bare digits, shown with separators. Display only: a value of
-   any other shape is left exactly as received. */
-export const dateText = value => /^\d{8}$/.test(String(value ?? '')) ? String(value).replace(/^(\d{4})(\d{2})(\d{2})$/, '$1-$2-$3') : value;
-export const timeText = value => /^\d{6}$/.test(String(value ?? '')) ? String(value).replace(/^(\d{2})(\d{2})(\d{2})$/, '$1:$2:$3') : value;
-// Institution fields this project reads as a date or as a time of day.
-const FIELD_FORMATS = {pmtDdt: dateText, wrtDt: dateText, lsatSplDt: dateText, trscDt: dateText, trscTm: timeText};
+/* Names that hold on one screen only. Hometax uses one field for the amount still due and for
+   the amount already paid, and the bank names a transfer's last date by the transfer's state,
+   so that name is read from the row. Looked up before FIELD_LABELS. */
+const SCREEN_LABELS = {
+  payments: {romAmt: '납부세액', txhfOgzNm: '수납관서', elctPmtNo: '전자납부번호(세목년월+결정구분+세목코드+발행번호)'},
+  refunds: {txhfOgzNm: '세무서명', itrfNm: '세목명'},
+  notices: {itrfNm: '세목명'},
+  returns: {userId: '제출자ID'},
+  inquiry: row => {
+    const last = entry({오류: '오류', 완료: row.achvChnlNm === '즉시이체' ? '이체' : '처리', 취소: row.canDt ? null : '취소'}, row.trscStNm);
+    return {trscAmt: '이체금액', ...(last ? {lstTrscDt: last + '일자', lstTrscTm: last + '시각'} : {})};
+  },
+};
+// Field names come from the institution, so a table is read by its own entries only.
+const entry = (table, key) => Object.hasOwn(table, key) ? table[key] : undefined;
+const screenLabels = (screen, row) => {
+  const names = entry(SCREEN_LABELS, screen);
+  return (typeof names === 'function' ? names(row || {}) : names) || {};
+};
+export const label = (key, screen = null, row = null) => entry(screenLabels(screen, row), key) || entry(FIELD_LABELS, key) || key;
+
+// The fields each screen's table leads with, as the institution's own list does.
+const SCREEN_COLUMNS = {
+  payments: ['itrfCdNm', 'txhfOgzNm', 'romDt', 'romAmt'], refunds: ['itrfNm', 'rfndDcsDfntDt', 'rfamtPymnAmt', 'bokTrtRsltCd'],
+  notices: ['itrfNm', 'pmtDdt', 'pmtTxamt', 'pmtYn'], returns: ['stmnKndNm', 'txnrmYm', 'rtnClNm', 'cvaAplnDtm'],
+  forms: ['frmlNm', 'stmnKndNm', 'txnrmYm', 'stmnSbmsScnt'], invoices: ['tnmNm', 'wrtDt', 'sumSplCftStr', 'sumTxamtStr'],
+};
+
+/* Dates, times and amounts that arrive as bare digits, shown with separators. Display only: a
+   value of any other shape is left exactly as received. */
+const digits = (length, pattern, shape) => value => new RegExp(`^\\d{${length}}$`).test(String(value ?? '')) ? String(value).replace(pattern, shape) : value;
+export const dateText = digits(8, /^(\d{4})(\d{2})(\d{2})$/, '$1-$2-$3');
+export const timeText = digits(6, /^(\d{2})(\d{2})(\d{2})$/, '$1:$2:$3');
+export const monthText = digits(6, /^(\d{4})(\d{2})$/, '$1-$2');
+export const stampText = digits(14, /^(\d{4})(\d{2})(\d{2})(\d{2})(\d{2})(\d{2})$/, '$1-$2-$3 $4:$5:$6');
+// A whole or decimal amount sent as text, zero padding included, with the digits it carries and no more.
+export const amountText = value => {
+  const match = typeof value === 'string' ? /^(-?)(\d{1,30})(?:\.(\d{1,10}))?$/.exec(value) : null;
+  if (!match) return value;
+  const fraction = (match[3] || '').replace(/0+$/, '');
+  return match[1] + new Intl.NumberFormat('ko-KR').format(BigInt(match[2])) + (fraction ? '.' + fraction : '');
+};
+// A code the institution's screen shows by name; a code it has no name for stays as received.
+const codeName = names => value => entry(names, value) ?? value;
+const each = (keys, format) => Object.fromEntries(keys.map(key => [key, format]));
+// Institution fields this project reads as a date, a time of day, a month, an amount or a code.
+const FIELD_FORMATS = {
+  ...each(['pmtDdt', 'dungPmtDdt', 'romDt', 'rfndDcsDfntDt', 'pymnDt', 'dlvDt', 'rcatDt', 'rtnDt', 'wrtDt', 'tmsnDt', 'lsatSplDt',
+    'trscDt', 'trnsDt', 'trnsScheDt', 'lstTrscDt', 'rsvAcpnDt', 'canDt', 'TRSC_DT'], dateText),
+  ...each(['trscTm', 'trnsScheTm', 'lstTrscTm', 'rsvAcpnTm', 'canTm', 'TRSC_TM', 'TRSC_PROC_TM'], timeText),
+  ...each(['attrYm', 'txnrmYm'], monthText),
+  ...each(['cvaAplnDtm', 'elctNtfPrslDtm', 'isnDtm', 'tmsnDtm'], stampText),
+  ...each(['romAmt', 'rfamtPymnAmt', 'pmtTxamt', 'ntfTxamt', 'rdcTxamt', 'sumSplCft', 'sumTxamt', 'totaAmt', 'ogntxSbtrPmtTxamt',
+    'edctxSbtrPmtTxamt', 'fnftxSbtrPmtTxamt', 'trscAmt', 'trnsAmt', 'trscAfBal', 'rduAfComm', 'commAmt', 'TRSC_AMT', 'TRSC_AF_BAL',
+    'COMM_AMT', 'ORGN_INT', 'RPAY_AMT'], amountText),
+  bokTrtRsltCd: codeName({'00': '지급완료', '01': '미수령', '02': '1년경과 미수령', '03': '1년경과 미수령(지급요청)'}),
+  BAL_FLCT_DV_CD: codeName({0: '잔액변동없음', 1: '입금', 2: '출금'}),
+};
+const AMOUNT_FIELDS = new Set(Object.keys(FIELD_FORMATS).filter(key => FIELD_FORMATS[key] === amountText));
 
 function cell(key, value) {
-  const shown = FIELD_FORMATS[key] ? FIELD_FORMATS[key](value) : value;
+  const format = entry(FIELD_FORMATS, key);
+  const shown = format ? format(value) : value;
   return typeof shown === 'number' ? money(shown) : esc(shown ?? '');
 }
 
 /* Service rows arrive as the institution's own field names. Column choice is a
    display heuristic only; the detail view shows every allowlisted field. */
-export function columns(rows, limit = 4) {
+export function columns(rows, limit = 4, screen = null) {
   const keys = [];
   for (const row of rows || []) for (const key of Object.keys(row || {})) if (!keys.includes(key)) keys.push(key);
+  const lead = (entry(SCREEN_COLUMNS, screen) || []).filter(key => keys.includes(key));
+  if (lead.length >= 3) return lead.slice(0, limit);
   const pick = test => keys.filter(test);
   const chosen = [...pick(k => /Nm$|Name$|name$/.test(k)).slice(0, 2), ...pick(k => /Dt$|date$/i.test(k)).slice(0, 1),
     ...pick(k => /Amt$|amount|Bal$|balance/i.test(k)).slice(0, 1)];
@@ -371,24 +468,30 @@ export function columns(rows, limit = 4) {
 export function rowsTable(rows, {group = 'rows', limit = 200, keys: fixed = null, num = [], mark = null} = {}) {
   if (!rows) return '';
   if (!rows.length) return '<div class="empty-state">조회 결과가 0건이에요.</div>';
-  const keys = fixed || columns(rows);
-  const numeric = key => num.includes(key) || rows.every(r => r?.[key] === null || r?.[key] === undefined || typeof r[key] === 'number');
+  const keys = fixed || columns(rows, 4, group);
+  const numeric = key => num.includes(key) || AMOUNT_FIELDS.has(key) || rows.every(r => r?.[key] === null || r?.[key] === undefined || typeof r[key] === 'number');
   // data-label lets a narrow screen show each cell as "label: value" without a header row.
-  return `<div class="table-wrap"><table class="table data"><thead><tr>${keys.map(k => `<th scope="col" class="${numeric(k) ? 'num' : ''}">${esc(label(k))}</th>`).join('')}</tr></thead><tbody>${rows.slice(0, limit).map((row, index) => `<tr data-row="${group}:${index}" tabindex="0">${keys.map(k => `<td class="${[numeric(k) ? 'num' : '', mark?.(row, k, index)].filter(Boolean).join(' ')}" data-label="${esc(label(k))}">${cell(k, row?.[k])}</td>`).join('')}</tr>`).join('')}</tbody></table></div>${rows.length > limit ? `<div class="list-footer">${rows.length}건 중 ${limit}건 표시</div>` : ''}`;
+  return `<div class="table-wrap"><table class="table data"><thead><tr>${keys.map(k => `<th scope="col" class="${numeric(k) ? 'num' : ''}">${esc(label(k, group))}</th>`).join('')}</tr></thead><tbody>${rows.slice(0, limit).map((row, index) => `<tr data-row="${group}:${index}" tabindex="0">${keys.map(k => `<td class="${[numeric(k) ? 'num' : '', mark?.(row, k, index)].filter(Boolean).join(' ')}" data-label="${esc(label(k, group))}">${cell(k, row?.[k])}</td>`).join('')}</tr>`).join('')}</tbody></table></div>${rows.length > limit ? `<div class="list-footer">${rows.length}건 중 ${limit}건 표시</div>` : ''}`;
 }
 
-export function fieldsList(row) {
-  return `<div class="summary-lines">${Object.entries(row || {}).map(([k, v]) => `<div class="summary-line"><span>${esc(label(k))}</span><strong>${cell(k, v)}</strong></div>`).join('')}</div>`;
+/* `screen` names the screen whose own field names apply; `source` is the whole row when
+   `row` is only a part of it. */
+export function fieldsList(row, screen = null, source = row) {
+  return `<div class="summary-lines">${Object.entries(row || {}).map(([k, v]) => `<div class="summary-line"><span>${esc(label(k, screen, source))}</span><strong>${cell(k, v)}</strong></div>`).join('')}</div>`;
 }
 
-/* Row detail: fields with a known name first; names only the institution uses are folded. */
-export function detailFields(row) {
+/* Row detail: fields with a known name first, the screen's own columns leading; names only
+   the institution uses are folded. */
+export function detailFields(row, screen = null) {
   const entries = Object.entries(row || {});
-  const named = entries.filter(([k]) => k in FIELD_LABELS || /[^\x00-\x7F]/.test(k));
-  const raw = entries.filter(([k]) => !named.some(([n]) => n === k));
-  if (!named.length || !raw.length) return fieldsList(row);
-  return fieldsList(Object.fromEntries(named)) +
-    `<details class="verdict"><summary>그 밖의 항목 ${raw.length}개 (기관 필드명 그대로)</summary><div class="folded-fields">${fieldsList(Object.fromEntries(raw))}</div></details>`;
+  const known = key => label(key, screen, row) !== key || /[^\x00-\x7F]/.test(key);
+  const lead = entry(SCREEN_COLUMNS, screen) || [];
+  const rank = key => lead.includes(key) ? lead.indexOf(key) : lead.length;
+  const named = entries.filter(([k]) => known(k)).sort(([a], [b]) => rank(a) - rank(b));
+  const raw = entries.filter(([k]) => !known(k));
+  if (!named.length || !raw.length) return fieldsList(Object.fromEntries(named.length ? named : entries), screen, row);
+  return fieldsList(Object.fromEntries(named), screen, row) +
+    `<details class="verdict"><summary>그 밖의 항목 ${raw.length}개 (기관 필드명 그대로)</summary><div class="folded-fields">${fieldsList(Object.fromEntries(raw), screen, row)}</div></details>`;
 }
 
 export const KIND = {personal: '개인', sole_proprietor: '개인사업자', corporation: '법인', business: '사업장', account: '계좌'};

@@ -217,11 +217,11 @@ test('each screen asks for its own job name and login, so other jobs cannot hide
     result: {complete: true, bills: []}});
   a.state.params.tax_type = 'local';
   main.innerHTML = await a.giroViews['giro-live'](a.ctx);
-  assert.match(main.textContent, /세금 종류를 고르고 고지 조회를 누르세요/, 'another tax type is not shown as this one');
+  assert.match(main.textContent, /요금 종류를 고르고 고지 조회를 누르세요/, 'another tax type is not shown as this one');
   main.innerHTML = await a.giroViews['giro-accounts'](a.ctx);
   main.innerHTML = await a.giroViews['giro-receipts'](a.ctx);
   // Filtered on the server before its limit; the tax type is matched among the recent bill queries.
-  assert.deepEqual(a.paths, ['/jobs?name=giro.bills.list&login_id=giro&limit=50', '/jobs?name=giro.accounts.list&login_id=giro&limit=1',
+  assert.deepEqual(a.paths, ['/jobs?name=giro.bills.list&login_id=giro&limit=50', '/jobs?name=giro.bills.summary&login_id=giro&limit=1', '/jobs?name=giro.accounts.list&login_id=giro&limit=1',
     '/jobs?name=giro.receipts.list&login_id=giro&limit=1', '/jobs?name=giro.payment.prepare&login_id=giro&limit=20']);
 });
 
@@ -235,12 +235,45 @@ test('a logged-out list offers no payment, and the confirmation carries the warn
   a.row.readiness = 'login_required';
   main.innerHTML = await a.giroViews['giro-live'](a.ctx);
   assert.equal(main.querySelector('[data-action="giro-payment-options"]'), null, 'the bill stays in view without a button that cannot work');
-  assert.match(main.querySelector('.list-footer').textContent, /로그인하면 이 목록에서 납부할 수 있어요/);
+  assert.match(main.querySelector('.list-footer').textContent, /로그인하면 고지 상세를 조회할 수 있어요/);
   a.add({id: 'pay', name: 'giro.payment.prepare', login_id: 'giro', status: 'awaiting_input', verification: 'live_partial',
     awaiting: {digest: 'digest', requires: ['account_password'], expires_at: Date.now() / 1000 + 125, preview: {tax_type: 'national', amount: '1000'}}});
   await a.giroActions['giro-payment-open'](a.ctx, {dataset: {job: 'pay'}});
   const dialog = a.document.querySelector('#detail-dialog');
   assert.match(dialog.querySelector('.pill-row').textContent, /일부 실사용 확인되돌릴 수 없음/);
   assert.match(dialog.querySelector('.countdown').textContent, /^2분 0\d초$/, 'the time left to confirm is shown at once');
+  assert.equal(a.calls.length, 0);
+});
+
+test('utility input travels as a secret, with detail only and no payment control', async t => {
+  const a = await setup(t);
+  a.state.params.tax_type = 'kepco';
+  a.add({id: 'utility', name: 'giro.bills.search', login_id: 'giro', input: {tax_type: 'kepco'}, outcome: 'success',
+    result: {complete: true, bills: [{ref: '0', tax_type: 'kepco', amount_raw: '3000', due_date: '2026-10-31'}]}});
+  a.document.querySelector('main').innerHTML = await a.giroViews['giro-live'](a.ctx);
+  const form = a.document.querySelector('[data-submit="giro-query"]');
+  form.querySelector('[name="number"]').value = 'SYNTHETIC-NUMBER';
+  assert.equal(form.querySelectorAll('option').length, 19);
+  assert.ok(a.document.querySelector('[data-action="giro-bill-detail"]'));
+  assert.equal(a.document.querySelector('[data-action="giro-payment-options"]'), null);
+  await a.giroActions['giro-query'](a.ctx, form);
+  const call = a.calls[0];
+  assert.equal(call.name, 'giro.bills.search');
+  assert.equal(JSON.stringify(call.fields).includes('SYNTHETIC-NUMBER'), false);
+  assert.equal(JSON.parse(call.opts.secrets.query_numbers).number, 'SYNTHETIC-NUMBER');
+  assert.equal(form.querySelector('[name="number"]').value, '');
+});
+
+test('summary preserves null and category codes and selecting a type sends no query', async t => {
+  const a = await setup(t);
+  a.add({id: 'summary', name: 'giro.bills.summary', login_id: 'giro', outcome: 'success', result: {categories: [
+    {tax_type: 'traffic', label: '<합성범칙금>', summary: {count: null, respCode: '999'}},
+    {tax_type: 'local', label: '지방세', summary: null}]}});
+  a.document.querySelector('main').innerHTML = await a.giroViews['giro-live'](a.ctx);
+  assert.match(a.document.querySelector('main').textContent, /항목 응답 999/);
+  assert.match(a.document.querySelector('main').textContent, /건수 미확인/);
+  assert.equal(a.document.querySelector('합성범칙금'), null);
+  await a.giroActions['giro-select-tax'](a.ctx, {dataset: {tax: 'traffic'}});
+  assert.equal(a.state.params.tax_type, 'traffic');
   assert.equal(a.calls.length, 0);
 });

@@ -98,7 +98,7 @@ async function accountsView(ctx) {
       const id = mapping[a.ref];
       return `<tr ${id ? `data-row="account" data-action="corporate-account-history" data-target="${esc(id)}" tabindex="0" title="거래내역 보기"` : ''}><td data-label="계좌">${esc(a.label)}</td><td data-label="번호">${esc(a.account_number)}</td><td data-label="통화">${esc(a.currency)}</td><td class="num" data-label="잔액">${money(a.balance)}</td><td class="row-go">${id ? ui.icon('arrow') : ''}</td></tr>`;
     };
-    return `<section class="panel"><div class="panel-heading"><div><h2>${esc(row.display_name)}</h2><p class="meta">${esc(ui.METHOD[row.method])} · ${job?.observed_at ? ui.time(job.observed_at) + ' 조회' : '미조회'}</p></div>${tag(live ? '로그인됨' : '로그인 필요', live ? '' : 'warning')}</div><form class="filter-bar" data-submit="corporate-accounts" data-login="${esc(row.id)}">${select('category', '계좌 분류', CATEGORIES, job?.input?.category)}${live ? '<button class="button primary" type="submit">계좌 조회</button>' : ''}${button(live ? '다시 로그인' : '로그인', `data-action="corporate-relogin" data-login="${esc(row.id)}"`, live ? 'secondary' : 'primary')}</form>${job ? notices(job) : ''}${rows.length ? `<div class="table-wrap"><table class="table data"><thead><tr><th>계좌</th><th>번호</th><th>통화</th><th class="num">잔액</th><th></th></tr></thead><tbody>${rows.map(line).join('')}</tbody></table></div>` : `<div class="empty-state">${job?.result?.complete ? '조회한 분류에 계좌가 없어요.' : '아직 확인한 계좌가 없어요.'}</div>`}</section>`;
+    return `<section class="panel"><div class="panel-heading"><div><h2>${esc(row.display_name)}</h2><p class="meta">${esc(ui.METHOD[row.method])} · ${job?.observed_at ? ui.time(job.observed_at) + ' 조회' : '미조회'}</p></div>${tag(live ? '로그인됨' : '로그인 필요', live ? '' : 'warning')}</div><form class="filter-bar" data-submit="corporate-accounts" data-login="${esc(row.id)}">${select('category', '계좌 분류', CATEGORIES, job?.input?.category)}${live ? '<button class="button primary" type="submit">계좌 조회</button>' : ''}${!live && logins.some(other => other.readiness === 'ready') ? button('로그인', `data-action="corporate-relogin" data-login="${esc(row.id)}"`, 'primary') : ''}</form>${job ? notices(job) : ''}${rows.length ? `<div class="table-wrap"><table class="table data"><thead><tr><th>계좌</th><th>번호</th><th>통화</th><th class="num">잔액</th><th></th></tr></thead><tbody>${rows.map(line).join('')}</tbody></table></div>` : `<div class="empty-state">${job?.result?.complete ? '조회한 분류에 계좌가 없어요.' : '아직 확인한 계좌가 없어요.'}</div>`}</section>`;
   }));
   return intro + panel() + `<div class="stack">${panels.join('')}</div>`;
 }
@@ -111,7 +111,8 @@ function historyRows(job) {
       내용: r.RMRK || r.NW_SUMM_PSBK_RMRK, 금액: amount(r.TRSC_AMT), 입금액: amount(r.RCV_AMT_CTT), 출금액: amount(r.PAYM_AMT_CTT),
       잔액: amount(r.TRSC_AF_BAL ?? r.TRSC_AF_BAL_CTT), 통화: r.CUR_CD || job.result?.currency, 메모: r.MEMO_CTT};
   });
-  state.rows['corporate-history'] = {rows: raw, job};
+  // The row detail reads one flat row: a display value the bank sent for a field stands in that field's place.
+  state.rows['corporate-history'] = {rows: raw.map(({display, ...row}) => ({...row, ...display})), job};
   const amountKeys = raw.some(r => r.RCV_AMT_CTT !== undefined || r.PAYM_AMT_CTT !== undefined)
     ? ['금액', '입금액', '출금액'] : ['금액'];
   return notices(job) + (Array.isArray(job.result?.transactions) ? (!rows.length && !job.result?.complete ? note('확인한 거래내역이 아직 없어요. 조회가 완료된 것은 아니에요.') : ui.rowsTable(rows, {group: 'corporate-history', limit: rows.length,

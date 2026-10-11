@@ -71,7 +71,10 @@ def hana_report():
 GIRO_REVIEWED_ON = '2026-10-10'
 GIRO_JOBS = {
     'giro.login': ('live_verified', '웹 PIN 로그인·암호화 세션 저장 성공 확인.'),
-    'giro.bills.list': ('live_partial', '국세 목록·상세는 CLI에서 성공 확인. 웹 국세·지방세·관세 조회는 “고지내용 없음”(311) 응답 확인. 고지가 있는 웹 목록은 미확인.'),
+    'giro.bills.list': ('live_partial', '국세 목록·상세는 CLI에서 성공 확인. 웹 국세·지방세·관세 조회는 “고지내용 없음”(311) 응답 확인. 고지가 있는 웹 목록과 추가 공과금 항목은 미확인.'),
+    'giro.bills.summary': ('live_untested', '통합조회는 구현·합성 검증. 실사용 미확인.'),
+    'giro.bills.search': ('live_untested', '번호 기반 공과금 조회는 구현·합성 검증. 실사용 미확인.'),
+    'giro.bills.detail': ('live_untested', '독립 고지 상세 조회는 구현·합성 검증. 실사용 미확인.'),
     'giro.payment.options': ('live_partial', '국세 상세·납부 가능 계좌 조회는 CLI에서 성공 확인. 웹 납부계좌 선택과 지방세·관세 상세는 미확인.'),
     'giro.payment.prepare': ('live_partial', '국세 단건 계좌 납부·추가 PIN 인증은 CLI에서 성공 확인. 웹 납부 실행과 지방세·관세 납부는 미확인.'),
     'giro.accounts.list': ('live_verified', '웹 등록계좌 목록·계좌 별칭 조회 성공 확인.'),
@@ -93,7 +96,8 @@ def giro_report():
             'verified': ['device-registration', 'pin-login', 'encrypted-session-save', 'saved-session-reuse',
                          'own-national-tax-query', 'payment-review', 'single-national-account-payment',
                          'registered-account-list', 'receipt-list', 'receipt-detail'],
-            'unverified': ['own-local-tax-query', 'own-customs-query',
+            'unverified': ['own-local-tax-query', 'own-customs-query', 'utility-bill-queries',
+                           'integrated-bill-summary', 'bill-detail',
                            'single-local-account-payment', 'single-customs-account-payment',
                            'web-query-with-bills', 'web-payment-execution'],
             'jobs': {name: giro_job(name) for name in GIRO_JOBS},

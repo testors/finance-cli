@@ -13,6 +13,7 @@ def output(value):
 
 
 def capabilities():
+    from giro.bill_catalog import catalog as giro_bill_catalog
     from finance_cli.core.live_verification import HANA_LEVEL, REVIEWED_ON, hana_report, giro_report
     return {'schema_version': 1, 'services': {
         'hana': {'offline': ['protocol', 'shared-certificate-login-signature', 'onesign-vault-bundle',
@@ -72,7 +73,7 @@ def capabilities():
         'giro': {'offline': ['auth-plan', 'registration-plan', 'request-plan', 'bills', 'payment-accounts', 'payment-plan',
                             'payment-result', 'certificate-validation', 'codeguard'],
                  'live': ['explicit PIN-free bootstrap probes', 'pinned-public-root-preparation',
-                          'device-registration', 'pin-login', 'own-tax-queries', 'single-national-account-payment',
+                          'device-registration', 'pin-login', 'own-tax-queries', 'utility-bill-queries', 'integrated-bill-summary', 'bill-detail', 'single-national-account-payment',
                           'single-local-account-payment', 'single-customs-account-payment', 'payment-review',
                           'registered-account-list', 'receipt-list', 'receipt-detail', 'session-extension-query'],
                  'session_extension': {'command': 'fin giro session extend', 'method': 'registered-accounts-query',
@@ -80,6 +81,7 @@ def capabilities():
                                        'idle_limit_observed_seconds': {'kept_after': 295, 'ended_after': 300}},
                  'live_login': True, 'live_tested': False, 'verification': 'live_partial',
                  'live_verification': giro_report(),
+                 'bill_queries': giro_bill_catalog(),
                  'public_material_refresh': 'cache-first issuer/CRL lookup from ds.yessign.or.kr:389 during authentication',
                  'requirements': ['private prepared protection profile', 'pinned recipient roots in public cache',
                                   'existing personal member; SKT/SKM/LGT/LGM for registration',
@@ -197,8 +199,9 @@ def hometax_main(argv):
 def record_history(service, argv, code):
     """Link a CLI or agent run to the web server's shared history, if one exists.
 
-    Only the command words are kept (no option values, inputs or results), and
-    a recording failure never changes the command's JSON output or exit code.
+    Only the command words and whether transmission was approved (--send, or
+    Giro's --live) are kept: no option values, inputs or results. A recording
+    failure never changes the command's JSON output or exit code.
     """
     if not argv or any(value in ('-h', '--help') for value in argv):
         return code
@@ -213,7 +216,8 @@ def record_history(service, argv, code):
                 break
             words.append(value)
         origin = 'agent' if os.environ.get('FINANCE_REQUEST_ORIGIN') == 'agent' else 'cli'
-        record_cli(server_db.Database(), origin=origin, command=[service, *words], exit_code=code, service=service)
+        record_cli(server_db.Database(), origin=origin, command=[service, *words], exit_code=code, service=service,
+                   send='--send' in argv or '--live' in argv)
     except Exception:
         pass
     return code

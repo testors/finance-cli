@@ -138,7 +138,8 @@ class AuthenticatedClient:
                    'customs.list', 'customs.detail', 'accounts.payable',
                    'accounts.registered', 'auth.datetime', 'receipts.list', 'receipts.detail',
                    'local.provinces', 'local.districts'}
-        if name not in allowed:
+        from .bill_catalog import QUERY_ROUTES
+        if name not in allowed and name not in QUERY_ROUTES:
             raise GiroError('인증된 조회 경로에서 지원하지 않는 요청입니다.')
         if not send:
             raise GiroError('기관 통신에는 명시적인 전송 승인이 필요합니다.')

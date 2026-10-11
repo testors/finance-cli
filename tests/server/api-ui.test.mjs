@@ -94,3 +94,21 @@ test('a request that changes something holds the screen; a read or a background 
   assert.equal(holds.length, 4);
   assert.equal(requests.length, 7, 'holding never repeats or drops a request');
 });
+
+test('the shell is told once when the server answers from another copy of the app', async () => {
+  let served = 'copy-1', told = 0;
+  const context = createContext({crypto: {getRandomValues: bytes => webcrypto.getRandomValues(bytes)}, Blob,
+    fetch: async () => ({ok: true, headers: {get: name => name === 'X-Finance-Assets' ? served : null}, json: async () => ({})})});
+  const {api} = (await load(context)).namespace;
+  api.onOutdated(() => { told++; });
+  await api.get('/logins');
+  await api.get('/logins');
+  assert.equal(told, 0, 'the copy the tab started with');
+  served = null;
+  await api.get('/logins');
+  assert.equal(told, 0, 'an answer that names no copy says nothing');
+  served = 'copy-2';
+  await api.get('/logins');
+  await api.get('/logins');
+  assert.equal(told, 1, 'said once, however many answers follow');
+});

@@ -76,6 +76,10 @@ def _read_model(value, name):
             if not isinstance(item, list):
                 raise GiroError("Gson List 어댑터에서 읽을 수 없는 값 형식")
             result[field] = [_read_model(element, kind["list"]) for element in item]
+        elif "list_scalar" in kind:
+            if not isinstance(item, list):
+                raise GiroError("Gson List 어댑터에서 읽을 수 없는 값 형식")
+            result[field] = [string_value(element) for element in item]
     return result
 
 

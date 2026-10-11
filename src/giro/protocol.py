@@ -79,6 +79,9 @@ for _kind, _directory, _prefix in (
                  DETAIL_FIELDS, True),
     ])
 ENDPOINTS = {entry.name: entry for entry in _ENDPOINTS}
+from .bill_catalog import QUERY_ROUTES
+for _name, (_path, _fields) in QUERY_ROUTES.items():
+    ENDPOINTS[_name] = Endpoint(_name, '/service/' + _path, 'ENCRYPT', _fields, True)
 for _kind, _directory, _prefix in (
     ('local', 'localtax/localtaxsearch', 'Localtax'),
     ('customs', 'ntax/tariff', 'Tariff'),

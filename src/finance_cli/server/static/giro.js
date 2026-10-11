@@ -4,7 +4,16 @@ import * as ui from './ui.js';
 import {state, login, askSecrets, refreshModel, render, changeView, jobState} from './app.js';
 
 const {esc, button, heading, note} = ui;
-const TAXES = [['national', '국세'], ['local', '지방세'], ['customs', '관세']];
+export const TAXES = [['national', '국세'], ['local', '지방세'], ['customs', '관세'],
+  ['env', '환경개선부담금'], ['nontax', '세외수입'], ['traffic', '경찰청범칙금'], ['penalty', '법무부국고금'],
+  ['patent', '특허수수료'], ['marine', '항만수수료'], ['fund', '기금 및 기타국고'], ['water', '상하수도요금'],
+  ['social', '통합사회보험료'], ['annuity', '국민연금 반납금·추납보험료'], ['employ', '고용보험 연납·분기납'],
+  ['industry', '산재보험 연납·분기납'], ['kepco', '전기요금'], ['ktcomm', 'KT 통신요금'], ['tv', 'TV수신료'], ['giro', '일반지로']];
+const PAYABLE = ['national', 'local', 'customs'];
+const NUMBER_INPUTS = {water: [['elec_water_no', '전자수용가번호']], social: [['number', '전자납부번호']],
+  annuity: [['number', '전자납부번호']], employ: [['insure_no', '보험관리번호']], industry: [['insure_no', '보험관리번호']],
+  kepco: [['number', '고객번호']], ktcomm: [['number', '전자납부번호·전화번호']], tv: [['number', '관리번호 (10자리)']],
+  giro: [['giro_no', '지로번호'], ['number', '전자납부번호']]};
 const PIN = ['pin', '지로 로그인 간편비밀번호 6자리', '[0-9]{6}'];
 const ACCOUNT = ['account_password', '출금 계좌 비밀번호 4자리', '[0-9]{4}'];
 const connection = () => state.logins.find(r => r.institution === 'giro' && !r.disabled);
@@ -14,10 +23,9 @@ const taxName = value => TAXES.find(([v]) => v === value)?.[1] || '세금';
 const options = (rows, selected) => rows.map(([v, label]) => `<option value="${esc(v)}" ${v === selected ? 'selected' : ''}>${esc(label)}</option>`).join('');
 const panel = () => '<div id="job-panel" class="job-panel"></div>';
 const ready = row => row?.readiness === 'ready';
-// Logged in: re-login is a quiet option. Logged out: the shell's notice under the heading asks for the
-// login; with no connection yet, the screen itself offers the first login.
-const start = (title, description) => heading(title, description,
-  ready(connection()) ? button('다시 로그인', `data-action="giro-login" data-login="${esc(connection().id)}"`) : '');
+// The shell offers a new login beside the heading while logged in and asks for the login in its
+// notice when logged out; with no connection yet, the screen itself offers the first login.
+const start = (title, description) => heading(title, description);
 const loginFirst = text => `<div class="empty-state">${text}<div class="section-actions">${button('지로 로그인', 'data-action="giro-login"', 'primary')}</div></div>`;
 const close = (kind = 'primary') => `<div class="dialog-actions">${button('닫기', 'data-ui="close"', kind)}</div>`;
 
@@ -41,6 +49,8 @@ function notices(job) {
   if (validationIssue) result += note(esc(ui.message(validationIssue)));
   if (job.result?.no_bills_reported) return result + note('기관에서 “고지내용 없음”으로 응답했어요. 납부할 고지가 없다는 안내이며, 정상 목록 조회(0건)와는 다른 응답이에요.');
   if (job.local?.next_action === 'identity_registration_required') result += note('지로에 본인정보 등록이 필요해요. 모바일지로 앱에서 등록 상태를 확인하세요.');
+  if (job.local?.next_action === 'integrated_busy_day') result += note('납부집중일에는 통합조회가 제한돼요. 개별 항목을 선택해 조회하세요.');
+  if (job.local?.next_action === 'direct_input_payment_required') result += note('이 지로번호는 조회납부를 지원하지 않아요. 고지서 내용을 직접 입력하는 납부는 현재 지원하지 않아요.');
   if (job.result?.complete === false) result += note('조회가 완료되지 않았어요. 수신한 항목만 표시해요.');
   if (job.outcome === 'rejected') result += note(`기관에서 요청을 처리하지 않았어요. 응답 코드: ${esc(job.service_verdict?.response_code || '확인 안 됨')}`);
   return result;
@@ -65,7 +75,7 @@ export async function giroLogin(ctx, row = null) {
 }
 
 function billsResult(job, live) {
-  if (!job) return `<div class="empty-state">${live ? '세금 종류를 고르고 고지 조회를 누르세요.' : '아직 조회한 고지가 없어요.'}</div>`;
+  if (!job) return `<div class="empty-state">${live ? '요금 종류를 고르고 고지 조회를 누르세요.' : '아직 조회한 고지가 없어요.'}</div>`;
   const rows = job.result?.bills;
   const region = job.result?.query_region;
   const where = region ? note(`조회 지역: ${esc([region.province, region.district].filter(Boolean).join(' '))}`) : '';
@@ -75,14 +85,24 @@ function billsResult(job, live) {
   if (!Array.isArray(rows)) return before + note('고지 목록을 확인하지 못했어요.');
   const shown = rows.filter(Boolean);
   if (!shown.length) return before + note(job.result.complete ? '조회된 고지가 없어요.' : '표시할 고지 항목을 받지 못했어요.');
-  return before + `<div class="table-wrap"><table class="table data"><thead><tr><th>세목</th><th>청구기관</th><th class="num">납부금액</th><th>납부기한</th><th>전자납부번호</th><th></th></tr></thead><tbody>${shown.map(r => `<tr><td data-label="세목">${esc(r.tax_name || taxName(r.tax_type))}</td><td data-label="청구기관">${esc(r.issuer || '확인 안 됨')}</td><td class="num" data-label="납부금액">${esc(money(r.amount_raw?.replaceAll(',', '') ?? r.amount))}</td><td data-label="납부기한">${esc(r.due_date || r.due_date_raw || '확인 안 됨')}</td><td data-label="전자납부번호">${esc(r.electronic_number)}</td><td>${live ? button('납부하기', `data-action="giro-payment-options" data-job="${esc(job.id)}" data-ref="${esc(r.ref)}"`) : ''}</td></tr>`).join('')}</tbody></table></div><div class="list-footer">표시 ${shown.length}건 · ${job.result.complete ? '마지막 페이지까지 확인' : '조회 범위 미완료'} · ${live ? '납부하기를 누르면 출금 계좌를 고르고 내용을 확인한 뒤 납부해요.' : '로그인하면 이 목록에서 납부할 수 있어요.'}</div>`;
+  return before + `<div class="table-wrap"><table class="table data"><thead><tr><th>세목</th><th>청구기관</th><th class="num">납부금액</th><th>납부기한</th><th>전자납부번호</th><th></th></tr></thead><tbody>${shown.map(r => `<tr><td data-label="세목">${esc(r.tax_name || taxName(r.tax_type))}</td><td data-label="청구기관">${esc(r.issuer || '확인 안 됨')}</td><td class="num" data-label="납부금액">${esc(money(r.amount_raw?.replaceAll(',', '') ?? r.amount))}</td><td data-label="납부기한">${esc(r.due_date || r.due_date_raw || '확인 안 됨')}</td><td data-label="전자납부번호">${esc(r.electronic_number)}</td><td>${live ? button('상세', `data-action="giro-bill-detail" data-job="${esc(job.id)}" data-ref="${esc(r.ref)}"`) : ''}${live && PAYABLE.includes(r.tax_type || job.input?.tax_type) ? button('납부하기', `data-action="giro-payment-options" data-job="${esc(job.id)}" data-ref="${esc(r.ref)}"`) : ''}</td></tr>`).join('')}</tbody></table></div><div class="list-footer">표시 ${shown.length}건 · ${job.result.complete ? '마지막 페이지까지 확인' : '조회 범위 미완료'} · ${live ? '상세에서 고지 내용을 확인하세요. 국세·지방세·관세는 계좌 납부도 지원해요.' : '로그인하면 고지 상세를 조회할 수 있어요.'}</div>`;
+}
+
+function summaryResult(job) {
+  if (!job) return '';
+  const rows = job.result?.categories;
+  return jobState(job) + notices(job) + (Array.isArray(rows) ? `<div class="settings-body">${rows.map(r =>
+    `<div class="setting-row"><span>${esc(r.label)}<span class="meta">${esc(r.summary?.count == null ? '건수 미확인' : r.summary.count + '건')} · ${esc(money(r.summary?.amount))} · 항목 응답 ${esc(r.summary?.respCode ?? '미확인')}</span></span>${button('항목 선택', `data-action="giro-select-tax" data-tax="${esc(r.tax_type)}"`)}</div>`).join('')}</div>` : note('통합조회 결과를 확인하지 못했어요.'));
 }
 
 async function billsView(ctx) {
   const row = connection(), tax = state.params.tax_type || 'national';
-  const job = row ? await latest('giro.bills.list', row, tax) : null;
-  return start('고지·납부', '고지 금액과 납부기한을 확인하고 등록된 계좌로 납부해요.') +
-    `<section class="panel"><form class="filter-bar" data-submit="giro-query"><div class="field"><label for="giro-tax">세금 종류</label><select id="giro-tax" name="tax_type">${options(TAXES, tax)}</select></div>${ready(row) ? '<button class="button primary" type="submit">고지 조회</button>' : ''}</form>${panel()}<div id="giro-results">${row ? billsResult(job, ready(row)) : loginFirst('지로에 로그인하면 고지를 조회하고 납부할 수 있어요.')}</div></section>`;
+  const job = row ? await latest(NUMBER_INPUTS[tax] ? 'giro.bills.search' : 'giro.bills.list', row, tax) : null;
+  const summary = row ? await latest('giro.bills.summary', row) : null;
+  const inputs = (NUMBER_INPUTS[tax] || []).map(([name, label]) => `<div class="field"><label for="giro-query-${name}">${esc(label)}</label><input id="giro-query-${name}" name="${name}" required maxlength="100" autocomplete="off"></div>`).join('');
+  return start('고지·납부', '세금·공과금 고지를 조회해요. 국세·지방세·관세는 등록계좌 납부를 지원해요.') +
+    `<section class="panel"><div class="panel-heading"><h2>본인 공과금 통합조회</h2>${ready(row) ? button('통합조회', 'data-action="giro-summary-query"', 'primary') : ''}</div>${summaryResult(summary)}</section>` +
+    `<section class="panel"><form class="filter-bar" data-submit="giro-query"><div class="field"><label for="giro-tax">요금 종류</label><select id="giro-tax" name="tax_type" data-change="giro-tax-change">${options(TAXES, tax)}</select></div>${inputs}${ready(row) ? '<button class="button primary" type="submit">고지 조회</button>' : ''}</form>${panel()}<div id="giro-results">${row ? billsResult(job, ready(row)) : loginFirst('지로에 로그인하면 고지를 조회하고 납부할 수 있어요.')}</div>${note('인지대·송달료와 조회납부 미지원 일반지로는 고지서 내용을 직접 입력하는 납부 항목으로, 자동 고지 조회 대상이 아니에요.')}</section>`;
 }
 
 function preview(value = {}) {
@@ -150,11 +170,30 @@ export const giroActions = {
   'giro-login': (ctx, element) => giroLogin(ctx, login(element.dataset.login)),
   'giro-bills-open': () => { ui.closeDialog(); changeView('giro-live'); },
   'giro-receipts-open': () => { ui.closeDialog(); changeView('giro-receipts'); },
+  'giro-tax-change': async (ctx, element) => { state.params.tax_type = element.value; await render(); },
+  'giro-select-tax': async (ctx, element) => { state.params.tax_type = element.dataset.tax; await render(); },
+  'giro-summary-query': async ctx => {
+    const row = connection(); if (!row) return giroLogin(ctx);
+    await ctx.run('giro.bills.summary', {login_id: row.id}, {panel: 'job-panel', onDone: async () => { await refreshModel(); await render(); }});
+  },
+  'giro-bill-detail': async (ctx, element) => {
+    const parent = await api.get('/jobs/' + encodeURIComponent(element.dataset.job));
+    await ctx.run('giro.bills.detail', {login_id: parent.login_id, parent_job_id: parent.id, input: {ref: element.dataset.ref}},
+      {panel: 'job-panel', onDone: job => ui.showDialog('고지 상세', jobState(job) + notices(job) +
+        (job.result?.bill ? ui.fieldsList({'요금 종류': taxName(job.result.bill.tax_type), '세목': job.result.bill.tax_name,
+          '청구기관': job.result.bill.issuer, '납부금액': money(job.result.bill.amount_raw),
+          '납부기한': job.result.bill.due_date || job.result.bill.due_date_raw || '상세 응답에 없음',
+          '전자납부번호': job.result.bill.electronic_number}) : note('상세 내용을 확인하지 못했어요.')) + close())});
+  },
   'giro-query': async (ctx, form) => {
     const row = connection(); if (!row) return giroLogin(ctx);
-    const tax = new FormData(form).get('tax_type');
+    const data = Object.fromEntries(new FormData(form)), tax = data.tax_type;
     state.params.tax_type = tax;
-    await ctx.run('giro.bills.list', {login_id: row.id, input: {tax_type: tax}}, {panel: 'job-panel', onDone: async () => { await refreshModel(); await render(); }});
+    const numbers = Object.fromEntries((NUMBER_INPUTS[tax] || []).map(([name]) => [name, data[name]]));
+    form.querySelectorAll('input').forEach(input => { input.value = ''; });
+    await ctx.run(NUMBER_INPUTS[tax] ? 'giro.bills.search' : 'giro.bills.list', {login_id: row.id, input: {tax_type: tax}},
+      {panel: 'job-panel', ...(NUMBER_INPUTS[tax] ? {secrets: {query_numbers: JSON.stringify(numbers)}} : {}),
+        onDone: async () => { await refreshModel(); await render(); }});
   },
   'giro-payment-options': async (ctx, element) => {
     const parent = await api.get('/jobs/' + encodeURIComponent(element.dataset.job));

@@ -241,15 +241,20 @@ def cancel(db, job_id, origin, reason='user_cancelled'):
         return get(con, job_id)
 
 
-def record_cli(db, *, origin, command, exit_code, service):
-    """A CLI or agent run in the shared history. Values and results are not stored."""
+def record_cli(db, *, origin, command, exit_code, service, send=None):
+    """A CLI or agent run in the shared history. Values and results are not stored.
+
+    `send` says whether the run carried the transmission approval; without it a command only
+    printed its plan or worked locally. A run recorded before this was kept has no such mark.
+    """
     at = now()
+    local = {'exit_code': exit_code, 'result_recorded': False, **({} if send is None else {'send_requested': bool(send)})}
     with db.write() as con:
         job_id = new_id('jb')
         con.execute('INSERT INTO jobs(id, name, origin, snapshot, input, request_digest, status, step, local,'
                     ' outcome, attempt, created_at, updated_at, finished_at) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?)',
                     (job_id, 'cli.' + service, origin, dumps({'command': command}), '{}', digest([command, at]),
-                     'finished', 'run', dumps({'exit_code': exit_code, 'result_recorded': False}), 'unknown', '{}',
+                     'finished', 'run', dumps(local), 'unknown', '{}',
                      at, at, at))
     return job_id
 

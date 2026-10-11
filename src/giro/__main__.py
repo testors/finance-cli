@@ -8,6 +8,7 @@ from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 from finance_cli.cli.output import ArgumentParser, emit
 
 from .bills import TAX_TYPES, due_bills, normalize_detail, normalize_pages
+from .bill_catalog import PAYMENT_TYPES, INPUT_LABELS
 from .compat import loads
 from .errors import GiroError, ResponseError
 from .protocol import ENDPOINTS, auth_plan, request_plan
@@ -118,20 +119,27 @@ def parser():
     for action in ('prepare', 'pay'):
         pay = payment_sub.add_parser(action, help='고지·계좌·금액 확인까지만 조회' if action == 'prepare'
                                      else '고지 조회 후 계좌·금액 확인 및 단건 납부')
-        pay.add_argument('--type', choices=TAX_TYPES, default='national')
+        pay.add_argument('--type', choices=PAYMENT_TYPES, default='national')
         pay.add_argument('--live', '--send', dest='live', action='store_true')
         pay.add_argument('--amount', help='금액 변경이 가능한 고지에만 적용할 납부액')
     payment_result = payment_sub.add_parser('result', help='복호화된 납부 응답의 판정; 추가 조회 없음')
-    payment_result.add_argument('--type', choices=(*TAX_TYPES, 'hometax'), required=True)
+    payment_result.add_argument('--type', choices=(*PAYMENT_TYPES, 'hometax'), required=True)
     payment_result.add_argument('--input', required=True, help='납부 응답 JSON 파일 또는 -')
     bills = sub.add_parser("bills", help="복호화된 로컬 JSON에서 고지/기한 읽기")
     bill_sub = bills.add_subparsers(dest="action", required=True)
+    bill_sub.add_parser('types', help='조회 종류와 필요한 입력')
+    summary = bill_sub.add_parser('summary', help='본인 공과금 통합조회: 항목별 건수·금액')
+    summary.add_argument('--send', '--live', dest='live', action='store_true')
     for action in ("list", "due", "show"):
         item = bill_sub.add_parser(action)
         item.add_argument("--type", choices=TAX_TYPES, required=True)
-        item.add_argument("--input", required=action == 'show', help="로컬 JSON 파일 또는 표준입력(-)")
+        item.add_argument("--input", help="로컬 JSON 파일 또는 표준입력(-); show --send에서는 identifiers 객체")
+        item.add_argument('--live', '--send', dest='live', action='store_true', help='저장된 로그인으로 고지 조회')
         if action != 'show':
-            item.add_argument('--live', '--send', dest='live', action='store_true', help='저장된 로그인으로 본인 고지 조회')
+            item.add_argument('--max-pages', type=int, default=100)
+            item.add_argument('--search-input', help='조회 번호를 담은 JSON 파일 또는 -; 명령행 값 대신 사용 가능')
+            for key, label in INPUT_LABELS.items():
+                item.add_argument('--'+key.replace('_', '-'), help=label)
         if action == "due":
             item.add_argument("--within-days", type=int, default=7)
             item.add_argument("--today", type=date.fromisoformat, help="기준일 YYYY-MM-DD; 기본 Asia/Seoul")
@@ -140,6 +148,17 @@ def parser():
 
 
 def run(args):
+    if args.command == 'bills' and args.action in ('types', 'summary'):
+        from .bill_catalog import catalog
+        from .query_flow import integrated_summary
+        result = catalog() if args.action == 'types' else integrated_summary(send=args.live)
+        return result, 0 if args.action == 'types' or result.get('plan_only') or result.get('app_success') else 2
+    if args.command == 'bills' and args.action == 'show' and (args.live or args.input is None):
+        from .query_flow import bill_detail
+        if args.live and args.input is None:
+            raise GiroError('상세 조회에는 목록의 identifiers를 담은 --input이 필요합니다.')
+        result = bill_detail(args.type, _load(args.input) if args.live else None, send=args.live)
+        return result, 0 if result.get('plan_only') or result.get('app_success') else 2
     if args.command == 'session':
         from .session import extend
         result = extend(send=args.live)
@@ -321,9 +340,14 @@ def run(args):
         result = normalize_pages(document, args.type)
     else:
         from .query_flow import list_bills
-        result = list_bills(args.type, send=args.live)
+        search = {key: getattr(args, key) for key in INPUT_LABELS if getattr(args, key, None) is not None}
+        if args.search_input:
+            if search: raise GiroError('--search-input과 조회 번호 옵션 중 하나를 사용하세요.')
+            search = _load(args.search_input)
+        result = list_bills(args.type, send=args.live, search=search, max_pages=args.max_pages)
         if result.get('plan_only'): return result, 0
         if not result.get('app_success'): return result, 2 if result.get('app_success') is False else 4
+        if result.get('next_action'): return result, 0
     if args.action == "due":
         try:
             today = args.today or datetime.now(ZoneInfo("Asia/Seoul")).date()

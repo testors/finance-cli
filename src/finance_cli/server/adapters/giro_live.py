@@ -20,6 +20,7 @@ from giro.errors import GiroError
 from giro.payment import account_options
 from giro.payment_flow import PaymentWorkflow, WorkflowStopped
 from giro.session_store import SessionStore
+from giro.bill_catalog import BILL_TYPES, OWN_TYPES, PAYMENT_TYPES, LABELS
 
 from .base import (Adapter, InputError, Step, StepResult, Stop, bounded_int, choice, dict_input, extension_result,
                    iso_date, pick, text)
@@ -153,16 +154,20 @@ class Session(Giro):
 
 class Bills(Session):
     name = 'giro.bills.list'
-    title = '국세·지방세·관세 고지 조회'
+    title = '세금·공과금 본인 고지 조회'
 
     def validate(self, value, login=None):
         value = dict_input(value, ('tax_type',))
-        return {'tax_type': choice(value.get('tax_type'), 'tax_type', ('national', 'local', 'customs')) or 'national'}
+        return {'tax_type': choice(value.get('tax_type'), 'tax_type', OWN_TYPES) or 'national'}
+
+    def search(self, ctx):
+        return None
 
     def run(self, ctx, step):
         with self.client(ctx) as client:
+            search = self.search(ctx)
             ctx.reserve()
-            value = query_flow.collect_bills(client, ctx.input['tax_type'])
+            value = query_flow.collect_bills(client, ctx.input['tax_type'], search=search)
             rows = value.get('bills')
             result = pick(value, ('complete', 'total_count', 'loaded_count', 'tax_type', 'query_region',
                                   'no_bills_reported', 'issues', 'next_action'))
@@ -173,6 +178,37 @@ class Bills(Session):
             fields = observed(ctx, value, result, VERDICT + ('no_bills_reported',))
             seal(client.session, ctx.job['id'], {'bills': rows, 'tax_type': ctx.input['tax_type']})
             return StepResult(**fields, local=local(value))
+
+
+class BillSearch(Bills):
+    name = 'giro.bills.search'
+    title = '번호로 공과금 고지 조회'
+    steps = {'run': Step('run', secrets=('query_numbers',))}
+
+    def validate(self, value, login=None):
+        value = dict_input(value, ('tax_type',), ('tax_type',))
+        return {'tax_type': choice(value['tax_type'], 'tax_type', BILL_TYPES)}
+
+    def search(self, ctx):
+        try:
+            value = json.loads(ctx.secrets['query_numbers'])
+            return query_flow.validate_search(ctx.input['tax_type'], value)
+        except (ValueError, GiroError, TypeError):
+            raise Stop('giro_invalid_query_numbers') from None
+        finally:
+            ctx.secrets = None
+
+
+class Summary(Session):
+    name = 'giro.bills.summary'
+    title = '세금·공과금 통합조회'
+
+    def run(self, ctx, step):
+        with self.client(ctx) as client:
+            ctx.reserve()
+            value = query_flow.collect_summary(client)
+            return StepResult(**observed(ctx, value, pick(value, ('categories', 'totals', 'next_action'))),
+                              local=local(value))
 
 
 class FromParent(Session):
@@ -203,6 +239,8 @@ class PaymentOptions(FromParent):
     def run(self, ctx, step):
         with self.client(ctx) as client:
             parent = self.parent_data(ctx, client)
+            if parent['tax_type'] not in PAYMENT_TYPES:
+                raise Stop('giro_payment_type_not_supported')
             rows = parent.get('bills') or []
             index = int(ctx.input['ref'])
             if index >= len(rows) or rows[index] is None:
@@ -218,6 +256,30 @@ class PaymentOptions(FromParent):
             fields = observed(ctx, {'app_success': True, 'service_decision': 'success'}, result)
             seal(client.session, ctx.job['id'], value)
             return StepResult(**fields)
+
+
+class BillDetail(FromParent):
+    name = 'giro.bills.detail'
+    title = '고지 상세 조회'
+    validate = PaymentOptions.validate
+
+    def check_parent(self, parent, value):
+        if not parent or parent['name'] not in ('giro.bills.list', 'giro.bills.search') or parent['status'] != 'finished':
+            raise InputError('giro_parent_required')
+        if parent['outcome'] not in ('success', 'partial_success'):
+            raise InputError('giro_parent_not_successful')
+
+    def run(self, ctx, step):
+        with self.client(ctx) as client:
+            parent = self.parent_data(ctx, client)
+            rows = parent.get('bills') or []
+            index = int(ctx.input['ref'])
+            if index >= len(rows) or rows[index] is None:
+                raise Stop('giro_item_not_found')
+            ctx.reserve()
+            value = query_flow.collect_detail(client, parent['tax_type'], rows[index]['identifiers'])
+            return StepResult(**observed(ctx, value, {'bill': bill_row(value.get('bill')),
+                'issues': value.get('issues'), 'payment_sent': False}), local=local(value))
 
 
 class Payment(FromParent):
@@ -362,4 +424,4 @@ class ReceiptDetail(FromParent):
             return StepResult(**observed(ctx, query_flow.response_report(response), result))
 
 
-ADAPTERS = (Login(), Bills(), PaymentOptions(), Payment(), Accounts(), Extend(), Receipts(), ReceiptDetail())
+ADAPTERS = (Login(), Bills(), BillSearch(), Summary(), BillDetail(), PaymentOptions(), Payment(), Accounts(), Extend(), Receipts(), ReceiptDetail())
