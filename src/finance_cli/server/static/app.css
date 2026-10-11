@@ -534,3 +534,8 @@ label.check input{margin-top:4px}
   mask:url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='black' stroke-width='3' stroke-linecap='round'%3E%3Ccircle cx='12' cy='12' r='9.5'/%3E%3Cpath d='M12 7v5l3.5 2'/%3E%3C/svg%3E") center/contain no-repeat}
 /* Up to four screens and the full menu share the bottom bar. */
 @container finance (max-width:700px){.bottom-nav .nav-item{flex:1 1 0;width:auto;min-width:0}}
+/* The integrated summary: a group's name and its own sum above the group's items. */
+.summary-group{display:flex;align-items:baseline;justify-content:space-between;gap:12px;padding:16px 25px 8px}
+.summary-group h3{font-size:13px}.summary-group .meta{font-size:12px;color:var(--muted);text-align:right}
+.summary-group+.settings-body:not(:last-child){padding-bottom:10px}
+@container finance (max-width:700px){.summary-group{padding-inline:18px}}

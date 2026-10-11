@@ -72,6 +72,7 @@ GIRO_REVIEWED_ON = '2026-10-10'
 GIRO_JOBS = {
     'giro.login': ('live_verified', '웹 PIN 로그인·암호화 세션 저장 성공 확인.'),
     'giro.bills.list': ('live_partial', '국세 목록·상세는 CLI에서 성공 확인. 웹 국세·지방세·관세 조회는 “고지내용 없음”(311) 응답 확인. 고지가 있는 웹 목록과 추가 공과금 항목은 미확인.'),
+    'giro.bills.regions': ('live_untested', '지역 목록 작업은 구현·합성 검증. 같은 시도·지자체 목록 요청은 지방세 조회 과정에서 수락 확인, 웹 지역 선택과 환경개선부담금·세외수입 목록은 미확인.'),
     'giro.bills.summary': ('live_untested', '통합조회는 구현·합성 검증. 실사용 미확인.'),
     'giro.bills.search': ('live_untested', '번호 기반 공과금 조회는 구현·합성 검증. 실사용 미확인.'),
     'giro.bills.detail': ('live_untested', '독립 고지 상세 조회는 구현·합성 검증. 실사용 미확인.'),

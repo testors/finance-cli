@@ -11,7 +11,7 @@ from giro.client import AuthenticatedClient, AuthenticatedSession, WireResponse
 from giro.crypto import decrypt_text
 from giro.errors import GiroError
 from giro.protocol import ENDPOINTS
-from giro.query_flow import collect_bills, collect_detail, collect_summary, list_bills
+from giro.query_flow import collect_bills, collect_detail, collect_regions, collect_summary, list_bills
 from giro.__main__ import parser, run
 
 KEY = bytes(range(16))
@@ -134,6 +134,78 @@ class Queries(unittest.TestCase):
             self.assertIsNone(categories['local'])
             self.assertNotIn('SYNTHETIC-IDENTITY', json.dumps(value))
             self.assertEqual(self.calls[-1][1]['juminNo'], [''])
+
+    def test_summary_reads_local_tax_and_the_three_sums_from_their_own_fields(self):
+        self.reply('integrated.initialize', {'responseCode': '000', 'busyDayYn': 'N'})
+        self.reply('integrated.summary', {'responseCode': '000',
+            'local': {'count': '1', 'amount': '1000', 'respCode': '000'},
+            'localtax': {'count': '3', 'amount': '6000', 'respCode': '000'},
+            'ntax': {'count': '-1'}, 'total': {'count': '3', 'amount': '-2', 'respCode': '000'}})
+        value = collect_summary(self.client)
+        categories = {r['tax_type']: r['summary'] for r in value['categories']}
+        self.assertEqual(categories['local'], {'count': '1', 'amount': '1000', 'respCode': '000'})
+        self.assertEqual(value['totals']['localtax']['count'], '3', 'the sum of local revenue is not the local tax item')
+        self.assertEqual(value['totals']['ntax']['count'], '-1')
+        self.assertEqual(value['totals']['total']['amount'], '-2')
+        self.assertEqual(set(value['totals']), {'localtax', 'ntax', 'total'})
+
+    def regions(self, kind):
+        self.reply(kind+'.provinces', dict(responseCode='000', provinceList=[
+            dict(areaCode='01', areaName='합성시'), None, dict(areaCode='02', areaName='합성도')]))
+        self.reply(kind+'.districts', lambda fields: dict(responseCode='000', districtList=[
+            dict(sortCode=fields['areaCode'][0]+'1', giroNo='1000001', sigunguName='합성구'),
+            dict(sortCode=fields['areaCode'][0]+'2', giroNo='1000002', sigunguName='합성군')]))
+
+    def test_regions_list_provinces_and_the_districts_of_the_first_or_the_named_province(self):
+        for kind in REGION_TYPES:
+            with self.subTest(kind=kind):
+                self.calls.clear(); self.regions(kind)
+                value = collect_regions(self.client, kind)
+                self.assertTrue(value['app_success'], value)
+                self.assertEqual(value['provinces'], [dict(area_code='01', name='합성시'), None, dict(area_code='02', name='합성도')])
+                self.assertEqual(value['area_code'], '01')
+                self.assertEqual(value['districts'][1], dict(district_code='012', district_giro_no='1000002', name='합성군'))
+                self.assertEqual([path for path, _ in self.calls], [ENDPOINTS[kind+'.provinces'].path, ENDPOINTS[kind+'.districts'].path])
+                self.assertEqual(self.calls[1][1]['areaCode'], ['01'])
+                if kind == 'nontax': self.assertTrue(all(fields.get('tongYn') == ['Y'] for _, fields in self.calls))
+                value = collect_regions(self.client, kind, '02')
+                self.assertEqual((value['area_code'], value['districts'][0]['district_code']), ('02', '021'))
+                self.assertEqual(self.calls[-1][1]['areaCode'], ['02'])
+                self.assertEqual(len(self.calls), 4, 'no bill is queried')
+
+    def test_regions_keep_what_was_received_and_never_send_an_unlisted_province(self):
+        self.regions('local')
+        value = collect_regions(self.client, 'local', '99')
+        self.assertEqual((value['next_action'], value['districts'], len(value['provinces'])), ('local_region_unavailable', None, 3))
+        self.assertEqual(len(self.calls), 1, 'an unlisted province is not asked for')
+        self.reply('local.districts', {'responseCode': '999'})
+        value = collect_regions(self.client, 'local')
+        self.assertEqual((value['service_decision'], value['districts']), ('partial_success', None))
+        self.assertEqual(len(value['provinces']), 3)
+        self.assertFalse(value['last_request']['app_success'])
+        for provinces in ({'responseCode': '000'}, {'responseCode': '000', 'provinceList': []}):
+            self.calls.clear(); self.reply('local.provinces', provinces)
+            value = collect_regions(self.client, 'local')
+            self.assertTrue(value['app_success'])
+            self.assertEqual((value['next_action'], value['districts']), ('local_region_unavailable', None))
+            self.assertEqual(len(self.calls), 1)
+        self.calls.clear(); self.reply('local.provinces', {'responseCode': '999'})
+        value = collect_regions(self.client, 'local')
+        self.assertEqual((value['app_success'], value['provinces'], len(self.calls)), (False, None, 1))
+        for kind, code in (('national', None), ('water', None), ('local', ''), ('local', 1)):
+            with self.assertRaises(GiroError): collect_regions(self.client, kind, code)
+        self.assertEqual(len(self.calls), 1)
+
+    def test_bill_query_goes_to_the_chosen_district_and_stops_when_it_is_not_listed(self):
+        self.prepare('env'); self.regions('env')
+        value = collect_bills(self.client, 'env', search=dict(area_code='02', district_code='022', district_giro_no='1000002'))
+        self.assertTrue(value['app_success'], value)
+        self.assertEqual(value['query_region'], {'province': '합성도', 'district': '합성군'})
+        self.assertEqual((self.calls[-1][1]['sortCode'], self.calls[-1][1]['giroNo']), (['022'], ['1000002']))
+        self.calls.clear()
+        value = collect_bills(self.client, 'env', search=dict(area_code='02', district_code='012'))
+        self.assertEqual((value['next_action'], value['bills']), ('local_region_unavailable', None))
+        self.assertEqual(len(self.calls), 2, 'the lists were read and no bill was queried')
 
     def test_plans_and_invalid_input_never_open_session(self):
         with patch('giro.query_flow.SessionStore', side_effect=AssertionError('no store')):

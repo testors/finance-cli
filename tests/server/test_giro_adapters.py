@@ -356,6 +356,66 @@ class GiroTests(ServerCase):
             if path.is_file(): self.assertNotIn(number.encode(), path.read_bytes())
         self.assertEqual([n for n, _ in self.calls], ['kepco.list', 'kepco.detail'])
 
+    def test_region_lists_then_a_bill_query_in_the_chosen_district(self):
+        self.responses['local.provinces'] = {'responseCode': '000', 'provinceList': [
+            {'areaCode': '01', 'areaName': '합성시'}, {'areaCode': '02', 'areaName': '합성도'}]}
+        self.responses['local.districts'] = {'responseCode': '000', 'districtList': [
+            {'sortCode': '021', 'giroNo': '1000001', 'sigunguName': '합성구'}, None,
+            {'sortCode': '022', 'giroNo': '1000002', 'sigunguName': '합성군'}]}
+        self.responses['local.list'] = PAGE
+        regions = self.run_job(self.submit('giro.bills.regions', input={'tax_type': 'local', 'area_code': '02'}))
+        self.assertEqual(regions['outcome'], 'success', regions)
+        self.assertEqual(regions['verification'], 'live_untested')
+        self.assertEqual(regions['result']['area_code'], '02')
+        self.assertEqual(regions['input'], {'tax_type': 'local', 'area_code': '02'})
+        self.assertEqual(regions['result']['provinces'][1], {'area_code': '02', 'name': '합성도'})
+        self.assertEqual(regions['result']['districts'], [{'district_code': '021', 'district_giro_no': '1000001', 'name': '합성구'},
+            None, {'district_code': '022', 'district_giro_no': '1000002', 'name': '합성군'}])
+        self.assertEqual([n for n, _ in self.calls], ['local.provinces', 'local.districts'], 'no bill is queried')
+        self.assertEqual(self.calls[1][1]['areaCode'], ['02'])
+        self.calls.clear()
+        chosen = {'tax_type': 'local', 'area_code': '02', 'district_code': '022', 'district_giro_no': '1000002'}
+        bills = self.run_job(self.submit('giro.bills.list', input=chosen))
+        self.assertEqual(bills['outcome'], 'success', bills)
+        self.assertEqual(bills['input'], chosen)
+        self.assertEqual(bills['result']['query_region'], {'province': '합성도', 'district': '합성군'})
+        self.assertEqual([n for n, _ in self.calls], ['local.provinces', 'local.districts', 'local.list'])
+        self.assertEqual((self.calls[2][1]['sortCode'], self.calls[2][1]['giroNo']), (['022'], ['1000002']))
+        self.calls.clear()
+        missing = self.run_job(self.submit('giro.bills.list', input={**chosen, 'district_code': '999'}))
+        self.assertEqual(missing['result']['next_action'], 'local_region_unavailable')
+        self.assertIsNone(missing['result']['bills'])
+        self.assertEqual([n for n, _ in self.calls], ['local.provinces', 'local.districts'], 'an unlisted district is not queried')
+        self.assert_private(self.get('/jobs').json())
+
+    def test_region_inputs_are_refused_where_no_region_applies_and_a_failed_list_is_kept(self):
+        for name, value in (('giro.bills.list', {'tax_type': 'national', 'area_code': '01'}),
+                            ('giro.bills.list', {'tax_type': 'local', 'area_code': 7}),
+                            ('giro.bills.regions', {'tax_type': 'national'}), ('giro.bills.regions', {}),
+                            ('giro.bills.regions', {'tax_type': 'local', 'district_code': '01'})):
+            answer = self.post('/jobs', {'name': name, 'login_id': self.connection['id'], 'input': value})
+            self.assertEqual(answer.status_code, 400, (name, value))
+        self.assertEqual(self.calls, [])
+        self.responses['env.provinces'] = {'responseCode': '000', 'provinceList': [{'areaCode': '01', 'areaName': '합성시'}]}
+        self.responses['env.districts'] = {'responseCode': '999'}
+        job = self.run_job(self.submit('giro.bills.regions', input={'tax_type': 'env'}))
+        self.assertEqual(job['outcome'], 'partial_success', job)
+        self.assertEqual(job['input'], {'tax_type': 'env'})
+        self.assertEqual((len(job['result']['provinces']), job['result']['districts']), (1, None))
+        self.assertEqual(len(self.calls), 2, 'the refused list is not asked for again')
+
+    def test_detail_states_its_own_dates_and_amounts_and_no_other_field(self):
+        self.responses['traffic.list'] = PAGE
+        self.responses['traffic.detail'] = {'responseCode': '000', 'paymentData': {**DETAIL['paymentData'],
+            'pay1date': '20261031', 'payInMny': '2000', 'name': 'SYNTHETIC-PAYER', 'napseNo': 'SYNTHETIC-PAYER-NUMBER'}}
+        job = self.run_job(self.submit('giro.bills.list', input={'tax_type': 'traffic'}))
+        detail = self.run_job(self.submit('giro.bills.detail', parent_job_id=job['id'], input={'ref': '0'}))
+        self.assertEqual(detail['outcome'], 'success', detail)
+        self.assertEqual(detail['result']['detail'], {'pay1date': '20261031', 'payInMny': '2000', 'pay2date': None,
+            'payOutMny': None, 'prePaidMny': None, 'remainPayMny': None})
+        self.assertNotIn('SYNTHETIC-PAYER-NUMBER', json.dumps(detail))
+        self.assert_private(detail)
+
     def test_added_own_bill_cannot_enter_existing_payment_flow(self):
         self.responses['traffic.list'] = PAGE
         job = self.run_job(self.submit('giro.bills.list', input={'tax_type': 'traffic'}))
@@ -367,12 +427,15 @@ class GiroTests(ServerCase):
     def test_summary_preserves_item_status_without_leaking_search_keys(self):
         self.responses['integrated.initialize'] = {'responseCode': '000', 'busyDayYn': 'N', 'searchNoList': [BILL]}
         self.responses['integrated.summary'] = {'responseCode': '000',
-            'nts': {'count': '1', 'amount': '2000', 'respCode': '000'}, 'traffic': {'respCode': '999'}}
+            'nts': {'count': '1', 'amount': '2000', 'respCode': '000'}, 'traffic': {'respCode': '999'},
+            'localtax': {'count': '2', 'amount': '3000', 'respCode': '000'}}
         job = self.run_job(self.submit('giro.bills.summary'))
         self.assertEqual(job['outcome'], 'success', job)
         self.assertEqual(job['verification'], 'live_untested')
         rows = {r['tax_type']: r['summary'] for r in job['result']['categories']}
         self.assertEqual(rows['traffic']['respCode'], '999')
-        self.assertIsNone(rows['local'])
+        self.assertIsNone(rows['local'], 'the sum of local revenue is not the local tax item')
+        self.assertEqual(job['result']['totals'], {'localtax': {'count': '2', 'amount': '3000', 'respCode': '000'},
+                                                   'ntax': None, 'total': None})
         self.assert_private(job)
         self.assertEqual([n for n, _ in self.calls], ['integrated.initialize', 'integrated.summary'])

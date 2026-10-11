@@ -1,6 +1,6 @@
 """Own-tax collection on the existing session; never implicit authentication."""
 from .bills import TAX_TYPES, normalize_pages, normalize_detail
-from .bill_catalog import INPUTS, OWN_TYPES, REGION_TYPES, SIMPLE_TYPES, SUMMARY_KEYS, LABELS
+from .bill_catalog import INPUTS, OWN_TYPES, REGION_TYPES, SIMPLE_TYPES, SUMMARY_KEYS, SUMMARY_TOTALS, LABELS
 from .protocol import endpoint
 from .client import AuthenticatedClient
 from .errors import GiroError
@@ -36,6 +36,49 @@ def validate_search(tax_type, search=None, *, require_inputs=True):
     if tax_type == 'water' and search.get('manage_no') and search.get('elec_water_no'):
         raise GiroError('전자수용가번호 또는 고객관리번호 하나를 입력하세요.')
     return search
+
+
+def collect_regions(client, tax_type, area_code=None):
+    """The provinces and one province's districts, as the query screen loads them before a bill query.
+
+    The first province is the screen's initial choice; `area_code` is another one from the list.
+    No bill is queried, and the bill query that follows names the district.
+    """
+    if tax_type not in REGION_TYPES:
+        raise GiroError('지역을 선택하는 고지 종류가 아닙니다.')
+    if area_code is not None and (not isinstance(area_code, str) or not area_code or len(area_code) > 100):
+        raise GiroError('시도 코드 형식을 확인하세요.')
+    client.require_active()
+    response = client.query(tax_type+'.provinces', {}, send=True)
+    result = dict(response_report(response), tax_type=tax_type, network_used=True, stage=tax_type+'.provinces',
+                  provinces=None, districts=None, area_code=None)
+    if not response.app_success:
+        return result
+    rows = response.query.get('provinceList')
+    if rows is not None:
+        result['provinces'] = [None if row is None else dict(area_code=row.get('areaCode'), name=row.get('areaName'))
+                               for row in rows]
+    # As in the bill query: the first province unless one was named, and none when it is not listed.
+    selected = rows[0] if rows else None
+    if area_code is not None:
+        selected = next((row for row in rows or [] if row is not None and row.get('areaCode') == area_code), None)
+    if selected is None:
+        result['next_action'] = 'local_region_unavailable'
+        return result
+    result['area_code'] = selected.get('areaCode')
+    response = client.query(tax_type+'.districts', dict(areaCode=selected.get('areaCode')), send=True)
+    report = response_report(response)
+    result.update(stage=tax_type+'.districts', last_request=report,
+                  processing_issues=result['processing_issues'] + report['processing_issues'])
+    if not response.app_success:
+        # The province list was received and is kept; only this province's districts were not.
+        result['service_decision'] = 'partial_success'
+        return result
+    rows = response.query.get('districtList')
+    if rows is not None:
+        result['districts'] = [None if row is None else dict(district_code=row.get('sortCode'),
+            district_giro_no=row.get('giroNo'), name=row.get('sigunguName')) for row in rows]
+    return result
 
 
 def collect_bills(client, tax_type, *, max_pages=100, search=None):
@@ -223,7 +266,7 @@ def collect_summary(client):
     if response.app_success:
         result['categories'] = [dict(tax_type=kind, label=LABELS[kind],
             summary=response.query.get(key)) for kind, key in SUMMARY_KEYS.items()]
-        result['totals'] = {key: response.query.get(key) for key in ('local', 'ntax', 'total')}
+        result['totals'] = {key: response.query.get(key) for key in SUMMARY_TOTALS}
     return result
 
 

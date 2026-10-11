@@ -54,7 +54,7 @@ FEATURES = (
     ('giro', 'giro-login', '간편비밀번호 로그인', 'settings', ('giro.login',)),
     ('giro', 'giro-extend', '로그인 연장', 'settings', ('giro.session.extend',)),
     ('giro', 'giro-live', '세금·공과금 통합·고지·상세 조회', 'work',
-     ('giro.bills.list', 'giro.bills.search', 'giro.bills.summary', 'giro.bills.detail')),
+     ('giro.bills.list', 'giro.bills.search', 'giro.bills.regions', 'giro.bills.summary', 'giro.bills.detail')),
     ('giro', 'giro-pay', '등록계좌 선택·단건 세금 납부', 'work', ('giro.payment.options', 'giro.payment.prepare')),
     ('giro', 'giro-accounts', '등록계좌·별칭 조회', 'work', ('giro.accounts.list',)),
     ('giro', 'giro-receipts', '납부내역·상세 조회', 'work', ('giro.receipts.list', 'giro.receipts.detail')),

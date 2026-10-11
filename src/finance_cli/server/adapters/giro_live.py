@@ -20,10 +20,10 @@ from giro.errors import GiroError
 from giro.payment import account_options
 from giro.payment_flow import PaymentWorkflow, WorkflowStopped
 from giro.session_store import SessionStore
-from giro.bill_catalog import BILL_TYPES, OWN_TYPES, PAYMENT_TYPES, LABELS
+from giro.bill_catalog import BILL_TYPES, OWN_TYPES, PAYMENT_TYPES, REGION_TYPES, LABELS
 
 from .base import (Adapter, InputError, Step, StepResult, Stop, bounded_int, choice, dict_input, extension_result,
-                   iso_date, pick, text)
+                   iso_date, pick, pick_rows, text)
 from .giro import bill_row
 from .hana import digest
 from .. import model
@@ -32,6 +32,11 @@ from ..worker import job_directory
 VERDICT = ('app_success', 'response_code', 'callback', 'callback_code', 'origin', 'service_decision',
            'login_service_decision', 'registration_service_decision')
 TTL = 300  # how long a queried bill may be prepared, and a prepared payment confirmed
+# A region of a local tax, environment levy or non-tax revenue query. The codes are the public ones
+# the region lists carry; a bill query only compares them with the lists it receives again.
+REGION_FIELDS = ('area_code', 'district_code', 'district_giro_no')
+# What a bill's detail states beside the list row: the two due dates and amounts, and what was paid.
+DETAIL_FIELDS = ('pay1date', 'payInMny', 'pay2date', 'payOutMny', 'prePaidMny', 'remainPayMny')
 
 
 def observed(ctx, value, result=None, keys=VERDICT):
@@ -157,11 +162,15 @@ class Bills(Session):
     title = '세금·공과금 본인 고지 조회'
 
     def validate(self, value, login=None):
-        value = dict_input(value, ('tax_type',))
-        return {'tax_type': choice(value.get('tax_type'), 'tax_type', OWN_TYPES) or 'national'}
+        value = dict_input(value, ('tax_type', *REGION_FIELDS))
+        kind = choice(value.get('tax_type'), 'tax_type', OWN_TYPES) or 'national'
+        region = {key: text(value.get(key), key) for key in REGION_FIELDS}
+        if any(region.values()) and kind not in REGION_TYPES:
+            raise InputError('giro_region_not_accepted')
+        return {'tax_type': kind, **{key: code for key, code in region.items() if code}}
 
     def search(self, ctx):
-        return None
+        return {key: ctx.input[key] for key in REGION_FIELDS if ctx.input.get(key)}
 
     def run(self, ctx, step):
         with self.client(ctx) as client:
@@ -197,6 +206,26 @@ class BillSearch(Bills):
             raise Stop('giro_invalid_query_numbers') from None
         finally:
             ctx.secrets = None
+
+
+class Regions(Session):
+    """The provinces and one province's districts to choose a bill query's region from. No bill is queried."""
+    name = 'giro.bills.regions'
+    title = '고지 조회 지역 목록'
+
+    def validate(self, value, login=None):
+        value = dict_input(value, ('tax_type', 'area_code'), ('tax_type',))
+        code = text(value.get('area_code'), 'area_code')
+        return {'tax_type': choice(value['tax_type'], 'tax_type', REGION_TYPES), **({'area_code': code} if code else {})}
+
+    def run(self, ctx, step):
+        with self.client(ctx) as client:
+            ctx.reserve()
+            value = query_flow.collect_regions(client, ctx.input['tax_type'], ctx.input.get('area_code'))
+            result = pick(value, ('tax_type', 'area_code', 'next_action'))
+            result['provinces'] = pick_rows(value.get('provinces'), ('area_code', 'name'))
+            result['districts'] = pick_rows(value.get('districts'), ('district_code', 'district_giro_no', 'name'))
+            return StepResult(**observed(ctx, value, result), local=local(value))
 
 
 class Summary(Session):
@@ -279,6 +308,7 @@ class BillDetail(FromParent):
             ctx.reserve()
             value = query_flow.collect_detail(client, parent['tax_type'], rows[index]['identifiers'])
             return StepResult(**observed(ctx, value, {'bill': bill_row(value.get('bill')),
+                'detail': pick(value.get('detail_raw'), DETAIL_FIELDS),
                 'issues': value.get('issues'), 'payment_sent': False}), local=local(value))
 
 
@@ -424,4 +454,5 @@ class ReceiptDetail(FromParent):
             return StepResult(**observed(ctx, query_flow.response_report(response), result))
 
 
-ADAPTERS = (Login(), Bills(), BillSearch(), Summary(), BillDetail(), PaymentOptions(), Payment(), Accounts(), Extend(), Receipts(), ReceiptDetail())
+ADAPTERS = (Login(), Bills(), BillSearch(), Regions(), Summary(), BillDetail(), PaymentOptions(), Payment(), Accounts(), Extend(),
+            Receipts(), ReceiptDetail())

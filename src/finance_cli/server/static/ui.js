@@ -166,6 +166,9 @@ const MESSAGES = {
   giro_parent_required: '지로 조회 결과에서 항목을 선택하세요.',
   giro_parent_not_successful: '확인된 조회 결과에서 항목을 선택하세요.',
   giro_item_not_found: '조회 결과에서 선택한 항목을 찾지 못했어요.',
+  giro_invalid_query_numbers: '선택한 요금 종류의 조회 번호를 확인하세요. 조회를 보내지 않았어요.',
+  giro_payment_type_not_supported: '이 요금 종류는 조회만 지원해요. 계좌 납부는 국세·지방세·관세만 지원해요.',
+  giro_region_not_accepted: '지역은 지방세·환경개선부담금·세외수입 조회에서만 선택할 수 있어요.',
 
   issuance_account_not_in_response: '입력한 계좌가 은행의 발급용 본인계좌 목록에 없어요. 새 발급에서는 목록에서 계좌를 선택하세요.',
   issuance_account_selection_invalid: '은행이 제공한 목록에서 인증할 본인 계좌를 선택하세요.',
@@ -392,6 +395,12 @@ const SCREEN_LABELS = {
   refunds: {txhfOgzNm: '세무서명', itrfNm: '세목명'},
   notices: {itrfNm: '세목명'},
   returns: {userId: '제출자ID'},
+  // A Giro bill's detail. The utility screens show the first date as the due date itself, and only
+  // the national tax family's screen names what was already paid and what is left.
+  'giro-bill': {pay1date: '납기내기한', payInMny: '납기내금액', pay2date: '납기후기한', payOutMny: '납기후금액'},
+  'giro-treasury-bill': {pay1date: '납기내기한', payInMny: '납기내금액', pay2date: '납기후기한', payOutMny: '납기후금액',
+    prePaidMny: '기납부한 금액', remainPayMny: '납부할 잔여금액'},
+  'giro-utility-bill': {pay1date: '납부기한'},
   inquiry: row => {
     const last = entry({오류: '오류', 완료: row.achvChnlNm === '즉시이체' ? '이체' : '처리', 취소: row.canDt ? null : '취소'}, row.trscStNm);
     return {trscAmt: '이체금액', ...(last ? {lstTrscDt: last + '일자', lstTrscTm: last + '시각'} : {})};

@@ -221,7 +221,8 @@ test('each screen asks for its own job name and login, so other jobs cannot hide
   main.innerHTML = await a.giroViews['giro-accounts'](a.ctx);
   main.innerHTML = await a.giroViews['giro-receipts'](a.ctx);
   // Filtered on the server before its limit; the tax type is matched among the recent bill queries.
-  assert.deepEqual(a.paths, ['/jobs?name=giro.bills.list&login_id=giro&limit=50', '/jobs?name=giro.bills.summary&login_id=giro&limit=1', '/jobs?name=giro.accounts.list&login_id=giro&limit=1',
+  assert.deepEqual(a.paths, ['/jobs?name=giro.bills.list&login_id=giro&limit=50', '/jobs?name=giro.bills.summary&login_id=giro&limit=1',
+    '/jobs?name=giro.bills.regions&login_id=giro&limit=50', '/jobs?name=giro.accounts.list&login_id=giro&limit=1',
     '/jobs?name=giro.receipts.list&login_id=giro&limit=1', '/jobs?name=giro.payment.prepare&login_id=giro&limit=20']);
 });
 
@@ -276,4 +277,108 @@ test('summary preserves null and category codes and selecting a type sends no qu
   await a.giroActions['giro-select-tax'](a.ctx, {dataset: {tax: 'traffic'}});
   assert.equal(a.state.params.tax_type, 'traffic');
   assert.equal(a.calls.length, 0);
+});
+
+// Values made inside the page's own realm, compared as plain data.
+const plain = value => JSON.parse(JSON.stringify(value));
+
+test('summary reads each item as the summary screen does and shows the sums above the two groups', async t => {
+  const a = await setup(t);
+  a.add({id: 'summary', name: 'giro.bills.summary', login_id: 'giro', outcome: 'success', result: {
+    totals: {localtax: {count: '3', amount: '6000', respCode: '000'}, ntax: {count: '-1'}, total: {count: '3', amount: '-2', respCode: '000'}},
+    categories: [{tax_type: 'local', label: '지방세', summary: {count: '1', amount: '1000', respCode: '000'}},
+      {tax_type: 'env', label: '환경개선부담금', summary: {count: '-1', amount: '0', respCode: '999'}},
+      {tax_type: 'national', label: '국세', summary: {count: '2', amount: '-2', respCode: '000'}}]}});
+  const main = a.document.querySelector('main');
+  main.innerHTML = await a.giroViews['giro-live'](a.ctx);
+  const text = [...main.querySelectorAll('.setting-row .meta')].map(node => node.textContent);
+  assert.deepEqual(text, ['1건 · 1,000원', '조회 불가', '2건'], 'an item that could not be queried and an amount that is not given are not numbers');
+  const heads = [...main.querySelectorAll('.summary-group')].map(node => node.textContent);
+  assert.deepEqual(heads, ['전체3건', '지방세입3건 · 6,000원', '국고금조회 불가']);
+  assert.equal(a.calls.length, 0);
+});
+
+test('a regional query offers the region lists on request and sends the chosen district', async t => {
+  const a = await setup(t);
+  const main = a.document.querySelector('main');
+  a.state.params.tax_type = 'local';
+  main.innerHTML = await a.giroViews['giro-live'](a.ctx);
+  assert.equal(main.querySelector('#giro-area'), null);
+  assert.match(main.textContent, /지역을 고르지 않으면 지로가 처음 안내하는 지역으로 조회해요/);
+  assert.equal(a.calls.length, 0, 'opening the screen asks Giro for nothing');
+  await a.giroActions['giro-query'](a.ctx, main.querySelector('[data-submit="giro-query"]'));
+  assert.deepEqual(plain(a.calls[0].fields.input), {tax_type: 'local'}, 'without a choice the query names no region');
+  await a.giroActions['giro-regions-query'](a.ctx, main.querySelector('[data-action="giro-regions-query"]'));
+  assert.deepEqual([a.calls[1].name, plain(a.calls[1].fields.input)], ['giro.bills.regions', {tax_type: 'local'}]);
+
+  a.add({id: 'regions', name: 'giro.bills.regions', login_id: 'giro', outcome: 'success', input: {tax_type: 'local'},
+    result: {tax_type: 'local', area_code: '02', provinces: [{area_code: '01', name: '합성시'}, null, {area_code: '02', name: '<합성도>'}],
+      districts: [{district_code: '021', district_giro_no: '1000001', name: '합성구'}, null, {district_code: '022', district_giro_no: '1000002', name: '합성군'}]}});
+  a.add({id: 'bills', name: 'giro.bills.list', login_id: 'giro', outcome: 'success',
+    input: {tax_type: 'local', area_code: '02', district_code: '022', district_giro_no: '1000002'}, result: {complete: true, bills: []}});
+  main.innerHTML = await a.giroViews['giro-live'](a.ctx);
+  assert.deepEqual([...main.querySelectorAll('#giro-area option')].map(o => [o.value, o.textContent, o.selected]),
+    [['01', '합성시', false], ['02', '<합성도>', true]]);
+  assert.equal(main.querySelector('#giro-district').selectedOptions[0].textContent, '합성군', 'the district of the last query is chosen again');
+  assert.equal(main.querySelector('[data-action="giro-regions-query"]'), null);
+  await a.giroActions['giro-province-change'](a.ctx, Object.assign(main.querySelector('#giro-area'), {value: '01'}));
+  assert.deepEqual([a.calls[2].name, plain(a.calls[2].fields.input)], ['giro.bills.regions', {tax_type: 'local', area_code: '01'}],
+    'another province asks for its districts, not for a bill');
+  main.querySelector('#giro-area').value = '02';
+  main.querySelector('#giro-district').value = '0';
+  await a.giroActions['giro-query'](a.ctx, main.querySelector('[data-submit="giro-query"]'));
+  assert.deepEqual([a.calls[3].name, plain(a.calls[3].fields.input)],
+    ['giro.bills.list', {tax_type: 'local', area_code: '02', district_code: '021', district_giro_no: '1000001'}]);
+  assert.equal(a.calls[3].opts.secrets, undefined);
+
+  a.jobs.find(j => j.id === 'regions').result.districts = null;
+  main.innerHTML = await a.giroViews['giro-live'](a.ctx);
+  assert.equal(main.querySelector('#giro-district'), null);
+  assert.match(main.textContent, /이 지역의 지자체 목록을 확인하지 못했어요/);
+  a.state.params.tax_type = 'national';
+  main.innerHTML = await a.giroViews['giro-live'](a.ctx);
+  assert.equal(main.querySelector('[data-action="giro-regions-query"]'), null, 'a tax without regions offers none');
+});
+
+test('water is found by one of its two numbers and the other is not sent', async t => {
+  const a = await setup(t);
+  const main = a.document.querySelector('main');
+  a.state.params.tax_type = 'water';
+  main.innerHTML = await a.giroViews['giro-live'](a.ctx);
+  const form = main.querySelector('[data-submit="giro-query"]');
+  assert.deepEqual([...form.querySelectorAll('input')].map(i => [i.name, i.required, form.querySelector(`label[for="${i.id}"]`).textContent]),
+    [['elec_water_no', false, '전자수용가번호'], ['manage_no', false, '고객번호(서울시)']]);
+  await a.giroActions['giro-query'](a.ctx, form);
+  form.querySelector('[name="elec_water_no"]').value = 'SYNTHETIC-A';
+  form.querySelector('[name="manage_no"]').value = 'SYNTHETIC-B';
+  await a.giroActions['giro-query'](a.ctx, form);
+  assert.equal(a.calls.length, 0, 'neither number, or both, sends nothing');
+  form.querySelector('[name="elec_water_no"]').value = '';
+  await a.giroActions['giro-query'](a.ctx, form);
+  assert.deepEqual(JSON.parse(a.calls[0].opts.secrets.query_numbers), {manage_no: 'SYNTHETIC-B'});
+  assert.equal(JSON.stringify(a.calls[0].fields).includes('SYNTHETIC'), false);
+});
+
+test('a bill detail adds what only the detail states, under the names of that bill\'s screen', async t => {
+  const a = await setup(t);
+  const dialog = a.document.querySelector('#dialog-content');
+  const open = async (bill, detail) => {
+    a.responses.set('/jobs/parent', {id: 'parent', login_id: 'giro'});
+    a.responses.set('giro.bills.detail', {id: 'detail', outcome: 'success', result: {bill, detail}});
+    await a.giroActions['giro-bill-detail'](a.ctx, {dataset: {job: 'parent', ref: '0'}});
+    return Object.fromEntries([...dialog.querySelectorAll('.summary-line')].map(line => [line.querySelector('span').textContent, line.querySelector('strong').textContent]));
+  };
+  let lines = await open({tax_type: 'national', tax_name: '합성세', amount_raw: '2000', electronic_number: '0000'},
+    {pay1date: '20261031', payInMny: '2000', pay2date: null, payOutMny: '', prePaidMny: '500', remainPayMny: '1500'});
+  assert.deepEqual([lines['납기내기한'], lines['납기내금액'], lines['기납부한 금액'], lines['납부할 잔여금액']], ['2026-10-31', '2,000원', '500원', '1,500원']);
+  assert.equal(lines['납부기한'], '상세 응답에 없음');
+  assert.equal('납기후기한' in lines || '납기후금액' in lines, false, 'a field that did not arrive is not listed');
+  lines = await open({tax_type: 'giro', amount_raw: '3000'}, {pay1date: '20261101'});
+  assert.equal(lines['납부기한'], '2026-11-01', 'the general Giro screen calls its one date the due date');
+  lines = await open({tax_type: 'local', amount_raw: '3000', due_date: '2026-10-31'}, {prePaidMny: '100'});
+  assert.equal(lines['납부기한'], '2026-10-31');
+  assert.equal(lines['prePaidMny'], '100원', 'a field this screen does not name keeps the name it arrived with');
+  assert.match(dialog.querySelector('details.verdict summary').textContent, /그 밖의 항목 1개/, 'and is folded under the named ones');
+  lines = await open({tax_type: 'kepco', amount_raw: '3000'}, {pay1date: null});
+  assert.equal(lines['납부기한'], '상세 응답에 없음');
 });

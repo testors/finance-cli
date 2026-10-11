@@ -17,8 +17,11 @@ INPUTS.update(water=('elec_water_no',), social=('number',), annuity=('number',),
 INPUT_LABELS = dict(number='전자납부번호·고객번호', elec_water_no='전자수용가번호',
     manage_no='상하수도 고객관리번호', insure_no='보험관리번호', giro_no='지로번호',
     area_code='시도 코드', district_code='지자체 구분 코드', district_giro_no='지자체 지로번호')
-SUMMARY_KEYS = dict(local='localtax', env='env', nontax='nontax', national='nts', customs='tariff',
+SUMMARY_KEYS = dict(local='local', env='env', nontax='nontax', national='nts', customs='tariff',
     traffic='traffic', penalty='penalty', patent='patent', marine='maritime', fund='fund')
+# Sums the summary screen shows above its items: local revenue (local tax, non-tax
+# revenue and the environment levy), treasury payments, and everything.
+SUMMARY_TOTALS = ('localtax', 'ntax', 'total')
 
 # name -> (service-relative URL, allowed request fields). Authentication and
 # payment routes never enter this read-only catalog.
