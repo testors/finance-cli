@@ -37,6 +37,9 @@ async function setup(t) {
   return {...module.namespace, ctx, row, state, calls, asked, requests, paths, responses, jobs, add, document: dom.window.document};
 }
 
+// Values made inside the page's own realm, compared as plain data.
+const plain = value => JSON.parse(JSON.stringify(value));
+
 test('PIN login uses registered connection with no certificate/account setup or automatic query', async t => {
   const a = await setup(t);
   await a.giroLogin(a.ctx);
@@ -265,22 +268,50 @@ test('utility input travels as a secret, with detail only and no payment control
   assert.equal(form.querySelector('[name="number"]').value, '');
 });
 
-test('summary preserves null and category codes and selecting a type sends no query', async t => {
+test('summary preserves null and category codes, and an item is queried only when its button is pressed', async t => {
   const a = await setup(t);
   a.add({id: 'summary', name: 'giro.bills.summary', login_id: 'giro', outcome: 'success', result: {categories: [
     {tax_type: 'traffic', label: '<합성범칙금>', summary: {count: null, respCode: '999'}},
     {tax_type: 'local', label: '지방세', summary: null}]}});
-  a.document.querySelector('main').innerHTML = await a.giroViews['giro-live'](a.ctx);
-  assert.match(a.document.querySelector('main').textContent, /항목 응답 999/);
-  assert.match(a.document.querySelector('main').textContent, /건수 미확인/);
+  const main = a.document.querySelector('main');
+  main.innerHTML = await a.giroViews['giro-live'](a.ctx);
+  assert.match(main.textContent, /항목 응답 999/);
+  assert.match(main.textContent, /건수 미확인/);
   assert.equal(a.document.querySelector('합성범칙금'), null);
-  await a.giroActions['giro-select-tax'](a.ctx, {dataset: {tax: 'traffic'}});
+  assert.equal(main.querySelectorAll('[data-action="giro-summary-item"]').length, 2, 'an item whose count is not known can still be queried');
+  assert.equal(a.calls.length, 0, 'showing the summary queries nothing');
+  await a.giroActions['giro-summary-item'](a.ctx, main.querySelector('[data-tax="traffic"]'));
   assert.equal(a.state.params.tax_type, 'traffic');
-  assert.equal(a.calls.length, 0);
+  assert.deepEqual([a.calls[0].name, plain(a.calls[0].fields)], ['giro.bills.list', {login_id: 'giro', input: {tax_type: 'traffic'}}]);
 });
 
-// Values made inside the page's own realm, compared as plain data.
-const plain = value => JSON.parse(JSON.stringify(value));
+test('a summary item opens its own bills with no region, and the items without a bill share one line', async t => {
+  const a = await setup(t);
+  const item = (count, amount = '-2', respCode = '000') => ({count, amount, respCode});
+  a.add({id: 'summary', name: 'giro.bills.summary', login_id: 'giro', outcome: 'success', result: {categories: [
+    {tax_type: 'local', label: '지방세', summary: item('2', '3000')}, {tax_type: 'env', label: '환경개선부담금', summary: item('0', '0')},
+    {tax_type: 'nontax', label: '세외수입', summary: item('0', '0', '999')}, {tax_type: 'national', label: '국세', summary: item('0')},
+    {tax_type: 'customs', label: '<합성관세>', summary: item('0')}, {tax_type: 'traffic', label: '경찰청범칙금', summary: item('-1')}]}});
+  const main = a.document.querySelector('main');
+  main.innerHTML = await a.giroViews['giro-live'](a.ctx);
+  assert.deepEqual([...main.querySelectorAll('[data-action="giro-summary-item"]')].map(b => b.dataset.tax), ['local', 'nontax', 'traffic'],
+    'an item answered with no bill has nothing to open; one whose answer is not a plain zero keeps its row');
+  assert.deepEqual([...main.querySelectorAll('.summary-none')].map(p => p.textContent), ['고지 없음 · 환경개선부담금', '고지 없음 · 국세, <합성관세>']);
+  assert.equal(main.querySelector('합성관세'), null);
+  await a.giroActions['giro-summary-item'](a.ctx, main.querySelector('[data-tax="local"]'));
+  assert.deepEqual([a.calls[0].name, plain(a.calls[0].fields.input)], ['giro.bills.list', {tax_type: 'local', no_region: true}],
+    'the summary does not say which district billed, so none is named');
+  assert.equal(a.state.params.tax_type, 'local');
+
+  a.add({id: 'bills', name: 'giro.bills.list', login_id: 'giro', outcome: 'success', input: {tax_type: 'local', no_region: true},
+    result: {complete: true, region_unspecified: true, bills: [{ref: '0', tax_type: 'local', amount_raw: '3000', due_date: '2026-10-31'}]}});
+  main.innerHTML = await a.giroViews['giro-live'](a.ctx);
+  assert.match(main.querySelector('#giro-results').textContent, /지역을 정하지 않은 조회예요/);
+  a.row.readiness = 'login_required';
+  main.innerHTML = await a.giroViews['giro-live'](a.ctx);
+  assert.equal(main.querySelector('[data-action="giro-summary-item"]'), null, 'a logged-out screen offers no query');
+  assert.match(main.textContent, /지방세2건 · 3,000원/);
+});
 
 test('summary reads each item as the summary screen does and shows the sums above the two groups', async t => {
   const a = await setup(t);
@@ -304,7 +335,8 @@ test('a regional query offers the region lists on request and sends the chosen d
   a.state.params.tax_type = 'local';
   main.innerHTML = await a.giroViews['giro-live'](a.ctx);
   assert.equal(main.querySelector('#giro-area'), null);
-  assert.match(main.textContent, /지역을 고르지 않으면 지로가 처음 안내하는 지역으로 조회해요/);
+  assert.match(main.textContent, /지역을 고르지 않으면 지로 지역 목록의 첫 시도·첫 지자체로 조회해요/);
+  assert.match(main.textContent, /모르면 위 통합조회에서 그 항목을 조회하세요/);
   assert.equal(a.calls.length, 0, 'opening the screen asks Giro for nothing');
   await a.giroActions['giro-query'](a.ctx, main.querySelector('[data-submit="giro-query"]'));
   assert.deepEqual(plain(a.calls[0].fields.input), {tax_type: 'local'}, 'without a choice the query names no region');
@@ -348,6 +380,8 @@ test('water is found by one of its two numbers and the other is not sent', async
   const form = main.querySelector('[data-submit="giro-query"]');
   assert.deepEqual([...form.querySelectorAll('input')].map(i => [i.name, i.required, form.querySelector(`label[for="${i.id}"]`).textContent]),
     [['elec_water_no', false, '전자수용가번호'], ['manage_no', false, '고객번호(서울시)']]);
+  assert.deepEqual([...form.querySelectorAll('input')].map(i => [i.placeholder, i.getAttribute('inputmode')]), [['숫자 15자리', 'numeric'], ['숫자 9자리', 'numeric']]);
+  assert.deepEqual([...form.querySelectorAll('optgroup')].map(g => [g.label, g.children.length]), [['본인 정보로 조회', 10], ['번호로 조회', 9]]);
   await a.giroActions['giro-query'](a.ctx, form);
   form.querySelector('[name="elec_water_no"]').value = 'SYNTHETIC-A';
   form.querySelector('[name="manage_no"]').value = 'SYNTHETIC-B';

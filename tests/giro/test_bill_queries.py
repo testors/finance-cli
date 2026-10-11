@@ -207,6 +207,29 @@ class Queries(unittest.TestCase):
         self.assertEqual((value['next_action'], value['bills']), ('local_region_unavailable', None))
         self.assertEqual(len(self.calls), 2, 'the lists were read and no bill was queried')
 
+    def test_a_query_with_no_region_reads_no_region_list_and_names_no_district(self):
+        for kind in REGION_TYPES:
+            with self.subTest(kind=kind):
+                self.prepare(kind); self.calls.clear()
+                value = collect_bills(self.client, kind, no_region=True)
+                self.assertTrue(value['app_success'], value)
+                self.assertTrue(value['region_unspecified'])
+                self.assertNotIn('query_region', value)
+                self.assertEqual([path for path, _ in self.calls], [ENDPOINTS[kind+'.list'].path], 'only the bill list is asked for')
+                fields = self.calls[0][1]
+                self.assertEqual((fields['sortCode'], fields.get('giroNo')), (['00'], None))
+                self.assertEqual(fields.get('tongYn'), ['Y'] if kind == 'nontax' else None)
+        self.calls.clear()
+        plan = list_bills('local', no_region=True, max_pages=3)
+        self.assertEqual((plan['initialization'], plan['maximum_requests']), ([], 3))
+        self.assertEqual(list_bills('local', max_pages=3)['maximum_requests'], 5)
+        result, code = run(parser().parse_args(['bills', 'list', '--type', 'env', '--no-region']))
+        self.assertEqual((code, result['plan_only'], result['initialization']), (0, True, []))
+        for kind, search in (('national', None), ('water', None), ('local', {'area_code': '01'}), ('env', {'district_code': '01'})):
+            with self.assertRaises(GiroError): collect_bills(self.client, kind, search=search, no_region=True)
+            with self.assertRaises(GiroError): list_bills(kind, search=search, no_region=True)
+        self.assertEqual(self.calls, [])
+
     def test_plans_and_invalid_input_never_open_session(self):
         with patch('giro.query_flow.SessionStore', side_effect=AssertionError('no store')):
             for kind in BILL_TYPES:

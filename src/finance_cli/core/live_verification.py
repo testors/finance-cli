@@ -71,7 +71,7 @@ def hana_report():
 GIRO_REVIEWED_ON = '2026-10-10'
 GIRO_JOBS = {
     'giro.login': ('live_verified', '웹 PIN 로그인·암호화 세션 저장 성공 확인.'),
-    'giro.bills.list': ('live_partial', '국세 목록·상세는 CLI에서 성공 확인. 웹 국세·지방세·관세 조회는 “고지내용 없음”(311) 응답 확인. 고지가 있는 웹 목록과 추가 공과금 항목은 미확인.'),
+    'giro.bills.list': ('live_partial', '국세 목록·상세는 CLI에서 성공 확인. 웹 국세·지방세·관세 조회는 “고지내용 없음”(311) 응답 확인. 고지가 있는 웹 목록과 추가 공과금 항목, 지역을 정하지 않는 지방세·환경개선부담금·세외수입 조회는 미확인.'),
     'giro.bills.regions': ('live_untested', '지역 목록 작업은 구현·합성 검증. 같은 시도·지자체 목록 요청은 지방세 조회 과정에서 수락 확인, 웹 지역 선택과 환경개선부담금·세외수입 목록은 미확인.'),
     'giro.bills.summary': ('live_untested', '통합조회는 구현·합성 검증. 실사용 미확인.'),
     'giro.bills.search': ('live_untested', '번호 기반 공과금 조회는 구현·합성 검증. 실사용 미확인.'),
@@ -98,7 +98,7 @@ def giro_report():
                          'own-national-tax-query', 'payment-review', 'single-national-account-payment',
                          'registered-account-list', 'receipt-list', 'receipt-detail'],
             'unverified': ['own-local-tax-query', 'own-customs-query', 'utility-bill-queries',
-                           'bill-query-regions', 'integrated-bill-summary', 'bill-detail',
+                           'bill-query-regions', 'bill-query-no-region', 'integrated-bill-summary', 'bill-detail',
                            'single-local-account-payment', 'single-customs-account-payment',
                            'web-query-with-bills', 'web-payment-execution'],
             'jobs': {name: giro_job(name) for name in GIRO_JOBS},

@@ -388,9 +388,27 @@ class GiroTests(ServerCase):
         self.assertEqual([n for n, _ in self.calls], ['local.provinces', 'local.districts'], 'an unlisted district is not queried')
         self.assert_private(self.get('/jobs').json())
 
+    def test_a_summary_item_is_queried_with_no_region_and_no_region_list(self):
+        self.responses['nontax.list'] = PAGE
+        asked = {'tax_type': 'nontax', 'no_region': True}
+        job = self.run_job(self.submit('giro.bills.list', input=asked))
+        self.assertEqual(job['outcome'], 'success', job)
+        self.assertEqual(job['input'], asked)
+        self.assertTrue(job['result']['region_unspecified'])
+        self.assertNotIn('query_region', job['result'])
+        self.assertEqual([n for n, _ in self.calls], ['nontax.list'], 'no region list is read')
+        self.assertEqual((self.calls[0][1]['sortCode'], self.calls[0][1].get('giroNo')), (['00'], None))
+        self.assertEqual(self.run_job(self.submit('giro.bills.list', input={'tax_type': 'local', 'no_region': False}))['input'],
+                         {'tax_type': 'local'}, 'an unset choice is not stored')
+        self.assert_private(self.get('/jobs').json())
+
     def test_region_inputs_are_refused_where_no_region_applies_and_a_failed_list_is_kept(self):
         for name, value in (('giro.bills.list', {'tax_type': 'national', 'area_code': '01'}),
                             ('giro.bills.list', {'tax_type': 'local', 'area_code': 7}),
+                            ('giro.bills.list', {'tax_type': 'national', 'no_region': True}),
+                            ('giro.bills.list', {'tax_type': 'local', 'no_region': 'Y'}),
+                            ('giro.bills.list', {'tax_type': 'local', 'no_region': True, 'area_code': '01'}),
+                            ('giro.bills.search', {'tax_type': 'water', 'no_region': True}),
                             ('giro.bills.regions', {'tax_type': 'national'}), ('giro.bills.regions', {}),
                             ('giro.bills.regions', {'tax_type': 'local', 'district_code': '01'})):
             answer = self.post('/jobs', {'name': name, 'login_id': self.connection['id'], 'input': value})

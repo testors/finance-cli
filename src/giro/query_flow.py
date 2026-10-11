@@ -99,10 +99,17 @@ def list_regions(tax_type, area_code=None, *, send=False, store=None):
     return result
 
 
-def collect_bills(client, tax_type, *, max_pages=100, search=None):
+def validate_no_region(tax_type, search, no_region):
+    if no_region and (tax_type not in REGION_TYPES or any(
+            (search or {}).get(key) for key in ('area_code', 'district_code', 'district_giro_no'))):
+        raise GiroError('지역을 정하지 않는 조회는 지역별 고지 종류에서 지역 코드 없이 사용하세요.')
+
+
+def collect_bills(client, tax_type, *, max_pages=100, search=None, no_region=False):
     if tax_type not in TAX_TYPES or type(max_pages) is not int or max_pages < 1:
         raise GiroError('세목과 조회할 페이지 범위를 확인하세요.')
     search = validate_search(tax_type, search)
+    validate_no_region(tax_type, search, no_region)
     client.require_active()
     # The personal SSN selector is enabled only for registered own UID data.
     # Do not send an unregistered identifier or manufacture storage consent.
@@ -111,7 +118,11 @@ def collect_bills(client, tax_type, *, max_pages=100, search=None):
             next_action='identity_registration_required', tax_type=tax_type,
             bills=None, complete=False, processing_issues=[])
     region_fields, region = {}, None
-    if tax_type in REGION_TYPES:
+    if no_region:
+        # The integrated summary opens its item's bill list like this: no region list is
+        # loaded, and the request names no district.
+        region_fields = {'sortCode': '00'}
+    elif tax_type in REGION_TYPES:
         # The screen selects the first returned province/district initially.
         # Fetch each once and carry the selected fields across every bill page.
         fields = {}
@@ -203,6 +214,8 @@ def collect_bills(client, tax_type, *, max_pages=100, search=None):
                       processing_issues=list(response.issues), last_request=report)
         if region is not None:
             result['query_region'] = region
+        if no_region:
+            result['region_unspecified'] = True
         # Collection diagnostics never alter the successful service response.
         if tax_type in SIMPLE_TYPES: break
         number = result['pages'][-1]['next_page']
@@ -216,21 +229,23 @@ def collect_bills(client, tax_type, *, max_pages=100, search=None):
     return result
 
 
-def list_bills(tax_type, *, send=False, store=None, max_pages=100, search=None):
-    validate_search(tax_type, search, require_inputs=send)
+def list_bills(tax_type, *, send=False, store=None, max_pages=100, search=None, no_region=False):
+    validate_no_region(tax_type, validate_search(tax_type, search, require_inputs=send), no_region)
     if type(max_pages) is not int or max_pages < 1:
         raise GiroError('조회할 페이지 범위를 확인하세요.')
     if not send:
+        initialization = ([] if no_region else [tax_type+'.provinces', tax_type+'.districts']) if tax_type in REGION_TYPES \
+            else ['giro.lookup'] if tax_type == 'giro' else []
         return dict(plan_only=True, network_used=False, tax_type=tax_type,
                     maximum_pages=1 if tax_type in SIMPLE_TYPES else max_pages,
-                    maximum_requests=(1 if tax_type in SIMPLE_TYPES else max_pages)+(2 if tax_type in REGION_TYPES else 1 if tax_type == 'giro' else 0),
+                    maximum_requests=(1 if tax_type in SIMPLE_TYPES else max_pages)+len(initialization),
                     required_inputs=INPUTS[tax_type],
-                    initialization=[tax_type+'.provinces', tax_type+'.districts'] if tax_type in REGION_TYPES else ['giro.lookup'] if tax_type == 'giro' else [],
+                    initialization=initialization,
                     automatic_login=False, payment=False)
     store = store if store is not None else SessionStore()
     with store.use() as (session, issues):
         client = AuthenticatedClient(session)
-        result = collect_bills(client, tax_type, max_pages=max_pages, search=search)
+        result = collect_bills(client, tax_type, max_pages=max_pages, search=search, no_region=no_region)
         result['session_processing_issues'] = issues
         result['events'] = list(client.events)
     return result

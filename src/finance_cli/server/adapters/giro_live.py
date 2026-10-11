@@ -162,12 +162,16 @@ class Bills(Session):
     title = '세금·공과금 본인 고지 조회'
 
     def validate(self, value, login=None):
-        value = dict_input(value, ('tax_type', *REGION_FIELDS))
+        value = dict_input(value, ('tax_type', *REGION_FIELDS, 'no_region'))
         kind = choice(value.get('tax_type'), 'tax_type', OWN_TYPES) or 'national'
         region = {key: text(value.get(key), key) for key in REGION_FIELDS}
-        if any(region.values()) and kind not in REGION_TYPES:
+        # The summary's item query names no region, so it cannot also carry a chosen one.
+        whole = value.get('no_region', False)
+        if not isinstance(whole, bool):
+            raise InputError('invalid_no_region')
+        if (whole or any(region.values())) and kind not in REGION_TYPES or whole and any(region.values()):
             raise InputError('giro_region_not_accepted')
-        return {'tax_type': kind, **{key: code for key, code in region.items() if code}}
+        return {'tax_type': kind, **{key: code for key, code in region.items() if code}, **({'no_region': True} if whole else {})}
 
     def search(self, ctx):
         return {key: ctx.input[key] for key in REGION_FIELDS if ctx.input.get(key)}
@@ -176,10 +180,11 @@ class Bills(Session):
         with self.client(ctx) as client:
             search = self.search(ctx)
             ctx.reserve()
-            value = query_flow.collect_bills(client, ctx.input['tax_type'], search=search)
+            value = query_flow.collect_bills(client, ctx.input['tax_type'], search=search,
+                                             no_region=ctx.input.get('no_region') is True)
             rows = value.get('bills')
             result = pick(value, ('complete', 'total_count', 'loaded_count', 'tax_type', 'query_region',
-                                  'no_bills_reported', 'issues', 'next_action'))
+                                  'region_unspecified', 'no_bills_reported', 'issues', 'next_action'))
             result['bills'] = None if rows is None else [None if r is None else
                 dict(bill_row(r), ref=str(i)) for i, r in enumerate(rows)]
             # "고지내용 없음" arrives on the failure path and stays a failure here. The flag goes with

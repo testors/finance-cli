@@ -538,4 +538,5 @@ label.check input{margin-top:4px}
 .summary-group{display:flex;align-items:baseline;justify-content:space-between;gap:12px;padding:16px 25px 8px}
 .summary-group h3{font-size:13px}.summary-group .meta{font-size:12px;color:var(--muted);text-align:right}
 .summary-group+.settings-body:not(:last-child){padding-bottom:10px}
-@container finance (max-width:700px){.summary-group{padding-inline:18px}}
+.summary-none{padding:2px 25px 14px;font-size:12px;color:var(--muted);line-height:1.7}.summary-none:last-child{padding-bottom:22px}
+@container finance (max-width:700px){.summary-group,.summary-none{padding-inline:18px}}

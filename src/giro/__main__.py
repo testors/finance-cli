@@ -145,6 +145,8 @@ def parser():
             for key, label in INPUT_LABELS.items():
                 item.add_argument('--'+key.replace('_', '-'), help=label + (
                     '; bills regions에서 확인' if key in ('area_code', 'district_code', 'district_giro_no') else ''))
+            item.add_argument('--no-region', action='store_true',
+                              help='지방세·환경개선부담금·세외수입을 지역을 정하지 않고 조회; 통합조회에서 항목을 열 때의 조회')
         if action == "due":
             item.add_argument("--within-days", type=int, default=7)
             item.add_argument("--today", type=date.fromisoformat, help="기준일 YYYY-MM-DD; 기본 Asia/Seoul")
@@ -353,7 +355,7 @@ def run(args):
         if args.search_input:
             if search: raise GiroError('--search-input과 조회 번호 옵션 중 하나를 사용하세요.')
             search = _load(args.search_input)
-        result = list_bills(args.type, send=args.live, search=search, max_pages=args.max_pages)
+        result = list_bills(args.type, send=args.live, search=search, max_pages=args.max_pages, no_region=args.no_region)
         if result.get('plan_only'): return result, 0
         if not result.get('app_success'): return result, 2 if result.get('app_success') is False else 4
         if result.get('next_action'): return result, 0

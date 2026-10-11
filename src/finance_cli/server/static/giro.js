@@ -14,10 +14,15 @@ const PAYABLE = ['national', 'local', 'customs'];
 const REGIONAL = ['local', 'env', 'nontax'];
 // Water is found by one of its two numbers, never both.
 const EITHER = ['water'];
-const NUMBER_INPUTS = {water: [['elec_water_no', '전자수용가번호'], ['manage_no', '고객번호(서울시)']], social: [['number', '전자납부번호']],
-  annuity: [['number', '전자납부번호']], employ: [['insure_no', '보험관리번호']], industry: [['insure_no', '보험관리번호']],
-  kepco: [['number', '고객번호']], ktcomm: [['number', '전자납부번호·전화번호']], tv: [['number', '관리번호 (10자리)']],
-  giro: [['giro_no', '지로번호'], ['number', '전자납부번호']]};
+// A number's name and, where Giro's own input sheet states one, the digits it asks for.
+const NUMBER_INPUTS = {water: [['elec_water_no', '전자수용가번호', '숫자 15자리'], ['manage_no', '고객번호(서울시)', '숫자 9자리']],
+  social: [['number', '전자납부번호', '지역/직장보험료 13~14자리 · 기타징수금 12자리']],
+  annuity: [['number', '전자납부번호', '숫자 14자리']], employ: [['insure_no', '보험관리번호', '숫자 11자리']], industry: [['insure_no', '보험관리번호', '숫자 11자리']],
+  kepco: [['number', '고객번호', '숫자 10자리']], ktcomm: [['number', '전자납부번호·전화번호', '숫자 9~12자리']], tv: [['number', '관리번호 (10자리)']],
+  giro: [['giro_no', '지로번호', '숫자 7자리'], ['number', '전자납부번호']]};
+// The types that need no number are asked for with the identity registered at Giro.
+const typeOptions = selected => [['본인 정보로 조회', false], ['번호로 조회', true]].map(([label, numbered]) =>
+  `<optgroup label="${label}">${options(TAXES.filter(([v]) => Boolean(NUMBER_INPUTS[v]) === numbered), selected)}</optgroup>`).join('');
 const PIN = ['pin', '지로 로그인 간편비밀번호 6자리', '[0-9]{6}'];
 const ACCOUNT = ['account_password', '출금 계좌 비밀번호 4자리', '[0-9]{4}'];
 const connection = () => state.logins.find(r => r.institution === 'giro' && !r.disabled);
@@ -83,7 +88,8 @@ function billsResult(job, live) {
   if (!job) return `<div class="empty-state">${live ? '요금 종류를 고르고 고지 조회를 누르세요.' : '아직 조회한 고지가 없어요.'}</div>`;
   const rows = job.result?.bills;
   const region = job.result?.query_region;
-  const where = region ? note(`조회 지역: ${esc([region.province, region.district].filter(Boolean).join(' '))}`) : '';
+  const where = region ? note(`조회 지역: ${esc([region.province, region.district].filter(Boolean).join(' '))}`)
+    : job.input?.no_region ? note('지역을 정하지 않은 조회예요.') : '';
   // Nothing billed: the institution says so in place of a list, so no list count is shown for it.
   if (job.result?.no_bills_reported) return jobState(job) + where + '<div class="empty-state">납부할 고지가 없어요.</div><div class="list-footer">기관이 목록 대신 “고지내용 없음”으로 응답했어요.</div>';
   const before = jobState(job) + notices(job) + where;
@@ -107,18 +113,27 @@ function summaryText(item) {
 const SUMMARY_GROUPS = [['localtax', '지방세입', ['local', 'nontax', 'env']],
   ['ntax', '국고금', ['national', 'customs', 'traffic', 'penalty', 'patent', 'marine', 'fund']]];
 
-function summaryResult(job) {
+/* As on Giro's result screen, an item answered with no bill opens nothing and every other item
+   opens its own bill list. The items without a bill share one line, so those with one stay in view. */
+const billed = item => !(item?.count === '0' && item.respCode === '000');
+
+function summaryResult(job, live) {
   if (!job) return '';
   const rows = job.result?.categories, totals = job.result?.totals;
   if (!Array.isArray(rows)) return jobState(job) + notices(job) + note('통합조회 결과를 확인하지 못했어요.');
-  const item = r => `<div class="setting-row"><span>${esc(r.label)}<span class="meta">${esc(summaryText(r.summary))}</span></span>${button('항목 선택', `data-action="giro-select-tax" data-tax="${esc(r.tax_type)}"`)}</div>`;
+  const item = r => `<div class="setting-row"><span>${esc(r.label)}<span class="meta">${esc(summaryText(r.summary))}</span></span>${live ? button('고지 조회', `data-action="giro-summary-item" data-tax="${esc(r.tax_type)}"`) : ''}</div>`;
+  const list = items => {
+    const open = items.filter(r => billed(r.summary)), none = items.filter(r => !billed(r.summary));
+    return (open.length ? `<div class="settings-body">${open.map(item).join('')}</div>` : '') +
+      (none.length ? `<p class="summary-none">고지 없음 · ${esc(none.map(r => r.label).join(', '))}</p>` : '');
+  };
   const other = rows.filter(r => !SUMMARY_GROUPS.some(([, , kinds]) => kinds.includes(r.tax_type)));
   const head = (title, sum) => `<div class="summary-group"><h3>${title}</h3>${sum ? `<span class="meta">${esc(summaryText(sum))}</span>` : ''}</div>`;
   return jobState(job) + notices(job) + (totals?.total ? head('전체', totals.total) : '') +
     SUMMARY_GROUPS.map(([key, title, kinds]) => {
       const items = rows.filter(r => kinds.includes(r.tax_type));
-      return items.length ? head(title, totals?.[key]) + `<div class="settings-body">${items.map(item).join('')}</div>` : '';
-    }).join('') + (other.length ? `<div class="settings-body">${other.map(item).join('')}</div>` : '');
+      return items.length ? head(title, totals?.[key]) + list(items) : '';
+    }).join('') + list(other);
 }
 
 /* The region of a local tax, environment levy or non-tax revenue query. The lists are asked for
@@ -139,14 +154,14 @@ async function billsView(ctx) {
   const job = row ? await latest(NUMBER_INPUTS[tax] ? 'giro.bills.search' : 'giro.bills.list', row, tax) : null;
   const summary = row ? await latest('giro.bills.summary', row) : null;
   const regions = row && regional ? await latest('giro.bills.regions', row, tax) : null;
-  const inputs = (NUMBER_INPUTS[tax] || []).map(([name, label]) => `<div class="field"><label for="giro-query-${name}">${esc(label)}</label><input id="giro-query-${name}" name="${name}" ${either ? '' : 'required'} maxlength="100" autocomplete="off"></div>`).join('');
+  const inputs = (NUMBER_INPUTS[tax] || []).map(([name, label, digits]) => `<div class="field"><label for="giro-query-${name}">${esc(label)}</label><input id="giro-query-${name}" name="${name}" ${either ? '' : 'required'} maxlength="100" autocomplete="off"${digits ? ` inputmode="numeric" placeholder="${esc(digits)}"` : ''}></div>`).join('');
   const listed = regions?.result?.provinces?.some(Boolean);
   const hint = either ? note('두 번호 중 하나만 입력하세요.') : !regional ? '' : listed
     ? (regions.result.districts?.some(Boolean) ? '' : note('이 지역의 지자체 목록을 확인하지 못했어요. 지역을 다시 고르거나, 그대로 조회하면 이 지역의 첫 지자체로 조회해요.'))
-    : note(regions ? '지역 목록을 확인하지 못했어요. 지역을 고르지 않으면 지로가 처음 안내하는 지역으로 조회해요.' : '지역을 고르지 않으면 지로가 처음 안내하는 지역으로 조회해요. 다른 지역의 고지는 지역 선택으로 시도와 지자체를 고른 뒤 조회하세요.');
+    : note((regions ? '지역 목록을 확인하지 못했어요. ' : '') + '지역을 고르지 않으면 지로 지역 목록의 첫 시도·첫 지자체로 조회해요. 어느 지자체의 고지인지 모르면 위 통합조회에서 그 항목을 조회하세요.');
   return start('고지·납부', '세금·공과금 고지를 조회해요. 국세·지방세·관세는 등록계좌 납부를 지원해요.') +
-    `<section class="panel"><div class="panel-heading"><h2>본인 공과금 통합조회</h2>${ready(row) ? button('통합조회', 'data-action="giro-summary-query"', 'primary') : ''}</div>${summaryResult(summary)}</section>` +
-    `<section class="panel"><form class="filter-bar" data-submit="giro-query"><div class="field"><label for="giro-tax">요금 종류</label><select id="giro-tax" name="tax_type" data-change="giro-tax-change">${options(TAXES, tax)}</select></div>${regional ? regionFields(regions, job?.input, ready(row)) : ''}${inputs}${ready(row) ? '<button class="button primary" type="submit">고지 조회</button>' : ''}</form>${ready(row) ? hint : ''}${regions && !listed ? notices(regions) : ''}${panel()}<div id="giro-results">${row ? billsResult(job, ready(row)) : loginFirst('지로에 로그인하면 고지를 조회하고 납부할 수 있어요.')}</div>${note('인지대·송달료와 조회납부 미지원 일반지로는 고지서 내용을 직접 입력하는 납부 항목으로, 자동 고지 조회 대상이 아니에요.')}</section>`;
+    `<section class="panel"><div class="panel-heading"><div><h2>본인 공과금 통합조회</h2><p class="meta">항목별 건수를 한 번에 확인하고, 고지가 있는 항목을 바로 조회해요.</p></div>${ready(row) ? button('통합조회', 'data-action="giro-summary-query"', 'primary') : ''}</div>${summaryResult(summary, ready(row))}</section>` +
+    `<section class="panel"><form class="filter-bar" data-submit="giro-query"><div class="field"><label for="giro-tax">요금 종류</label><select id="giro-tax" name="tax_type" data-change="giro-tax-change">${typeOptions(tax)}</select></div>${regional ? regionFields(regions, job?.input, ready(row)) : ''}${inputs}${ready(row) ? '<button class="button primary" type="submit">고지 조회</button>' : ''}</form>${ready(row) ? hint : ''}${regions && !listed ? notices(regions) : ''}${panel()}<div id="giro-results">${row ? billsResult(job, ready(row)) : loginFirst('지로에 로그인하면 고지를 조회하고 납부할 수 있어요.')}</div>${note('인지대·송달료와 조회납부 미지원 일반지로는 고지서 내용을 직접 입력하는 납부 항목으로, 자동 고지 조회 대상이 아니에요.')}</section>`;
 }
 
 /* One bill's detail: the list row's fields, then what only the detail states. The detail's own
@@ -225,13 +240,30 @@ async function receiptsView() {
 }
 
 // 'giro-pay' used to be its own menu; payments in progress now sit under the receipts screen.
+/* The bill list is below the summary, so a summary item's result is brought into view, clear of
+   the bar a narrow screen keeps at its top. */
+function showResults() {
+  const results = document.getElementById('giro-results'), bar = document.querySelector('.topbar');
+  if (!results?.scrollIntoView) return;
+  results.style.scrollMarginTop = (bar && getComputedStyle(bar).position === 'sticky' ? bar.offsetHeight : 0) + 16 + 'px';
+  results.scrollIntoView({block: 'start'});
+}
+
 export const giroViews = {'giro-live': billsView, 'giro-pay': receiptsView, 'giro-accounts': accountsView, 'giro-receipts': receiptsView};
 export const giroActions = {
   'giro-login': (ctx, element) => giroLogin(ctx, login(element.dataset.login)),
   'giro-bills-open': () => { ui.closeDialog(); changeView('giro-live'); },
   'giro-receipts-open': () => { ui.closeDialog(); changeView('giro-receipts'); },
   'giro-tax-change': async (ctx, element) => { state.params.tax_type = element.value; await render(); },
-  'giro-select-tax': async (ctx, element) => { state.params.tax_type = element.dataset.tax; await render(); },
+  // A summary item's own bills. The regional items are asked for as the summary screen asks:
+  // with no region, since the summary does not say which district billed them.
+  'giro-summary-item': async (ctx, element) => {
+    const row = connection(); if (!row) return giroLogin(ctx);
+    const tax = element.dataset.tax;
+    state.params.tax_type = tax;
+    await ctx.run('giro.bills.list', {login_id: row.id, input: {tax_type: tax, ...(REGIONAL.includes(tax) ? {no_region: true} : {})}},
+      {panel: 'job-panel', onDone: async () => { await refreshModel(); await render(); showResults(); }});
+  },
   'giro-regions-query': async ctx => {
     const row = connection(); if (!row) return giroLogin(ctx);
     await ctx.run('giro.bills.regions', {login_id: row.id, input: {tax_type: state.params.tax_type}},
