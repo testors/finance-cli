@@ -743,16 +743,22 @@ def transfer_preview(preview):
     from the fixed target without changing existing confirmation digests.
     """
     route = preview.get('authentication') if isinstance(preview.get('authentication'), dict) else {}
-    return {'recipient_bank_code': preview.get('recipient_bank_code'),
+    result = {'recipient_bank_code': preview.get('recipient_bank_code'),
             'recipient_account': preview.get('recipient_account'), 'recipient_name': preview.get('recipient_name'),
             'amount_krw': preview.get('amount_krw'), 'fee_krw': preview.get('fee_krw'),
             'total_krw': preview.get('total_krw'), 'source_account': mask_account(preview.get('source_account')),
             'authentication': pick(route, ('candidate', 'sign_required', 'bridge_type', 'pin_reentry', 'reason')),
             'state': preview.get('state')}
+    review = preview.get('review')
+    if isinstance(review,dict):
+        result['review'] = pick(review,('kind','message'))
+    if preview.get('fraud_confirmation'):
+        result['fraud_confirmation'] = preview['fraud_confirmation']
+    return result
 
 
 class Transfer(OneSignAdapter):
-    """prepare (account password) → confirm (PIN when required) → execute once."""
+    """Prepare with bank-requested reviews, then confirm and execute once."""
     name = 'hana.transfer.prepare'
     title = '원화 이체'
     requires_target = True
@@ -761,6 +767,10 @@ class Transfer(OneSignAdapter):
     confirmation = True
     first_step = 'prepare'
     steps = {'prepare': Step('prepare', secrets=('vault_passphrase', 'account_password')),
+             'review_duplicate': Step('review_duplicate', secrets=('vault_passphrase', 'account_password')),
+             # Keep old pending step names resumable without collecting questionnaire answers.
+             'review_duplicate_then_fraud': Step('review_duplicate_then_fraud', secrets=('vault_passphrase', 'account_password')),
+             'review_fraud': Step('review_fraud', secrets=('vault_passphrase', 'account_password')),
              'execute': Step('execute', secrets=('vault_passphrase',)),
              'execute_pin': Step('execute_pin', secrets=('vault_passphrase', 'pin'))}
 
@@ -776,12 +786,12 @@ class Transfer(OneSignAdapter):
         return 'web-' + ctx.job['id']
 
     def run(self, ctx, step):
-        return self.prepare(ctx) if step == 'prepare' else self.execute(ctx)
+        return self.execute(ctx) if step in ('execute','execute_pin') else self.prepare(ctx)
 
     def prepare(self, ctx):
         from finance_cli.services.hana import onesign_transfer
         password = ctx.secrets.get('account_password')
-        if not ACCOUNT_PASSWORD.fullmatch(password or ''):
+        if 'account_password' in self.steps[ctx.step].secrets and not ACCOUNT_PASSWORD.fullmatch(password or ''):
             raise Stop('account_password_four_digits_required')
         intent = {'source_account': account_number(ctx.snapshot.get('target')),
                   'recipient_bank_code': ctx.input['recipient_bank_code'],
@@ -790,10 +800,12 @@ class Transfer(OneSignAdapter):
         state = self.state(ctx)
         try:
             ctx.reserve()
-            result = onesign_transfer.operate(state, 'prepare', self.transaction(ctx), 'web-' + ctx.job['id'] + '-prepare',
+            result = onesign_transfer.operate(state, 'prepare' if ctx.step=='prepare' else 'continue',
+                                              self.transaction(ctx), 'web-' + ctx.job['id'] + '-' + ctx.step,
                                               self.session(ctx), send=True, intent=intent,
                                               inputs={'account_password': lambda: password, 'confirm': lambda p: False,
-                                                      'pin': lambda: None})
+                                                      'pin': lambda: None,
+                                                      **({'confirm_duplicate':lambda p:True} if ctx.step.startswith('review_duplicate') else {})})
         finally:
             password = ctx.secrets = None
             state.__exit__(None, None, None)
@@ -801,8 +813,20 @@ class Transfer(OneSignAdapter):
         ctx.observe(service_verdict=service, outcome='rejected' if result.get('accepted') is False else 'not_started')
         # One transfer per login session: this session is used up either way.
         ctx.mark_session(ctx.session['id'], 'consumed', 'transfer_prepared')
+        if result.get('state')=='duplicate_review':
+            preview = transfer_preview(result)
+            next_step = 'review_duplicate'
+            expires = ctx.attempt.get('preparation_expires') or time.time() + CONFIRM_SECONDS
+            ctx.remember(preparation_expires=expires)
+            return StepResult(service_verdict=service,outcome='not_started',result=preview,awaiting={
+                'kind':'confirm','next_step':next_step,'requires':list(self.steps[next_step].secrets),
+                'digest':digest({'job_id':ctx.job['id'],'session_id':ctx.session['id'],'step':next_step,'preview':preview}),
+                'preview':preview,'verification':'live_untested','expires_at':expires,'irreversible':False,
+                'expiry_basis':'native_client_timer_600000ms'})
         if result.get('processing_status') == 'stopped' or result.get('state') != 'prepared':
             local = {'transfer_executed': False}
+            if result.get('error'):
+                local['stopped'] = result['error']
             if result.get('state') == 'authentication_review':
                 local['authentication_not_supported'] = True  # The CLI stops here with the same reason.
             # Preparation never moves money: a refusal is the bank's verdict, anything else did not start.
@@ -812,7 +836,7 @@ class Transfer(OneSignAdapter):
         preview = transfer_preview(result)
         route = preview['authentication'] or {}
         needs_pin = route.get('bridge_type') == 'pinHalf'
-        expires = time.time() + CONFIRM_SECONDS
+        expires = ctx.attempt.get('preparation_expires') or time.time() + CONFIRM_SECONDS
         review = {'job_id': ctx.job['id'], 'target_id': ctx.snapshot['target']['id'],
                   'login_revision': ctx.job['login_revision'], 'preview': preview}
         ctx.remember(transfer={'transaction': self.transaction(ctx), 'preview_digest': digest(preview)})

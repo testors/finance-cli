@@ -964,6 +964,88 @@ class OneSignPathTests(HanaCase):
         self.assertEqual(short['local']['stopped'], 'pin_six_digits_required')
         self.assertEqual(len(self.services.calls), before)
 
+    def test_transfer_missing_screen_flags_reaches_web_confirmation_without_execution(self):
+        self.signed_in()
+        target = self.account_target()
+        path = onesign_transfer.PATHS['pretransaction']
+        response = self.services.bank(path, b'{}')
+        response.pop('dupTrscVrfcYn')
+        response.pop('fncFrdDgnsNcsyYn')
+        self.services.override[path] = response
+        before = len(self.services.calls)
+        with self.assertLogs(onesign_transfer.__name__, level='WARNING'):
+            job = self.prepare(target)
+        self.assertEqual(job['status'], 'awaiting_input', job)
+        self.assertEqual(job['outcome'], 'not_started')
+        self.assertTrue(job['service_verdict']['accepted'])
+        self.assertEqual(job['awaiting']['kind'], 'confirm')
+        self.assertFalse(job['service_verdict']['transfer_sent'])
+        paths = [c[1] for c in self.services.calls[before:]]
+        self.assertIn(onesign_transfer.PATHS['additional_info'], paths)
+        self.assertFalse(any(onesign_transfer.PATHS[k] in paths for k in ('execute_self', 'execute_other')))
+
+    def test_transfer_duplicate_and_fraud_reviews_continue_without_repeating_preparation(self):
+        self.signed_in()
+        target = self.account_target()
+        path = onesign_transfer.PATHS['pretransaction']
+        self.services.override[path] = dict(self.services.bank(path, b'{}'), dupTrscVrfcYn='Y', fncFrdDgnsNcsyYn='Y')
+        before = len(self.services.calls)
+        duplicate = self.prepare(target)
+        self.assertEqual(duplicate['awaiting']['next_step'], 'review_duplicate', duplicate)
+        self.assertFalse(duplicate['awaiting']['irreversible'])
+        prepared = self.confirm(duplicate, {**self.vault, 'account_password': '6049'})
+        self.assertEqual(prepared['result']['fraud_confirmation'], 'automatic')
+        self.assertNotIn('review',prepared['awaiting']['preview'])
+        self.assertNotIn('fraud_answers',prepared['awaiting']['requires'])
+        stale = self.post(f"/jobs/{prepared['id']}/confirm", {'confirmation': duplicate['awaiting']['digest'], 'secrets': self.vault})
+        self.assertEqual((stale.status_code, stale.json()['error']), (400, 'confirmation_mismatch'))
+        self.assertEqual(prepared['awaiting']['next_step'], 'execute', prepared)
+        self.assertTrue(prepared['awaiting']['irreversible'])
+        self.assertEqual(prepared['awaiting']['expires_at'], duplicate['awaiting']['expires_at'])
+        paths = [c[1] for c in self.services.calls[before:]]
+        self.assertEqual(paths.count(path), 1)
+        self.assertEqual(paths.count(onesign_transfer.PATHS['additional_info']), 1)
+        self.assertNotIn(onesign_transfer.PATHS['execute_other'], paths)
+        self.assertNoLeak(prepared, '6049', onesign_fixture.PASSWORD, 'manAge', 'custInfoSecond', 'fraud_answers')
+        executed = self.confirm(prepared, self.vault)
+        self.assertEqual(executed['outcome'], 'success', executed)
+        self.assertEqual([c[1] for c in self.services.calls[before:]].count(onesign_transfer.PATHS['execute_other']), 1)
+
+    def test_web_fraud_only_goes_straight_to_final_confirmation(self):
+        self.signed_in()
+        target = self.account_target()
+        path = onesign_transfer.PATHS['pretransaction']
+        self.services.override[path] = dict(self.services.bank(path, b'{}'), fncFrdDgnsNcsyYn='Y')
+        before = len(self.services.calls)
+        prepared = self.prepare(target)
+        self.assertEqual(prepared['awaiting']['next_step'], 'execute', prepared)
+        self.assertEqual(prepared['result']['fraud_confirmation'], 'automatic')
+        self.assertNotIn('review', prepared['awaiting']['preview'])
+        paths = [c[1] for c in self.services.calls[before:]]
+        self.assertEqual(paths.count(onesign_transfer.PATHS['session_accounts']), 1)
+        self.assertNotIn(onesign_transfer.PATHS['execute_other'], paths)
+        self.assertFalse(prepared['service_verdict']['transfer_sent'])
+
+    def test_duplicate_review_cancel_and_expiry_send_nothing_further(self):
+        self.signed_in()
+        target = self.account_target()
+        path = onesign_transfer.PATHS['pretransaction']
+        self.services.override[path] = dict(self.services.bank(path, b'{}'), dupTrscVrfcYn='Y')
+        job = self.prepare(target)
+        count = len(self.services.calls)
+        cancelled = self.post(f"/jobs/{job['id']}/cancel", {})
+        self.assertEqual(cancelled.status_code, 200, cancelled.text)
+        self.assertEqual(len(self.services.calls), count)
+        self.signed_in()
+        job = self.prepare(target)
+        count = len(self.services.calls)
+        with self.db.write() as con:
+            con.execute('UPDATE jobs SET expires_at=? WHERE id=?', (time.time() - 1, job['id']))
+        refused = self.post(f"/jobs/{job['id']}/confirm", {'confirmation': job['awaiting']['digest'],
+                                                         'secrets': {**self.vault, 'account_password': '6049'}})
+        self.assertEqual(refused.status_code, 409)
+        self.assertEqual(len(self.services.calls), count)
+
     def test_transfer_prepare_confirm_execute_once_and_reconcile_separately(self):
         self.signed_in()
         target = self.account_target()

@@ -167,6 +167,8 @@ class Services:
             return {'ourAcctList':[{'acctNo':SOURCE,'openYn':'N','bnkCd':'081','acctNm':'합성 출금',
                 'bnkNm':'하나','wdrwAcctSeqNo':1,'payBal':10000}]}
         if path==transfer.PATHS['session_accounts']:
+            if json.loads(body).get('custInfoAdtnYn')=='Y':
+                return {'lginYn':True,'custInfoSecond':{'manAge':35}}
             return {'allAcctListDto':{'accountMap':{SOURCE:{'mmdaHoldYn':'N'}}}}
         if path==transfer.PATHS['recent_accounts']:
             assert body==b'{}'
@@ -257,9 +259,9 @@ class FlowTests(unittest.TestCase):
         result=self.op('login','login')
         self.assertEqual(result['processing_status'],'completed',result)
 
-    def tr(self,action):
+    def tr(self,action,transaction='payment',session='login'):
         self.serial+=1
-        return transfer.operate(self.state,action,'payment','run-'+str(self.serial),'login',send=True,
+        return transfer.operate(self.state,action,transaction,'run-'+str(self.serial),session,send=True,
             intent={'source_account':SOURCE,'recipient_bank_code':'004','recipient_account_number':RECIPIENT,'amount_krw':100},
             inputs=self.inputs,exchange=self.services)
 
@@ -300,6 +302,187 @@ class FlowTests(unittest.TestCase):
                 raw=path.read_bytes()
                 for secret in (b'SYNTHETIC-CUSTOMER',SOURCE.encode(),b'SYNTHETIC-LOGIN',b'SYNTHETIC-SECRET'):
                     self.assertNotIn(secret,raw)
+
+    def test_pretransaction_flags_only_exact_y_requests_additional_screen(self):
+        self.login()
+        fields=('dupTrscVrfcYn','fncFrdDgnsNcsyYn')
+        missing=object()
+        cases=[(field,value) for field in fields for value in
+               (missing,None,'',False,0,'y','SYNTHETIC-PRIVATE-FLAG')]
+        for index,(field,value) in enumerate(cases):
+            with self.subTest(field=field,index=index):
+                session='flag-'+str(index)
+                onesign.new_session(self.state,session)
+                self.op('login',session)
+                response=self.services.bank(transfer.PATHS['pretransaction'],b'{}')
+                if value is missing:
+                    response.pop(field)
+                else:
+                    response[field]=value
+                self.services.override[transfer.PATHS['pretransaction']]=response
+                before=len(self.services.calls)
+                with self.assertLogs(transfer.__name__,level='WARNING') as logs:
+                    result=self.tr('prepare',session,session)
+                self.assertEqual(result['state'],'prepared',result)
+                self.assertTrue(result['accepted'])
+                self.assertFalse(result['transfer_sent'])
+                paths=[c[1] for c in self.services.calls[before:]]
+                self.assertIn(transfer.PATHS['additional_info'],paths)
+                self.assertFalse(any(p in paths for p in (transfer.PATHS['execute_self'],transfer.PATHS['execute_other'])))
+                self.assertEqual([record.getMessage() for record in logs.records],
+                                 ['pretransaction_nonstandard_flag: '+field])
+
+    def test_duplicate_y_waits_but_fraud_y_auto_confirms_without_execution(self):
+        self.login()
+        for index,flags in enumerate((('Y','N'),('N','Y'),('Y','Y'))):
+            with self.subTest(flags=flags):
+                session='screen-'+str(index)
+                onesign.new_session(self.state,session)
+                self.op('login',session)
+                response=self.services.bank(transfer.PATHS['pretransaction'],b'{}')
+                response.update(zip(('dupTrscVrfcYn','fncFrdDgnsNcsyYn'),flags))
+                self.services.override[transfer.PATHS['pretransaction']]=response
+                before=len(self.services.calls)
+                result=self.tr('prepare',session,session)
+                self.assertEqual(result['state'],'duplicate_review' if flags[0]=='Y' else 'prepared')
+                self.assertTrue(result['accepted'])
+                self.assertEqual(result['processing_status'],'completed')
+                paths=[c[1] for c in self.services.calls[before:]]
+                expected = ['withdrawal','session_accounts','recent_accounts','pretransaction']
+                if flags[0]=='N':
+                    expected += ['additional_info','keypad_key','password','auth_means']
+                    self.assertEqual(result['fraud_confirmation'],'automatic')
+                self.assertEqual(paths,[transfer.PATHS[k] for k in expected])
+                self.assertNotIn(transfer.PATHS['execute_other'],paths)
+                if flags[0]=='Y':
+                    before=len(self.services.calls)
+                    self.assertEqual(self.tr('execute',session,session)['error'],'transfer_not_prepared_or_already_attempted')
+                    self.assertEqual(len(self.services.calls),before)
+
+    def test_duplicate_then_fraud_continues_same_preparation_once(self):
+        self.login()
+        response=self.services.bank(transfer.PATHS['pretransaction'],b'{}')
+        response.update(dupTrscVrfcYn='Y',fncFrdDgnsNcsyYn='Y')
+        self.services.override[transfer.PATHS['pretransaction']]=response
+        start=len(self.services.calls)
+        self.assertEqual(self.tr('prepare')['state'],'duplicate_review')
+        before=len(self.services.calls)
+        self.assertEqual(self.tr('continue')['state'],'duplicate_review')
+        self.assertEqual(len(self.services.calls),before)
+        self.inputs['confirm_duplicate']=lambda p:True
+        # Even callers carrying an old input provider are never asked for answers.
+        self.inputs['fraud_answers']=lambda p: (_ for _ in ()).throw(AssertionError('questionnaire prompted'))
+        prepared=self.tr('continue')
+        self.assertEqual(prepared['state'],'prepared')
+        self.assertEqual(prepared['fraud_confirmation'],'automatic')
+        paths=[c[1] for c in self.services.calls[start:]]
+        self.assertEqual(paths.count(transfer.PATHS['pretransaction']),1)
+        self.assertEqual(paths.count(transfer.PATHS['additional_info']),1)
+        self.assertNotIn(transfer.PATHS['execute_other'],paths)
+        before=len(self.services.calls)
+        self.assertEqual(self.tr('continue')['error'],'transfer_not_awaiting_review')
+        self.assertEqual(len(self.services.calls),before)
+        saved=self.state.snapshot()['transfers']['payment']
+        self.assertTrue(saved['duplicate_confirmed'] and saved['fraud_confirmed'])
+        self.assertNotIn('fraud_session',saved['data'])
+        self.assertNotIn('fraud_answers',json.dumps(saved))
+        self.assertTrue(self.tr('execute')['original_result_success'])
+
+    def test_review_cancellation_never_continues_or_executes(self):
+        self.login()
+        for index,kind in enumerate(('duplicate',)):
+            session='cancel-'+str(index)
+            onesign.new_session(self.state,session)
+            self.op('login',session)
+            response=self.services.bank(transfer.PATHS['pretransaction'],b'{}')
+            response['dupTrscVrfcYn' if kind=='duplicate' else 'fncFrdDgnsNcsyYn']='Y'
+            self.services.override[transfer.PATHS['pretransaction']]=response
+            self.assertEqual(self.tr('prepare',session,session)['state'],kind+'_review')
+            before=len(self.services.calls)
+            self.inputs['confirm_duplicate']=lambda p:False
+            self.inputs['fraud_answers']=lambda p:None
+            result=self.tr('continue',session,session)
+            self.assertEqual(result['state'],'cancelled')
+            self.assertTrue(result['accepted'])
+            self.assertEqual(self.tr('continue',session,session)['error'],'transfer_not_awaiting_review')
+            self.assertEqual(self.tr('execute',session,session)['error'],'transfer_not_prepared_or_already_attempted')
+            self.assertEqual(len(self.services.calls),before)
+            self.inputs.pop('confirm_duplicate'); self.inputs.pop('fraud_answers')
+
+    def test_review_continuation_transport_failure_cannot_replay(self):
+        self.login()
+        response=self.services.bank(transfer.PATHS['pretransaction'],b'{}')
+        response['dupTrscVrfcYn']='Y'
+        self.services.override[transfer.PATHS['pretransaction']]=response
+        self.assertEqual(self.tr('prepare')['state'],'duplicate_review')
+        self.inputs['confirm_duplicate']=lambda p:True
+        self.services.override[transfer.PATHS['additional_info']]=OSError('SYNTHETIC-timeout')
+        self.assertEqual(self.tr('continue')['error'],'transport_interrupted_no_automatic_retry')
+        before=len(self.services.calls)
+        self.assertEqual(self.tr('continue')['error'],'transfer_not_awaiting_review')
+        self.assertEqual(len(self.services.calls),before)
+
+    def test_cli_only_prompts_for_duplicate_without_questionnaire_or_execution(self):
+        from finance_cli.services.hana import onesign_cli
+        self.login()
+        response=self.services.bank(transfer.PATHS['pretransaction'],b'{}')
+        response.update(dupTrscVrfcYn='Y',fncFrdDgnsNcsyYn='Y')
+        self.services.override[transfer.PATHS['pretransaction']]=response
+        with patch.object(onesign_cli,'text',side_effect=['계속']) as ask, \
+             patch.object(onesign_cli,'hidden',return_value='6049'),redirect_stderr(io.StringIO()):
+            self.inputs=onesign_cli.inputs()
+            result=self.tr('prepare')
+        self.assertEqual(result['state'],'prepared',result)
+        self.assertEqual(ask.call_count,1)
+        self.assertFalse(result['transfer_sent'])
+        self.assertFalse(any(c[1]==transfer.PATHS['execute_other'] for c in self.services.calls))
+
+    def test_cli_fraud_only_prepares_without_questionnaire_prompt(self):
+        from finance_cli.services.hana import onesign_cli
+        self.login()
+        response=self.services.bank(transfer.PATHS['pretransaction'],b'{}')
+        response['fncFrdDgnsNcsyYn']='Y'
+        self.services.override[transfer.PATHS['pretransaction']]=response
+        with patch.object(onesign_cli,'text',side_effect=AssertionError('unexpected question')), \
+             patch.object(onesign_cli,'hidden',return_value='6049'):
+            self.inputs=onesign_cli.inputs()
+            result=self.tr('prepare')
+        self.assertEqual(result['state'],'prepared',result)
+        self.assertEqual(result['fraud_confirmation'],'automatic')
+        self.assertFalse(result['transfer_sent'])
+        self.assertNotIn('fraud_session',self.state.snapshot()['transfers']['payment']['data'])
+
+    def test_old_saved_fraud_review_continues_without_answers_or_age_lookup(self):
+        self.login()
+        response=self.services.bank(transfer.PATHS['pretransaction'],b'{}')
+        response['dupTrscVrfcYn']='Y'
+        self.services.override[transfer.PATHS['pretransaction']]=response
+        self.assertEqual(self.tr('prepare')['state'],'duplicate_review')
+        # Synthetic snapshot of the previously supported questionnaire waiting state.
+        with self.state.transaction() as value:
+            ctx=value['transfers']['payment']
+            ctx.update(state='fraud_review',review={'kind':'fraud','questions':[]})
+            ctx['data']['pretransaction']['fncFrdDgnsNcsyYn']='Y'
+        before=len(self.services.calls)
+        result=self.tr('continue')
+        self.assertEqual(result['state'],'prepared',result)
+        self.assertEqual(result['fraud_confirmation'],'automatic')
+        paths=[c[1] for c in self.services.calls[before:]]
+        self.assertNotIn(transfer.PATHS['fraud_session'],paths)
+        self.assertNotIn(transfer.PATHS['pretransaction'],paths)
+        self.assertNotIn(transfer.PATHS['execute_other'],paths)
+
+    def test_pretransaction_warning_failure_does_not_stop_preparation(self):
+        self.login()
+        response=self.services.bank(transfer.PATHS['pretransaction'],b'{}')
+        response.pop('dupTrscVrfcYn')
+        response.pop('fncFrdDgnsNcsyYn')
+        self.services.override[transfer.PATHS['pretransaction']]=response
+        with patch('logging.Logger.warning',side_effect=OSError('SYNTHETIC-log-failure')):
+            result=self.tr('prepare')
+        self.assertEqual(result['state'],'prepared',result)
+        self.assertTrue(result['accepted'])
+        self.assertFalse(result['transfer_sent'])
 
     def test_otp_and_pin_branches(self):
         self.login()

@@ -380,15 +380,20 @@ function transferPreview(preview) {
 function confirmDialog(ctx, job) {
   const awaiting = job.awaiting || {};
   const transfer = job.name === 'hana.transfer.prepare';
+  const review = transfer ? awaiting.preview?.review : null;
   const fixed = job.fixed || {};
   const store = onesignStore(login(job.login_id), true);
-  const fields = secretFields((awaiting.requires || []).map(name => SECRET_LABELS[name]).filter(Boolean), store);
+  // Older saved preparation steps may still list questionnaire answers. Only
+  // credentials are needed to resume them under the automatic-confirmation policy.
+  const required = (awaiting.requires || []).filter(name => name !== 'fraud_answers');
+  if (['review_duplicate_then_fraud', 'review_fraud'].includes(awaiting.next_step) && !required.includes('account_password')) required.push('account_password');
+  const fields = secretFields(required.map(name => SECRET_LABELS[name]).filter(Boolean), store);
   const expires = awaiting.expires_at ? `<p class="dialog-note">확인 기한: <span class="countdown" data-deadline="${awaiting.expires_at}"></span> 남음. 기한이 지나면 새 로그인부터 다시 준비해요.</p>` : '';
-  const body = `<p class="pill-row">${ui.verification(awaiting.verification)}${tag('되돌릴 수 없음', 'danger')}</p>` +
+  const body = `<p class="pill-row">${ui.verification(awaiting.verification)}${review ? tag('이체 준비 중', '') : tag('되돌릴 수 없음', 'danger')}</p>` +
     `<div class="summary-lines"><div class="summary-line"><span>프로필</span><strong>${esc(fixed.profile?.name || '전체')}</strong></div><div class="summary-line"><span>로그인</span><strong>${esc(fixed.login?.display_name)}</strong></div><div class="summary-line"><span>대상</span><strong>${esc(fixed.target?.display_name)}</strong></div>${awaiting.signing_credential ? `<div class="summary-line"><span>발급용 인증서</span><strong>${esc(awaiting.signing_credential)}</strong></div>` : ''}</div>` +
     (transfer ? transferPreview(awaiting.preview || {}) : draftPreview(awaiting.preview)) + expires +
-    `<form id="confirm-form" autocomplete="off">${fields.map(([name, label, pattern]) => `<div class="field"><label for="confirm-${name}">${esc(label)}</label><input id="confirm-${name}" name="${name}" type="password" required autocomplete="off" ${pattern ? `inputmode="numeric" pattern="${pattern}"` : ''}></div>`).join('')}${rememberField(fields, store)}<p class="dialog-note">${transfer ? '확인하면 이체를 한 번만 전송해요. 응답을 받지 못해도 자동으로 다시 보내지 않고 결과 조회로 확인해요.' : '확인하면 이 초안으로 발급을 한 번만 시도해요. 결과가 불확실하면 다시 발급하지 말고 목록으로 확인하세요.'}</p><div class="dialog-actions"><button type="button" class="button secondary" data-ui="close">나중에</button><button type="button" class="button secondary" data-action="cancel-job" data-job="${esc(job.id)}">준비 취소</button><button class="button primary" type="submit">${transfer ? `이체 ${money(awaiting.preview?.amount_krw)}원` : '발급'}</button></div></form>`;
-  ui.showDialog(transfer ? '이 내용으로 보낼까요?' : '발급 전 초안 확인', body, {wide: !transfer});
+    `<form id="confirm-form" autocomplete="off">${review?.message ? `<p class="dialog-note">${esc(review.message)}</p>` : ''}${fields.map(([name, label, pattern]) => `<div class="field"><label for="confirm-${name}">${esc(label)}</label><input id="confirm-${name}" name="${name}" type="password" required autocomplete="off" ${pattern ? `inputmode="numeric" pattern="${pattern}"` : ''}></div>`).join('')}${rememberField(fields, store)}<p class="dialog-note">${review ? '확인하면 같은 이체의 준비를 계속해요. 이 단계에서는 송금하지 않으며, 준비가 끝나면 최종 이체 내용을 다시 확인해요.' : transfer ? '확인하면 이체를 한 번만 전송해요. 응답을 받지 못해도 자동으로 다시 보내지 않고 결과 조회로 확인해요.' : '확인하면 이 초안으로 발급을 한 번만 시도해요. 결과가 불확실하면 다시 발급하지 말고 목록으로 확인하세요.'}</p><div class="dialog-actions"><button type="button" class="button secondary" data-ui="close">나중에</button><button type="button" class="button secondary" data-action="cancel-job" data-job="${esc(job.id)}">준비 취소</button><button class="button primary" type="submit">${review ? '확인 후 준비 계속' : transfer ? `이체 ${money(awaiting.preview?.amount_krw)}원` : '발급'}</button></div></form>`;
+  ui.showDialog(review ? review.kind === 'duplicate' ? '중복 이체 확인' : '이체 준비 계속' : transfer ? '이 내용으로 보낼까요?' : '발급 전 초안 확인', body, {wide: !transfer});
   const timer = setInterval(() => {
     const clock = document.querySelector('.countdown');
     if (!clock) { clearInterval(timer); return; }
@@ -402,7 +407,8 @@ function confirmDialog(ctx, job) {
     form.querySelector('button[type=submit]').disabled = true;
     try {
       if (transfer && !await ensureBankSession(ctx, job.login_id)) return;
-      const secrets = await applyRemember(Object.fromEntries(new FormData(form).entries()), store);
+      const values = Object.fromEntries(new FormData(form).entries());
+      const secrets = await applyRemember(values, store);
       form.reset();
       await api.post(`/jobs/${encodeURIComponent(job.id)}/confirm`, {confirmation: awaiting.digest, secrets}, {label: job.title});
     } catch (error) {
@@ -420,8 +426,7 @@ function confirmDialog(ctx, job) {
     const final = await ctx.track({...job, status: 'queued'}, {panel: 'job-panel', hold: true});
     if (!final) return;
     if (final.status === 'awaiting_input') {
-      // Refused before anything was sent (a wrong store passphrase, say). What was prepared is
-      // kept, so the same confirmation is asked again with the reason.
+      // Open the next preparation review, or repeat a confirmation refused before sending.
       confirmDialog(ctx, final);
       if (final.local?.last_confirmation_refused) ui.fail(ui.message(final.local.last_confirmation_refused));
       return;

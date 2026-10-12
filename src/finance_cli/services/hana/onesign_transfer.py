@@ -2,10 +2,11 @@
 import base64
 from datetime import datetime
 import hashlib
+import logging
 import uuid
 from zoneinfo import ZoneInfo
 
-from . import onesign_crypto as pin, onesign_compat as compat, transfer_format
+from . import onesign_crypto as pin, onesign_compat as compat, transfer_format, transfer_review
 from . import onesign_transfer_protocol as protocol, nfilter_crypto, request_activity
 from .onesign import record, ms
 from .onesign_codec import encode
@@ -20,6 +21,7 @@ from .store import name as valid_name
 PATHS = {
  'withdrawal':'/api/pcm/slct01/capi/acctInq/retrieveTrnsUsagWdrwAcctList',
  'session_accounts':'/public/pcm/lgin01/capi/lginSessMgnt/retrieveLginSess',
+ 'fraud_session':'/public/pcm/lgin01/capi/lginSessMgnt/retrieveLginSess',
  'recent_accounts':'/api/pcm/trns01/capi/trnsInfoInq/retrieveTrnsNrstRcvNSefAcct',
  'pretransaction':'/api/pcm/trns01/capi/trnsRsevTrsc/executeTrnsRsevTrsc',
  'additional_info':'/api/pcm/trns01/capi/trnsInfoMgnt/saveTrnsAdtnInfo',
@@ -91,15 +93,22 @@ def preview(transaction):
     if transaction.get('mode') == 'multi':
         from . import onesign_multi_transfer
         return onesign_multi_transfer.preview(transaction)
-    row = transaction['data']['additional_info']['trnsList'][0]
-    return {'transaction':transaction['name'],'source_account':transaction['source'],
+    stage = 'pretransaction' if transaction['state'] in ('duplicate_review','fraud_review','cancelled') else 'additional_info'
+    data = transaction['data'][stage]
+    row = data['trnsList'][0]
+    result = {'transaction':transaction['name'],'source_account':transaction['source'],
         'recipient_bank_code':row['rcvBnkCd'],'recipient_account':row['rcvAcctNo'],'recipient_name':row['rmteNm'],
         'amount_krw':transaction['intent']['amount_krw'],'fee_krw':amount(row['rduAfComm']),
-        'total_krw':amount(transaction['data']['additional_info']['totlTrnsAmt']),
+        'total_krw':amount(data['totlTrnsAmt']),
         'authentication':transaction.get('route'),'state':transaction['state']}
+    if transaction.get('review'):
+        result['review'] = transaction['review']
+    if transaction.get('fraud_confirmation'):
+        result['fraud_confirmation'] = transaction['fraud_confirmation']
+    return result
 
 
-def prepare(state, client, transaction, intent, password):
+def prepare(state, client, transaction, intent, inputs):
     intent = checked_intent(intent)
     valid_name(transaction)
     bound = binding(state,client.session)
@@ -141,10 +150,63 @@ def prepare(state, client, transaction, intent, password):
         'paytSqn':1 if intent['recipient_bank_code'] in protocol.OUR_CODES else 0,'trnsAmt':intent['amount_krw'],
         'wdrwSeqNo':protocol.numeric(w['wdrwAcctSeqNo'],'withdrawal_sequence'),'wdrwBnkCd':w['bnkCd'],
         'wdrwBnkNm':w['bnkNm'],'trnsSeqNo':1,'addTrnsYn':'N','svcDvCd':'ACCT_TRNS','rmtYn':'N'})
-    pin.require(value.get('dupTrscVrfcYn')=='N' and value.get('fncFrdDgnsNcsyYn')=='N','additional_transfer_screen_required')
+    # The app branches only on exact "Y"; absent/nonstandard flags do not request a screen.
+    screen_flags = ('dupTrscVrfcYn','fncFrdDgnsNcsyYn')
+    for field in screen_flags:
+        if value.get(field) not in ('Y','N'):
+            try:
+                logging.getLogger(__name__).warning('pretransaction_nonstandard_flag: %s',field)
+            except Exception:
+                pass  # A diagnostic sink must not change the bank workflow. Never log response values.
     pin.require(value.get('rcvAcctSefYn') in ('Y','N'),'self_account_classification_unavailable')
     ctx['cfg']['kind'] = 'self' if value['rcvAcctSefYn']=='Y' else 'other'
-    row = protocol.transaction_row(ctx,'pretransaction',value)
+    protocol.transaction_row(ctx,'pretransaction',value)
+    ctx['state'] = 'duplicate_review' if value.get('dupTrscVrfcYn')=='Y' else 'review_ready'
+    if ctx['state']=='duplicate_review':
+        ctx['review'] = {'kind':'duplicate','message':transfer_review.DUPLICATE_MESSAGE}
+    save()
+    return continue_preparation(state,client,transaction,inputs,initial=True)
+
+
+def continue_preparation(state,client,transaction,inputs,*,initial=False):
+    ctx = state.snapshot()['transfers'][transaction]
+    pin.require(ctx['state'] in (('review_ready','duplicate_review','fraud_review') if initial else
+                                ('duplicate_review','fraud_review')),'transfer_not_awaiting_review')
+    pin.require(ctx['binding']==binding(state,client.session),'transfer_binding_changed')
+
+    def save():
+        with state.transaction() as value:
+            value['transfers'][transaction] = ctx
+
+    def result():
+        return {**preview(ctx),'accepted':True,'transfer_sent':False}
+
+    def call(stage,body):
+        value = request(client,stage,body)
+        ctx['data'][stage] = value
+        ctx['receipts'][stage] = {'request':{'body':body}}
+        save()
+        return value
+
+    if ctx['state']=='duplicate_review':
+        answer = inputs.get('confirm_duplicate',lambda p:None)(preview(ctx))
+        if answer is None:
+            return result()
+        pin.require(type(answer) is bool,'duplicate_confirmation_invalid')
+        if not answer:
+            ctx.update(state='cancelled',review=None)
+            save()
+            return result()
+        ctx.update(state='review_ready',review=None,duplicate_confirmed=True)
+        save()
+    if ctx['data']['pretransaction'].get('fncFrdDgnsNcsyYn')=='Y' or ctx['state']=='fraud_review':
+        # User-selected policy: complete the client-only popup locally. No age
+        # lookup, invented answers, or questionnaire payload is needed by the bank.
+        ctx.update(review=None,fraud_confirmed=True,fraud_confirmation='automatic')
+    ctx['state'] = 'preparing_final'
+    save()  # A new continuation cannot replay the remaining bank requests.
+    row = ctx['data']['pretransaction']['trnsList'][0]
+    recent = ctx['data']['recent_accounts']
     value = call('additional_info',{'trscSeqNo':1,'pintPrdLclasCd':'','cshbUseYn':'','cshbUseAmt':0,
         'rcvPsbkMarkCtt':transfer_format.mark(row.get('rcvPsbkMarkCtt') or ''),'wdrwPsbkMarkCtt':row.get('wdrwPsbkMarkCtt',''),
         'slctDvCd':row.get('slctDvCd') or '','trnsScheDt':'','trnsScheTm':'','custNtfyMdclCd':'','mmdaHoldYn':'N'})
@@ -152,7 +214,7 @@ def prepare(state, client, transaction, intent, password):
     pin.require(value.get('mmdaHoldYn')=='N','mmda_state_changed')
     if ctx['cfg']['kind']=='other':
         public = call('keypad_key',None)['apiRlseKey']
-        secret = password()
+        secret = inputs['account_password']()
         try:
             pin.require(isinstance(secret,str) and len(secret)==4 and secret.isascii() and secret.isdigit(),'account_password_four_digits_required')
             cipher = nfilter_crypto.encrypt_numeric_password(public,secret,base64.b64decode(state.snapshot()['settings']['keypad_mac']))
@@ -167,7 +229,7 @@ def prepare(state, client, transaction, intent, password):
     else:
         ctx.update(route={'candidate':True,'sign_required':False,'reason':'server_self_account_branch'},state='prepared')
     save()
-    return {**preview(ctx),'transfer_sent':False,'accepted':True}
+    return result()
 
 
 def execute(state,client,transaction,control,confirm,pin_input):
@@ -260,6 +322,7 @@ def references(state, action, transaction, run, session):
         else:
             candidates = [name for name, ctx in value['transfers'].items()
                           if action == 'show' or action == 'execute' and ctx['state'] == 'prepared'
+                          or action == 'continue' and ctx['state'] in ('duplicate_review','fraud_review')
                           or action == 'reconcile' and ctx.get('execution_attempted') and not ctx.get('reconcile_attempted')]
             pin.require(bool(candidates), 'transfer_not_found')
             pin.require(len(candidates) == 1, 'multiple_transfers_use_transaction')
@@ -268,7 +331,7 @@ def references(state, action, transaction, run, session):
     if action == 'show':
         return transaction, run, session
     if session is None:
-        if action in ('execute', 'reconcile'):
+        if action in ('continue', 'execute', 'reconcile'):
             session = value['transfers'][transaction]['binding']['session']
         else:
             candidates = [name for name, saved in value['sessions'].items()
@@ -282,7 +345,7 @@ def references(state, action, transaction, run, session):
 def operate(state,action,transaction=None,run=None,session=None,*,send=False,intent=None,inputs=None,exchange=send_http):
     from . import onesign_multi_transfer as batch
     inputs = inputs or {}
-    pin.require(action in ('show','prepare','prepare-batch','execute','reconcile'),'unsupported_transfer_operation')
+    pin.require(action in ('show','prepare','prepare-batch','continue','execute','reconcile'),'unsupported_transfer_operation')
     if action != 'show' and not send:
         return {'operation':'transfer-'+action,'transaction':transaction,'network_used':False,'next':'same_command_with_send'}
     transaction, run, session = references(state,action,transaction,run,session)
@@ -299,7 +362,9 @@ def operate(state,action,transaction=None,run=None,session=None,*,send=False,int
     client.transfer_paths = set(PATHS.values()) | set(batch.PATHS.values())
     try:
         if action=='prepare':
-            result = prepare(state,client,transaction,intent,inputs['account_password'])
+            result = prepare(state,client,transaction,intent,inputs)
+        elif action=='continue':
+            result = continue_preparation(state,client,transaction,inputs)
         elif action=='prepare-batch':
             result = batch.prepare(state,client,transaction,intent,inputs['account_password'])
         elif action=='execute':

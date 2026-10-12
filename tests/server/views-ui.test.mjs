@@ -28,7 +28,7 @@ async function setup(t, method = 'onesign', readiness = 'query_only', secret = {
     askSecrets: async (...args) => { asked.push(args); return typeof secret === 'function' ? secret() : secret; },
     SECRET_LABELS: {vault_passphrase: ['vault_passphrase', '저장소 암호'], pin: ['pin', 'PIN'],
       certificate_password: ['certificate_password', '인증서 비밀번호']},
-    applyRemember: () => {}, changeView: (...args) => { changed.push(args); }, jobState: () => '', refreshModel: async () => {},
+    applyRemember: values => values, changeView: (...args) => { changed.push(args); }, jobState: () => '', refreshModel: async () => {},
     bankSessionExpired: () => state.idleExpired || false,
     ensureBankSession: async (ctx, id) => { checked.push(id); return !state.idleExpired; }, expiredBankLogin: async () => {},
     rememberField: () => '', render: by => { redraws.push(by); }, secretFields: () => [], showJob: () => {},
@@ -45,9 +45,10 @@ async function setup(t, method = 'onesign', readiness = 'query_only', secret = {
       if (path.startsWith('/jobs?')) return {jobs: state.listed ? state.listed(path) : []};
       if (state.served?.[path]) return state.served[path];
       return {credentials: [], devices: [], id_cards: []};
-    }, post: async path => {
+    }, post: async (path, body) => {
       if (!state.acceptPosts) throw {code: 'job_not_cancellable'};
       posted.push(path);
+      state.lastPostedBody = body;
       return {};
     }, patch: async () => { throw {code: 'revision_conflict'}; }});
     this.setExport('submit', () => { throw new Error('unexpected submission'); });
@@ -1229,4 +1230,38 @@ test('an adapter reason code reads in words and a message from the institution s
   ui.state.cache.set('hometax.invoice.list||target|sales', job('합성 기관 안내문'));
   main.innerHTML = await ui.views.invoices(ui.ctx);
   assert.match(main.querySelector('#results .scope-note').textContent, /\(합성 기관 안내문\)/);
+});
+
+
+test('a saved fraud review resumes without questionnaire fields or answers', async t => {
+  const ui = await setup(t);
+  const job = {id:'review',name:'hana.transfer.prepare',login_id:'login',status:'awaiting_input',
+    awaiting:{digest:'review-digest',next_step:'review_fraud',preview:{amount_krw:100,
+      review:{kind:'fraud',questions:[{id:'4',text:'합성 문항',continue_on:'no'}]}},
+      irreversible:false,requires:['fraud_answers']}};
+  ui.state.served = {'/jobs/review':job}; ui.state.acceptPosts = true;
+  ui.ctx.track = async () => null;
+  await ui.actions['transfer-open'](ui.ctx, {dataset:{job:'review'}});
+  const form = ui.document.querySelector('#confirm-form');
+  assert.equal(form.querySelectorAll('input[type=radio]').length,0);
+  assert.doesNotMatch(ui.document.querySelector('#dialog-content').textContent,/합성 문항|진단표/);
+  assert.equal(form.querySelector('button[type=submit]').disabled,false);
+  form.dispatchEvent(new ui.document.defaultView.Event('submit',{bubbles:true,cancelable:true}));
+  await new Promise(resolve=>setTimeout(resolve,0));
+  assert.deepEqual(ui.posted,['/jobs/review/confirm']);
+  assert.equal(ui.state.lastPostedBody.confirmation,'review-digest');
+  assert.equal('fraud_answers' in ui.state.lastPostedBody.secrets,false);
+});
+
+test('duplicate review shows recipient review and preparation wording before final execution', async t => {
+  const ui = await setup(t);
+  ui.state.served = {'/jobs/review':{id:'review',name:'hana.transfer.prepare',login_id:'login',status:'awaiting_input',
+    awaiting:{preview:{recipient_name:'합성 수취인',amount_krw:100,review:{kind:'duplicate',message:'중복 확인 안내'}},requires:[]}}};
+  await ui.actions['transfer-open'](ui.ctx,{dataset:{job:'review'}});
+  const content = ui.document.querySelector('#dialog-content').textContent;
+  assert.match(content,/중복 이체 확인/);
+  assert.match(content,/합성 수취인/);
+  assert.match(content,/중복 확인 안내/);
+  assert.match(content,/확인 후 준비 계속/);
+  assert.doesNotMatch(content,/되돌릴 수 없음/);
 });

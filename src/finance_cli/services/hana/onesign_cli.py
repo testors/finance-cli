@@ -6,7 +6,7 @@ import re
 import sys
 import warnings
 
-from . import onesign, onesign_setup, onesign_bundle, onesign_transfer, onesign_multi_transfer
+from . import onesign, onesign_setup, onesign_bundle, onesign_transfer, onesign_multi_transfer, transfer_review
 from .onesign_state import State, remove_identity, rename_identity
 from .onesign_crypto import require
 
@@ -56,7 +56,14 @@ def inputs():
         'account_password':lambda *args:hidden('계좌 비밀번호 4자리: '),
         'new_pin':lambda:(hidden('새 하나인증서 PIN 6자리: '),hidden('새 PIN 확인: ')),
         'confirm_issue':lambda:text('하나인증서를 새로 발급하려면 "발급" 입력: ')=='발급',
-        'pin':lambda:hidden('하나인증서 PIN 6자리: '),'confirm':confirm_transfer}
+        'pin':lambda:hidden('하나인증서 PIN 6자리: '),'confirm':confirm_transfer,
+        'confirm_duplicate':confirm_duplicate}
+
+
+def confirm_duplicate(preview):
+    print(json.dumps({k:v for k,v in preview.items() if k!='review'},ensure_ascii=False,indent=2),file=sys.stderr)
+    print(transfer_review.DUPLICATE_MESSAGE,file=sys.stderr)
+    return text('이체 준비를 계속하려면 "계속" 입력 (아직 송금하지 않음): ')=='계속'
 
 
 def confirm_transfer(preview):
@@ -159,7 +166,7 @@ def add_parsers(sub,onesign_sub):
     transfer=sub.add_parser('transfer',help='하나인증서 원화 이체: 준비→내용 확인·전송→결과 대조').add_subparsers(dest='action',required=True)
     item=transfer.add_parser('check-batch',help='개인 다계좌 이체 CSV 1~15건 검사; 접속·인증서 접근 없음')
     item.add_argument('--input',type=Path,required=True)
-    for action in ('prepare','prepare-batch','show','execute','reconcile'):
+    for action in ('prepare','prepare-batch','continue','show','execute','reconcile'):
         item=transfer.add_parser(action)
         common(item)
         item.add_argument('--transaction',help='선택: 이체 기록 이름; 준비 시 자동 생성, 조회·실행 시 유일한 기록 선택')

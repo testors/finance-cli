@@ -46,6 +46,7 @@ for args, source in (
     (['hana','corporate','transfer','cancel'], ''),
     (['hana','onesign','enroll','--name','synthetic','--run','plan'], ''),
     (['hana','transfer','execute','--name','synthetic','--session','s','--transaction','p','--run','plan'], ''),
+    (['--format','json-v1','hana','transfer','continue','--name','synthetic'], ''),
     (['giro','request','national.list'], ''),
     (['giro','runtime','check'], ''),
     (['giro','auth','login'], ''),

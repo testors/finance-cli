@@ -11,7 +11,7 @@ HANA_LEVEL = 'live_partial'
 PREFLIGHT_NOTE = '하나인증서 조회 성공 확인. 재로그인 후 계좌 자동 확인은 합성 검증 완료, 실사용 재확인 전.'
 HISTORY_NOTE = ('하나인증서 조회 성공 확인(한 페이지씩 조회하던 때의 기록). 최근·과거 구간과 다음 페이지를 한 작업에서 이어 받는 '
                 '통합 조회와 재로그인 후 계좌 자동 확인은 합성 검증 완료, 실사용 재확인 전.')
-TRANSFER_NOTE = '은행의 이체 실행 성공 응답 확인. 연결된 결과 상세도 조회했으나 최종 이체 확정은 미확인.'
+TRANSFER_NOTE = '은행의 이체 실행 성공 응답 확인. 연결된 결과 상세도 조회했으나 최종 이체 확정은 미확인. 중복 확인·금융사기 문진 자동 확인은 구현·합성 검증했으며 실사용 미확인.'
 
 HANA_JOBS = {
     'hana.onesign.login': ('live_verified', '하나인증서 서명 로그인 성공 확인.'),
@@ -62,7 +62,7 @@ def hana_report():
             'jobs': {name: hana_job(name) for name in HANA_JOBS},
             'unverified': ['joint-certificate-paths', 'login-extension-web-job', 'history-next-page-and-export',
                            'transfer-history-detail', 'security-queries-other-than-onesign-limits',
-                           'final-transfer-confirmation', 'fresh-session-account-preflight',
+                           'final-transfer-confirmation', 'duplicate-confirmation-and-automatic-fraud-acknowledgement', 'fresh-session-account-preflight',
                            'all-issuance-and-transfer-authentication-branches']}
 
 
