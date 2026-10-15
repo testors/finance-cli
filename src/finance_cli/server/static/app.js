@@ -1,5 +1,4 @@
-/* Finance web app shell: access, profiles, areas, navigation and job plumbing.
-   The business profile is per tab (sessionStorage) and never a server-wide choice. */
+/* Finance web app shell: access, areas, navigation and job plumbing. */
 import {api, ApiError, follow, submit, TERMINAL} from './api.js';
 import * as busy from './busy.js';
 import * as ui from './ui.js';
@@ -54,8 +53,8 @@ function storeLocal(key, value) {
 }
 
 export const state = {
-  server: null, profiles: [], logins: [], targets: [], credentials: [], capabilities: null,
-  profileId: stored('profile', 'all'), mode: stored('mode', 'tax'), view: null, lastViews: stored('views', {}),
+  server: null, logins: [], targets: [], credentials: [], capabilities: null,
+  mode: stored('mode', 'tax'), view: null, lastViews: stored('views', {}),
   token: 0, cache: new Map(), params: {}, rows: {}, hidden: false, vaults: {},
   autoExtend: storedLocal('autoExtend', false) === true,
 };
@@ -73,34 +72,24 @@ function navigation(mode) {
   });
 }
 
-export function profile() {
-  return state.profileId === 'all' ? null : state.profiles.find(p => p.id === state.profileId) || null;
-}
-
-/* Targets and logins visible in this tab's profile. "전체" shows everything. */
+/* All enabled targets and logins are available, without a business-profile filter. */
 export function scopeTargets(kinds) {
-  const current = profile();
-  return state.targets.filter(t => !t.disabled && (!kinds || kinds.includes(t.kind))
-    && (!current || current.target_ids.includes(t.id)));
+  return state.targets.filter(t => !t.disabled && (!kinds || kinds.includes(t.kind)));
 }
 export function scopeLogins(institution) {
-  const current = profile();
-  const ids = new Set(scopeTargets().map(t => t.login_id));
-  return state.logins.filter(l => l.institution === institution && !l.disabled && (!current || ids.has(l.id)));
+  return state.logins.filter(l => l.institution === institution && !l.disabled);
 }
 export function login(id) { return state.logins.find(l => l.id === id) || null; }
 export function target(id) { return state.targets.find(t => t.id === id) || null; }
 
-function viewKey() { return `${state.profileId}:${state.mode}`; }
+function viewKey() { return `all:${state.mode}`; }
 
 export async function refreshModel() {
-  const [profiles, , targets, capabilities, vaults] = await Promise.all([
-    api.get('/profiles'), refreshLogins(), api.get('/targets'), api.get('/capabilities'), api.get('/vaults')]);
+  const [, targets, capabilities, vaults] = await Promise.all([
+    refreshLogins(), api.get('/targets'), api.get('/capabilities'), api.get('/vaults')]);
   state.vaults = Object.fromEntries(vaults.vaults.map(v => [v.name, v.unlocked]));
-  state.profiles = profiles.profiles;
   state.targets = targets.targets;
   state.capabilities = capabilities;
-  if (state.profileId !== 'all' && !state.profiles.some(p => p.id === state.profileId && !p.disabled)) setProfile('all');
   scheduleExtensions();
 }
 
@@ -355,12 +344,6 @@ function usesBankSession(name) {
     && !['giro.bills.parse', 'giro.readiness', 'hometax.report.resave'].includes(name);
 }
 
-export function setProfile(id) {
-  state.profileId = id;
-  store('profile', id);
-  state.token += 1;  // Late answers for the previous profile are dropped.
-}
-
 function title() {
   const entry = [...Object.values(AREAS).flatMap(a => a.items), ...COMMON].find(i => i[0] === state.view);
   return entry ? entry[1] : NESTED[state.view]?.[2] || 'Finance';
@@ -379,11 +362,6 @@ function renderChrome() {
   document.querySelector('.bottom-nav').innerHTML = items.filter(e => e.available).slice(0, 4).map(e => item(e, true)).join('')
     + `<button class="nav-item" data-ui="more" aria-haspopup="dialog">${ui.icon('grid')}<span>전체 메뉴</span></button>`;
   document.querySelector('#stage').dataset.workspace = state.mode;
-  const current = profile();
-  const name = current ? current.name : '전체';
-  const kind = current ? (ui.KIND[current.kind] || '유형 미설정') : '모든 대상';
-  document.querySelector('.profile-switch').innerHTML = `<span class="profile-mark">${ui.esc([...name][0] || 'F')}</span><span><strong>${ui.esc(name)}</strong><small>${ui.esc(kind)}</small></span>${ui.icon('chevrons')}`;
-  document.querySelector('.profile-switch').setAttribute('aria-label', `업무 프로필 변경: ${name} · ${kind}`);
   document.querySelector('#server-mode').textContent = state.server?.mode === 'proxy' ? '원격' : '로컬';
   document.querySelector('#footer').textContent = '업무는 서버의 작업으로 실행되며, 연결이 끊겨도 작업은 취소되지 않아요.';
   document.title = `Finance — ${title()}`;
@@ -521,7 +499,7 @@ function makeContext(token) {
     state, token, after: [], params: state.params,
     current: () => context.token === state.token,
     later: fn => context.after.push(fn),
-    render, changeView, scopeTargets, scopeLogins, login, target, profile, feature, askSecrets,
+    render, changeView, scopeTargets, scopeLogins, login, target, feature, askSecrets,
     async refresh() { await refreshModel(); await render(); },
     /* Submit a job and follow it. The screen is held from the press until the job is over or waits
        for the user; the job's own line also goes to the element with the given id. */
@@ -531,7 +509,7 @@ function makeContext(token) {
         if (usesBankSession(name) && !await ensureBankSession(context, fields.login_id)) return null;
         held = busy.hold(jobTitle(name));
         held.update('접수 중');
-        job = await submit(name, {...fields, ...(secrets ? {secrets} : {}), profile_id: profile()?.id || undefined});
+        job = await submit(name, {...fields, ...(secrets ? {secrets} : {})});
       } catch (error) {
         held?.release();
         if (error.code === 'session_idle_expired') {
@@ -603,7 +581,7 @@ export async function showJob(id) {
     ['작업', job.title], ['진행 상태', ui.STATUS[job.status]?.[0] || job.status],
     ['업무 결과', ui.outcomeLabel(job)[0]], ['요청한 곳', ui.ORIGIN[job.origin] || job.origin],
     ['로그인', fixed.login?.display_name], ['대상', fixed.target ? `${fixed.target.display_name} (${ui.KIND[fixed.target.kind] || fixed.target.kind})` : null],
-    ['프로필', fixed.profile?.name], ['접수 시각', ui.time(job.created_at)], ['기관 응답 시각', ui.time(job.observed_at)],
+    ['접수 시각', ui.time(job.created_at)], ['기관 응답 시각', ui.time(job.observed_at)],
     ['지원 상태', ui.VERIFICATION[job.verification]?.[0]],
   ].filter(([, v]) => v);
   const artifacts = (job.artifacts || []).map(a => `<div class="setting-row"><span>${ui.esc(a.filename)}${a.complete === 0 ? ' · 확인 필요' : a.complete === 1 ? ' · 완전' : ''}</span><span class="row-actions">${a.media_type.startsWith('text/html') ? `<button class="text-button" data-action="preview-artifact" data-artifact="${ui.esc(a.id)}">보기</button>` : ''}<a class="text-button" href="/api/v1/artifacts/${encodeURIComponent(a.id)}">${ui.icon('download')}저장</a></span></div>`).join('');
@@ -612,11 +590,6 @@ export async function showJob(id) {
   // A prepared transfer is confirmed on the login session it was prepared in, not after a newer login.
   const resume = job.name === 'hana.transfer.prepare' && job.status === 'awaiting_input' && job.session_id === login(job.login_id)?.current_session_id;
   ui.showDialog('작업 상세', `<div class="summary-lines">${lines.map(([k, v]) => `<div class="summary-line"><span>${ui.esc(k)}</span><strong>${ui.esc(v)}</strong></div>`).join('')}</div>${job.local?.stopped ? `<p class="dialog-note">${ui.message(job.local.stopped)}</p>` : ''}${ui.details('기관 판정 (원문 필드)', job.service_verdict)}${ui.details('결과 재조회', job.reconciliation)}${ui.details('로컬 처리 상태', job.local)}${ui.details('처리 순서', job.events?.map(e => ({시각: ui.time(e.at), 단계: e.kind, ...e.detail})))}${artifacts ? `<div class="settings-body">${artifacts}</div>` : ''}<div class="dialog-actions">${cancellable ? `<button class="button secondary" data-action="cancel-job" data-job="${ui.esc(job.id)}">작업 취소</button>` : ''}${job.name === 'giro.payment.prepare' ? `<button class="button secondary" data-action="giro-payment-open" data-job="${ui.esc(job.id)}">${job.status === 'awaiting_input' ? '납부 내용 확인' : '납부 결과 보기'}</button>` : ''}${job.name === 'hana.corporate.transfer.prepare' ? `<button class="button secondary" data-action="corporate-transfer-open" data-job="${ui.esc(job.id)}">${job.status === 'awaiting_input' ? '이체 이어하기' : '이체 결과 보기'}</button>` : ''}${resume ? `<button class="button secondary" data-action="transfer-open" data-job="${ui.esc(job.id)}">이체 이어하기</button>` : ''}${reconcile ? `<button class="button secondary" data-action="reconcile" data-job="${ui.esc(job.id)}">이체 결과 조회</button>` : ''}<button class="button primary" data-ui="close">닫기</button></div>`, {wide: true});
-}
-
-function chooseProfile() {
-  const option = (id, name, kind) => `<button data-profile="${ui.esc(id)}" class="mode-option ${id === state.profileId ? 'selected' : ''}"><span class="workspace-icon">${ui.icon(id === 'all' ? 'grid' : 'business')}</span><span><strong>${ui.esc(name)}</strong><small>${ui.esc(kind)}</small></span>${id === state.profileId ? ui.icon('check') : ui.icon('arrow')}</button>`;
-  ui.showDialog('업무 프로필', `<div class="mode-options">${option('all', '전체', '모든 대상')}${state.profiles.filter(p => !p.disabled).map(p => option(p.id, p.name, ui.KIND[p.kind] || '유형 미설정')).join('')}</div><p class="dialog-note">프로필 전환은 이 탭의 표시 대상만 바꿔요. 다른 탭·기기와 진행 중인 작업은 그대로예요.</p><div class="dialog-actions"><button class="button secondary" data-view="settings">프로필 관리</button></div>`);
 }
 
 function moreMenu() {
@@ -676,15 +649,8 @@ document.addEventListener('click', async event => {
   }
   // Only an area tab switches area; other buttons may carry their own mode value for an action.
   if (target.matches('.area-tab') && AREAS[target.dataset.mode]) { changeMode(target.dataset.mode); return; }
-  if (target.dataset.profile) {
-    setProfile(target.dataset.profile);
-    ui.closeDialog();
-    changeView(state.lastViews[viewKey()] || state.view || AREAS[state.mode].home);
-    return;
-  }
   switch (target.dataset.ui) {
     case 'close': ui.closeDialog(); return;
-    case 'choose-profile': chooseProfile(); return;
     case 'more': moreMenu(); return;
     case 'reload': location.reload(); return;
   }

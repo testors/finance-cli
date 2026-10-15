@@ -1,7 +1,7 @@
 /* Corporate banking uses shared credentials, with separate logins and accounts. */
 import {api} from './api.js';
 import * as ui from './ui.js';
-import {state, login, target, profile, scopeLogins, scopeTargets, refreshModel, render, changeView, jobState,
+import {state, login, target, scopeLogins, scopeTargets, refreshModel, render, changeView, jobState,
   secretFields, rememberField, applyRemember, onesignStore, SECRET_LABELS} from './app.js';
 
 const {esc, button, heading, note, tag} = ui;
@@ -91,12 +91,11 @@ async function accountsView(ctx) {
   const logins = scopeLogins('hana_corporate');
   const intro = heading('기업 계좌', '계좌를 누르면 거래내역으로 이동해요.',
     logins.length ? button('다른 ID·인증서로 로그인', 'data-action="corporate-login-add"') : '');
-  if (!logins.length) return intro + `<section class="panel"><div class="empty-state">${profile() ? '이 프로필에 기업 계좌가 없어요. 전체에서 로그인하고 조회한 계좌를 선택하세요.' : 'ID/PW 또는 보관한 인증서로 바로 로그인하세요.'}<div class="section-actions">${button('기업뱅킹 로그인', 'data-action="corporate-login-add"', 'primary')}</div></div></section>`;
+  if (!logins.length) return intro + `<section class="panel"><div class="empty-state">ID/PW 또는 보관한 인증서로 바로 로그인하세요.<div class="section-actions">${button('기업뱅킹 로그인', 'data-action="corporate-login-add"', 'primary')}</div></div></section>`;
   const panels = await Promise.all(logins.map(async row => {
     const job = await latest('accounts', row.id, 'login_id');
-    const allowed = new Set(accounts().map(t => t.id));
     const mapping = job?.result?.candidate_targets || {};
-    const rows = (job?.result?.accounts || []).filter(a => !profile() || allowed.has(mapping[a.ref]));
+    const rows = job?.result?.accounts || [];
     const live = row.readiness === 'ready';
     // A linked account opens its transaction history; the row itself is the control.
     const line = a => {

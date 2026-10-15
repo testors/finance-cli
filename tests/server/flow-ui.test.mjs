@@ -11,7 +11,7 @@ const sleep = ms => new Promise(resolve => setTimeout(resolve, ms));
 const TITLES = {'hana.onesign.login': '하나은행 하나인증서 로그인', 'hana.onesign.accounts': '하나은행 계좌 목록·잔액',
   'hana.transfer.prepare': '원화 이체', 'hometax.login': '홈택스 로그인'};
 
-async function boot(t, {mode = 'banking', view = 'accounts', loggedIn = false} = {}) {
+async function boot(t, {mode = 'banking', view = 'accounts', loggedIn = false, savedProfile = null} = {}) {
   const html = (await readFile(new URL('index.html', root), 'utf8')).replace(/<script[^>]*><\/script>/, '');
   const dom = new JSDOM(html, {url: 'http://127.0.0.1:8740/#' + view, runScripts: 'outside-only'});
   t.after(() => dom.window.close());
@@ -23,8 +23,9 @@ async function boot(t, {mode = 'banking', view = 'accounts', loggedIn = false} =
   const timeout = w.setTimeout.bind(w);
   context.setTimeout = (fn, ms, ...rest) => timeout(fn, ms >= 600 && ms <= 3100 ? 5 : ms, ...rest);   // only job polling is hurried
   w.sessionStorage.setItem('finance.mode', JSON.stringify(mode));
+  if (savedProfile) w.sessionStorage.setItem('finance.profile', JSON.stringify(savedProfile));
   const now = () => Date.now() / 1000, session = () => ({last_request_at: now(), idle_expires_at: now() + 590});
-  const server = {jobs: new Map(), requests: [], serial: 0, delay: 60,
+  const server = {jobs: new Map(), requests: [], submissions: [], serial: 0, delay: 60,
     logins: [{id: 'bank', institution: 'hana', method: 'onesign', readiness: loggedIn ? 'ready' : 'login_required', display_name: '합성 하나인증서',
       credential: {ref: 'main'}, current_session_id: loggedIn ? 's0' : null, session: loggedIn ? session() : null, disabled: false, revision: 1, signing: {}},
     {id: 'tax', institution: 'hometax', method: 'joint_certificate', readiness: 'login_required', display_name: '합성 홈택스',
@@ -45,12 +46,15 @@ async function boot(t, {mode = 'banking', view = 'accounts', loggedIn = false} =
   const route = async (method, path, body) => {
     server.requests.push(method + ' ' + path);
     if (path === '/auth/state') return [200, {enrolled: true, csrf_token: 'synthetic', mode: 'local'}];
+    if (path === '/profiles') return [200, {profiles: [{id: 'legacy', name: '예전 업무 묶음', target_ids: [], disabled: false}]}];
+    if (path.startsWith('/artifacts?')) return [200, {artifacts: []}];
     if (path === '/logins') return [200, {logins: server.logins, server_time: now()}];
     if (path === '/targets') return [200, {targets: server.targets}];
     if (path === '/capabilities') return [200, {features, jobs: []}];
     if (path === '/vaults') return [200, {vaults: [{name: 'main', unlocked: true}]}];
     if (path.startsWith('/jobs?')) return [200, {jobs: []}];
     if (path === '/jobs' && method === 'POST') {
+      server.submissions.push(body);
       await sleep(server.delay);
       const job = {id: 'job' + (++server.serial), name: body.name, title: TITLES[body.name], status: 'queued', outcome: 'not_started',
         login_id: body.login_id, target_id: body.target_id || null, created_at: now(), local: {}, fixed: {}, attempt: {}, awaiting: null};
@@ -219,4 +223,37 @@ test('transfer amount inputs format through the app while account numbers and re
   amount.dispatchEvent(new w.CompositionEvent('compositionend', {bubbles: true}));
   assert.equal(amount.value, '1,234');
   assert.equal(ui.server.requests.length, before);
+});
+
+
+test('a saved business profile cannot hide targets, filter history, or attach itself to new jobs', async t => {
+  const ui = await boot(t, {savedProfile: 'legacy'});
+  assert.equal(ui.document.querySelector('[data-ui="choose-profile"]'), null);
+  assert.deepEqual(Array.from(ui.app.scopeTargets(), row => row.id), ['account', 'person']);
+  assert.deepEqual(Array.from(ui.app.scopeLogins('hana'), row => row.id), ['bank']);
+  assert.match(ui.text(ui.document.querySelector('#main')), /합성 하나인증서/);
+  ui.press('로그인');
+  await sleep(10);
+  ui.type({pin: '000000'});
+  ui.submit('#secret-form');
+  await sleep(100);
+  assert.equal(ui.server.submissions.length, 1);
+  assert.equal(Object.hasOwn(ui.server.submissions[0], 'profile_id'), false);
+  ui.server.finish();
+  await sleep(120);
+  ui.server.finish({result: {accounts: []}});
+  await sleep(120);
+
+  ui.app.changeView('activity', {scope: 'profile'});
+  await sleep(40);
+  assert.equal(ui.document.querySelector('[data-action="activity-scope"]'), null);
+  ui.app.changeView('reports');
+  await sleep(40);
+  assert.ok(ui.server.requests.includes('GET /artifacts?kind=hometax_report'));
+  assert.ok(ui.server.requests.every(request => !request.includes('profile_id')));
+  ui.app.changeView('settings');
+  await sleep(40);
+  assert.doesNotMatch(ui.text(ui.document.querySelector('#main')), /업무 프로필|프로필 추가/);
+  assert.equal(ui.document.querySelector('[data-action="new-profile"], [data-action="edit-profile"]'), null);
+  assert.ok(ui.server.requests.every(request => !request.includes('/profiles')));
 });
