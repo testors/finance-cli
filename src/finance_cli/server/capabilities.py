@@ -5,7 +5,10 @@ server-managed local tool, or as planned. ``available`` never promises a live
 login or a verified target; the server re-checks readiness when a job runs.
 """
 from . import adapters, model
-from finance_cli.core.live_verification import HANA_FEATURE_NOTES, REVIEWED_ON, GIRO_REVIEWED_ON, combined_level, hana_job, giro_job
+from finance_cli.core.live_verification import (
+    HANA_FEATURE_NOTES, REVIEWED_ON, GIRO_REVIEWED_ON, CORPORATE_REVIEWED_ON, HOMETAX_REVIEWED_ON,
+    combined_level, hana_job, giro_job, corporate_job, hometax_job,
+)
 
 FEATURES = (
     # area, id, title, placement, jobs
@@ -78,7 +81,7 @@ def verification_levels():
     from finance_cli.cli.main import capabilities
     services = capabilities()['services']
     return {'hana': services['hana']['verification'], 'hana_corporate': 'live_partial',
-            'hometax': 'live_verified' if services['hometax'].get('migration_live_tested') else 'live_untested',
+            'hometax': services['hometax']['verification'],
             'giro': services['giro']['verification']}
 
 
@@ -127,15 +130,19 @@ def feature_state(feature, levels, cache):
             row['jobs'].append({**adapter.describe(), 'status': 'setup_required' if reasons else 'available',
                                 'reasons': reasons, **(hana_job(adapter.name) if adapter.service == 'hana'
                                                       else giro_job(adapter.name) if adapter.service == 'giro'
+                                                      else corporate_job(adapter.name) if adapter.service == 'hana_corporate'
+                                                      else hometax_job(adapter.name) if adapter.service == 'hometax'
                                                       else {'verification': adapter.verification or levels.get(adapter.service)})})
             if reasons:
                 row['status'] = 'setup_required'
                 row['reasons'] = sorted(set(row['reasons']) | set(reasons))
     service = next((r.service for r in registered if r), {'banking': 'hana', 'tax': 'hometax', 'giro': 'giro'}.get(area))
     row['verification'] = levels.get(service)
-    if service == 'hana_corporate':
-        row['verification'] = combined_level(j['verification'] for j in row['jobs'])
-        row['verification_note'] = '웹 경로는 합성 검증했습니다. ID/PW의 실사용 확인은 기존 CLI 로그인 기록 기준이며 인증서 로그인·이체의 웹 실사용은 미확인입니다.'
+    if service in ('hana_corporate', 'hometax'):
+        row['verification'] = (None if placement == 'planned' else 'offline' if placement == 'local' else
+                               combined_level(j['verification'] for j in row['jobs']))
+        row['verification_reviewed_at'] = CORPORATE_REVIEWED_ON if service == 'hana_corporate' else HOMETAX_REVIEWED_ON
+        row['verification_note'] = ' '.join(dict.fromkeys(j['verification_note'] for j in row['jobs']))
     if service == 'giro':
         row['verification'] = combined_level(j['verification'] for j in row['jobs'])
         row['verification_reviewed_at'] = GIRO_REVIEWED_ON
@@ -154,7 +161,7 @@ def global_capabilities():
     levels = verification_levels()
     cache = {}
     return {'features': [feature_state(f, levels, cache) for f in FEATURES], 'verification': levels,
-            'verification_reviewed_at': max(REVIEWED_ON, GIRO_REVIEWED_ON),
+            'verification_reviewed_at': max(REVIEWED_ON, GIRO_REVIEWED_ON, CORPORATE_REVIEWED_ON, HOMETAX_REVIEWED_ON),
             'jobs': adapters.names(), 'states': ['available', 'setup_required', 'planned', 'local_only'],
             'readiness': ['ready', 'query_only', 'login_required', 'input_required', 'target_unverified']}
 

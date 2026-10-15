@@ -59,7 +59,10 @@ def local(value):
 class Corporate(Adapter):
     service = 'hana_corporate'
     area = 'corporate'
-    verification = 'live_untested'
+    @property
+    def verification(self):
+        from finance_cli.core.live_verification import corporate_job
+        return corporate_job(self.name)['verification']
     methods = ('id_password', 'joint_certificate', 'onesign')
 
     def ready(self, connection):
@@ -114,7 +117,6 @@ class PasswordLogin(Login):
     name = 'hana.corporate.login-idpw'
     title = '하나기업뱅킹 ID/PW 로그인'
     methods = ('id_password',)
-    verification = 'live_verified'
     steps = {'run': Step('run', secrets=('login_password',))}
 
 

@@ -325,6 +325,10 @@ def public(con, job, *, listing=False):
     if adapter and adapter.service == 'giro':
         from finance_cli.core.live_verification import giro_job
         value.update(giro_job(job['name']))
+    if adapter and adapter.service in ('hana_corporate', 'hometax'):
+        from finance_cli.core.live_verification import corporate_job, hometax_job
+        evidence = corporate_job if adapter.service == 'hana_corporate' else hometax_job
+        value.update(evidence(job['name']))
     if job['name'].startswith('cli.'):
         value['command'] = snapshot.get('command')
     attempt = loads(job['attempt'], {})

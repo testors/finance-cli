@@ -308,7 +308,10 @@ class HometaxAdapter(Adapter):
     service = 'hometax'
     area = 'tax'
     capability = 'hometax'
-    verification = 'live_untested'
+    @property
+    def verification(self):
+        from finance_cli.core.live_verification import hometax_job
+        return hometax_job(self.name)['verification']
     uses_session = True
 
     def resources(self, ctx, step):

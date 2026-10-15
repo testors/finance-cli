@@ -14,7 +14,7 @@ def output(value):
 
 def capabilities():
     from giro.bill_catalog import catalog as giro_bill_catalog
-    from finance_cli.core.live_verification import HANA_LEVEL, REVIEWED_ON, hana_report, giro_report
+    from finance_cli.core.live_verification import HANA_LEVEL, REVIEWED_ON, hana_report, giro_report, corporate_report, hometax_report
     return {'schema_version': 1, 'services': {
         'hana': {'offline': ['protocol', 'shared-certificate-login-signature', 'onesign-vault-bundle',
                             'user-package-settings-extraction', 'onesign-identity-initialization', 'onesign-identity-removal', 'onesign-identity-rename', 'personal-transfer-csv-check'],
@@ -29,7 +29,7 @@ def capabilities():
                                     'csv': True, 'partial_results': True, 'automatic_retry': False,
                                     'not_included': ['scheduled and recurring transfers', 'MMDA', 'open banking',
                                                      'additional OTP/ARS authentication', 'web batch entry']},
-                 'session_extension': {'onesign': 'live_partial', 'joint_certificate': 'implemented_live_untested',
+                 'session_extension': {'onesign': 'live_verified', 'joint_certificate': 'implemented_live_untested',
                                        'idle_limit_observed_seconds': {'kept_after': 595, 'ended_after': 600},
                                        'automatic_retry': False},
                  'requirements': ['user-supplied service settings for version 1.0.27',
@@ -39,12 +39,7 @@ def capabilities():
                                   'financial certificate issuance', 'OTP and limit changes'],
                  'live_tested': False, 'verification': HANA_LEVEL, 'live_verification': hana_report(),
                  'corporate': {'command': 'fin hana corporate', 'verification': 'live_partial', 'live_tested': False,
-                    'live_verification': {'reviewed_at': '2026-10-10', 'source': 'user_reported_cli_output_and_saved_session_trial',
-                        'live_tested_scope': 'all_supported_remote_paths',
-                        'verified': ['id-password-login', 'saved-session-reuse', 'login-extension'],
-                        'unverified': ['joint-certificate-login', 'sole-proprietor-onesign-login',
-                                       'accounts', 'ledger-history', 'krw-transfer', 'krw-batch-transfer'],
-                        'note': 'ID/PW 로그인·출금계좌 정보·고객 확인 후속 응답과 세션 저장 성공 확인. 저장한 ID/PW 세션의 재사용과 로그인 연장의 은행 수락·세션 유지, 끝난 세션의 연장 거절 응답 확인(2026-10-10; 요청 없이 605초 뒤 유지, 610초 뒤 종료). 관측한 로그인 경로에 한함.'},
+                    'live_verification': corporate_report(),
                     'session_extension': {'verification': 'live_partial', 'server_session_timeout_minutes_reported': 10,
                                           'web_idle_limit': 'server_session_timeout',
                                           'idle_limit_observed_seconds': {'kept_after': 605, 'ended_after': 610},
@@ -72,6 +67,7 @@ def capabilities():
                     'session_extension': {'command': 'fin hometax session extend', 'method': 'session-check',
                                           'verification': 'implemented_live_untested',
                                           'extension_effect': 'idle_limit_reset_observed'},
+                    'verification': 'live_partial', 'live_verification': hometax_report(),
                     'migration_live_tested': False},
         'giro': {'offline': ['auth-plan', 'registration-plan', 'request-plan', 'bills', 'payment-accounts', 'payment-plan',
                             'payment-result', 'certificate-validation', 'codeguard'],
@@ -107,7 +103,7 @@ def capabilities():
                          'session_storage': 'isolated encrypted web sessions',
                          'payment_reservation': 'shared with CLI', 'automatic_login_or_retry': False},
                 'binding': 'loopback', 'remote_access': 'https reverse proxy', 'live_tested': False,
-                'verification': HANA_LEVEL, 'verification_scope': 'hana-onesign',
+                'verification': HANA_LEVEL, 'verification_scope': 'reviewed-institution-paths',
                 'verification_reviewed_at': REVIEWED_ON},
         'network_used': False}
 

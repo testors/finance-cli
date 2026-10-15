@@ -20,7 +20,7 @@ class CapabilityTests(ServerCase):
         self.assertEqual(states['giro-live']['status'], 'available')
         self.assertEqual(states['giro-live']['verification'], 'live_partial')
         self.assertEqual(states['hana-issuance']['status'], 'available')
-        self.assertEqual(states['hometax-tax']['verification'], 'live_untested')
+        self.assertEqual(states['hometax-tax']['verification'], 'live_partial')
         self.assertEqual(states['giro-bills']['verification'], 'offline')
         from finance_cli.cli.main import capabilities as cli_capabilities
         from finance_cli.core.live_verification import giro_job
@@ -62,7 +62,7 @@ class CapabilityTests(ServerCase):
         self.assertEqual(states['hana-accounts']['verification'], 'live_partial')
         self.assertEqual(states['hana-issuance']['verification'], 'live_verified')
         self.assertEqual(states['hana-extend']['verification'], 'live_partial')
-        self.assertEqual(jobs['hana.onesign.session.extend']['verification'], 'live_partial')
+        self.assertEqual(jobs['hana.onesign.session.extend']['verification'], 'live_verified')
         self.assertEqual(jobs['hana.session.extend']['verification'], 'live_untested')
         self.assertEqual(jobs['hana.onesign.accounts']['verification'], 'live_verified')
         self.assertEqual(jobs['hana.accounts.list']['verification'], 'live_untested')
@@ -71,7 +71,8 @@ class CapabilityTests(ServerCase):
         self.assertEqual(jobs['hana.onesign.inquiry.detail']['verification'], 'live_untested')
         self.assertEqual(jobs['hana.onesign.history.list']['verification'], 'live_partial')
         self.assertIn('통합 조회', jobs['hana.onesign.history.list']['verification_note'])
-        self.assertIn('실사용 재확인 전', jobs['hana.onesign.history.list']['verification_note'])
+        self.assertIn('최근 구간 완료', jobs['hana.onesign.history.list']['verification_note'])
+        self.assertIn('과거 구간·다음 페이지 연결은 실사용 미확인', jobs['hana.onesign.history.list']['verification_note'])
         self.assertEqual(jobs['hana.onesign.security.query']['verification'], 'live_partial')
         self.assertIn('이체한도 조회 성공 확인', jobs['hana.onesign.security.query']['verification_note'])
         self.assertEqual(jobs['hana.transfer.prepare']['verification'], 'live_partial')
@@ -82,11 +83,38 @@ class CapabilityTests(ServerCase):
             self.assertEqual(jobs[name]['verification'], evidence['verification'])
             self.assertEqual(adapters.get(name).verification, evidence['verification'])
         self.assertFalse(cli_capabilities()['services']['hana']['live_tested'])
-        self.assertEqual(states['hometax-login']['verification'], 'live_untested')
+        self.assertEqual(states['hometax-login']['verification'], 'live_partial')
         self.assertEqual((states['hometax-extend']['placement'], states['hometax-extend']['verification']),
                          ('settings', 'live_untested'))
         for feature in ('joint-issuance', 'financial-issuance', 'hana-otp-limit'):
             self.assertEqual(states[feature]['status'], 'planned')
+        self.assertEqual(self.get('/jobs').json()['jobs'], [])
+
+    def test_reviewed_tax_and_corporate_jobs_match_cli_without_promoting_other_paths(self):
+        from finance_cli.cli.main import capabilities as cli_capabilities
+        self.enroll()
+        value = self.get('/capabilities').json()
+        features = {f['id']: f for f in value['features']}
+        jobs = {j['name']: j for f in value['features'] for j in f['jobs']}
+        services = cli_capabilities()['services']
+        for report in (services['hana']['corporate']['live_verification'],
+                       services['hometax']['live_verification']):
+            for name, evidence in report['jobs'].items():
+                self.assertEqual(jobs[name]['verification'], evidence['verification'])
+                self.assertEqual(jobs[name]['verification_note'], evidence['verification_note'])
+                self.assertEqual(adapters.get(name).verification, evidence['verification'])
+        for name in ('hana.corporate.login-idpw', 'hana.corporate.accounts', 'hometax.login',
+                     'hometax.targets.discover', 'hometax.tax.dues', 'hometax.tax.payments', 'hometax.tax.refunds'):
+            self.assertEqual(jobs[name]['verification'], 'live_verified')
+        for name in ('hana.corporate.login', 'hana.corporate.login-onesign', 'hana.corporate.transfer.prepare',
+                     'hometax.tax.notices', 'hometax.invoice.detail', 'hometax.invoice.prepare', 'hometax.session.extend'):
+            self.assertEqual(jobs[name]['verification'], 'live_untested')
+        self.assertEqual(features['corporate-accounts']['verification'], 'live_verified')
+        self.assertEqual(features['corporate-history']['verification'], 'live_partial')
+        self.assertEqual(features['hometax-tax']['verification'], 'live_partial')
+        self.assertIn('빈 목록', jobs['hometax.invoice.list']['verification_note'])
+        self.assertIn('웹 관세', jobs['giro.bills.list']['verification_note'])
+        self.assertFalse(services['hometax']['migration_live_tested'])
         self.assertEqual(self.get('/jobs').json()['jobs'], [])
 
     def test_credential_usage_is_reported_and_blocks_removal(self):
