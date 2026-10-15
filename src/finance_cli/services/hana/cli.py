@@ -132,6 +132,8 @@ def build():
     item.add_argument('--session', required=True)
     item.add_argument('--run', required=True, help='이번 조회의 새 기록 이름(준비와 전송에 같은 값)')
     item.add_argument('--send', action='store_true')
+    from .loan_evidence import add_parsers as add_loan_evidence
+    add_loan_evidence(sub)
     return parser
 
 
@@ -157,6 +159,9 @@ def list_sessions():
 
 
 def dispatch(args):
+    if args.operation in ('loans', 'certificates'):
+        from . import loan_evidence
+        return loan_evidence.dispatch(args)
     if args.operation == 'corporate':
         from finance_cli.services.hana_corporate.cli import dispatch as corporate
         return corporate(args)

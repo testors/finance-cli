@@ -7,7 +7,7 @@ The caller holds the identity operation lock and supplies an explicit send flag.
 import base64
 import gzip
 
-from . import inquiry, ledger, ledger_protocol, security, security_protocol, store, request_activity
+from . import inquiry, ledger, ledger_protocol, security, security_protocol, store, request_activity, loan_evidence_protocol
 from .evidence import account
 from .hana_protocol import API
 from .onesign_codec import encode
@@ -16,7 +16,7 @@ from .onesign_io import Client, send_http
 from .onesign_transfer import binding
 
 PATHS = (frozenset(ledger_protocol.PATHS.values()) | {inquiry.PATHS[k] for k in ('history', 'detail')}
-         | {path for path, _, _ in security_protocol.QUERIES.values()})
+         | {path for path, _, _ in security_protocol.QUERIES.values()} | set(loan_evidence_protocol.PATHS.values()))
 
 
 class Queries:
@@ -81,7 +81,7 @@ class Queries:
                                         'observation': observation})
         client = Client(self.state, run, self.session, send=True, exchange=self.exchange)
         client.query_paths = PATHS
-        meta = request.get('account_history') or request.get('inquiry') or request['security_inquiry']
+        meta = request.get('account_history') or request.get('inquiry') or request.get('loan_evidence') or request['security_inquiry']
         kind = meta['kind']
         result = {'accepted': None, 'receipt_directory': run, 'automatic_retry': False,
                   'transfer_confirmed': False, 'processing_status': 'not_started'}
@@ -90,7 +90,7 @@ class Queries:
             raw = client.request('bank', 'POST', path, request['headers'], body, web=kind != 'clock')
             if 'security_inquiry' in request:
                 assessed = security.assess(kind, client.last['http_status'], client.response_headers, raw)
-            elif 'account_history' in request:
+            elif 'account_history' in request or 'loan_evidence' in request:
                 assessed = ledger.assess(kind, client.last['http_status'], client.response_headers, raw)
             else:
                 assessed = inquiry.assess(kind, client.last['http_status'], client.response_headers, raw,
