@@ -111,7 +111,7 @@ dialog{max-height:calc(100dvh - 36px);overflow-y:auto}
 .capability-list button>span:first-child{flex:1}
 .capability-list button>.icon{width:14px;height:14px;color:#9aaa9d}
 .capability-list button:disabled{opacity:1;color:#94a195;cursor:not-allowed}
-.capability-list button:disabled .status-pill{background:#f0f2ef;color:#8b998c}
+.capability-list button:disabled .status-pill:not(.verification-badge){background:#f0f2ef;color:#8b998c}
 .certificate-list{display:grid;gap:21px;margin:10px 0}
 .certificate-list>div{display:flex;align-items:center;gap:12px}
 .certificate-list strong{font-size:14px}
@@ -208,7 +208,10 @@ body:has(#busy-corner:not([hidden])) #toast{bottom:70px}
 .status-pill.danger{background:#fbeceb;color:#a4453e}
 .status-pill.neutral{background:#f0f2f1;color:#6b7a75}
 .status-pill.info{background:#eaf0fc;color:#46599a}
-.status-pill.untested{background:#fff5df;color:#8f6a1d}
+.status-pill.verification-badge{gap:5px;align-items:center;border:1px solid transparent;font-weight:650}
+.status-pill.verification-badge.verified{background:#d9f3e5;color:#14633e;border-color:#69ac86}
+.status-pill.verification-badge.partial{background:#fff0d6;color:#875000;border-color:#cc942d}
+.status-pill.verification-badge.untested{background:#f2f4f7;color:#475467;border-color:#98a2b3;border-style:dashed}
 .verdict{margin:0 24px 18px;border:1px solid var(--line);border-radius:8px;background:#fbfcfc}
 .verdict summary{cursor:pointer;padding:11px 14px;font-size:13px;color:#61746d}
 .verdict pre{margin:0;padding:12px 14px;border-top:1px solid var(--line);font-size:12px;line-height:1.6;overflow:auto;max-height:340px;white-space:pre-wrap;word-break:break-all}
