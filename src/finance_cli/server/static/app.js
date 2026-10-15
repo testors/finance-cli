@@ -472,13 +472,14 @@ export async function applyRemember(values, store) {
   return values;
 }
 
-/* Secrets: collected in a dialog, returned once, never stored in the browser or logged. */
-export function askSecrets(title, allFields, description = '', {store = null} = {}) {
+/* Secrets: collected in a dialog, returned once, never persisted by the app or logged. */
+export function askSecrets(title, allFields, description = '', {store = null, passwords = {}} = {}) {
   const fields = secretFields(allFields, store);
   if (!fields.length) return Promise.resolve({});
   return new Promise(resolve => {
     const body = `<form id="secret-form" autocomplete="off">${description ? `<p class="dialog-note">${description}</p>` : ''}${fields.map(([name, label, pattern]) => `<div class="field"><label for="secret-${name}">${ui.esc(label)}</label><input id="secret-${name}" name="${name}" type="password" required autocomplete="off" ${pattern ? `inputmode="numeric" pattern="${pattern}"` : ''}></div>`).join('')}${rememberField(fields, store)}<p class="dialog-note">입력한 값은 이 작업의 해당 단계에만 전달하고 저장하지 않아요.</p><p class="form-error" id="secret-error" role="alert"></p><div class="dialog-actions"><button type="button" class="button secondary" data-ui="close">취소</button><button class="button primary" type="submit">확인</button></div></form>`;
-    ui.showDialog(title, body);
+    ui.showDialog(title, body, {passwords: {vault_passphrase: ui.passwordAccount('onesign-vault', store),
+      pin: ui.passwordAccount('onesign-pin', store), ...passwords}});
     const form = document.querySelector('#secret-form');
     const dialog = document.querySelector('#detail-dialog');
     const done = value => { dialog.removeEventListener('close', cancel); resolve(value); };
@@ -486,7 +487,7 @@ export function askSecrets(title, allFields, description = '', {store = null} = 
     dialog.addEventListener('close', cancel);
     form.addEventListener('submit', async event => {
       event.preventDefault();
-      let value = Object.fromEntries(new FormData(form).entries());
+      let value = Object.fromEntries(ui.formData(form).entries());
       try {
         value = await applyRemember(value, store);
       } catch (error) {
@@ -734,6 +735,11 @@ document.addEventListener('change', event => {
   if (!name || !actions[name]) return;
   try { Promise.resolve(actions[name](makeContext(state.token), event.target, event)).catch(report); }
   catch (error) { report(error); }
+});
+
+document.addEventListener('beforeinput', ui.amountBeforeInput);
+for (const name of ['input', 'compositionend']) document.addEventListener(name, event => {
+  if (event.target.matches?.('input[data-amount]') && !event.isComposing) ui.formatAmountInput(event.target);
 });
 
 document.querySelector('#detail-dialog').addEventListener('click', event => {

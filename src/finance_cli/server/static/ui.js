@@ -28,6 +28,46 @@ export const icon = name => `<svg class="icon" viewBox="0 0 24 24" aria-hidden="
 export const esc = value => String(value ?? '').replace(/[&<>"']/g, c => ({'&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;'}[c]));
 export const money = value => typeof value === 'number' && Number.isFinite(value) ? new Intl.NumberFormat('ko-KR').format(value) : esc(value ?? '—');
 
+// Display-only grouping: keep exact digits, signs and empty values. Invalid
+// input stays invalid instead of turning a decimal or exponent into another amount.
+export const ungroupAmount = value => String(value ?? '').replaceAll(',', '');
+export function groupAmount(value) {
+  const text = String(value ?? '');
+  return /^-?[0-9,]*$/.test(text) ? ungroupAmount(text).replace(/\B(?=(\d{3})+(?!\d))/g, ',') : text;
+}
+
+export function formatAmountInput(input) {
+  const before = input.value, after = groupAmount(before);
+  if (before === after) return;
+  // Place both ends of the selection by digit position, not formatted length.
+  const position = offset => {
+    let remaining = ungroupAmount(before.slice(0, offset)).length;
+    let index = 0;
+    while (index < after.length && remaining) {
+      if (after[index] !== ',') remaining--;
+      index++;
+    }
+    return index;
+  };
+  const start = position(input.selectionStart), end = position(input.selectionEnd), direction = input.selectionDirection;
+  input.value = after;
+  input.setSelectionRange(start, end, direction);
+}
+
+export function amountBeforeInput(event) {
+  const input = event.target;
+  if (!input.matches?.('input[data-amount]') || event.isComposing || !event.cancelable
+      || input.selectionStart !== input.selectionEnd) return;
+  const caret = input.selectionStart, backward = event.inputType === 'deleteContentBackward';
+  if (!backward && event.inputType !== 'deleteContentForward') return;
+  const comma = backward ? caret - 1 : caret;
+  const digit = backward ? comma - 1 : comma + 1;
+  if (input.value[comma] !== ',' || !/[0-9]/.test(input.value[digit] || '')) return;
+  event.preventDefault();
+  input.setRangeText('', Math.min(comma, digit), Math.max(comma, digit) + 1, 'start');
+  input.dispatchEvent(new InputEvent('input', {bubbles: true, inputType: event.inputType}));
+}
+
 // Limit amounts are won, including numeric strings. Avoid rounding large strings
 // through Number, and keep missing/malformed values distinct from a zero limit.
 function limitAmount(value) {
@@ -256,10 +296,95 @@ export function message(code) {
 
 const dialog = () => document.querySelector('#detail-dialog');
 
-export function showDialog(title, body, {wide = false} = {}) {
+// Browser password accounts are metadata only; never include them in API input.
+export const passwordAccount = (kind, ref) => ref ? `finance:${kind}:${ref}` : '';
+const passwordInputs = new WeakMap();
+
+export function formData(form) {
+  const data = new FormData(form);
+  for (const input of passwordInputs.get(form) || []) {
+    if (input.name && !input.matches(':disabled')) data.append(input.name, input.value);
+  }
+  return data;
+}
+
+// Keep the existing screen and one action button. Each secret has its own native
+// form owner, with a stable username, even when several secrets appear together.
+// The sibling forms avoid invalid nested forms; `form` associates visible inputs.
+function separatePasswordForms(container, accounts) {
+  for (const form of [...container.querySelectorAll('form')]) {
+    const inputs = [...form.querySelectorAll('input[type="password"]')];
+    if (!inputs.length) continue;
+    passwordInputs.set(form, inputs);
+    const groups = new Map();
+    for (const input of inputs) {
+      const key = input.name.replace(/_confirmation$/, '');
+      if (!groups.has(key)) {
+        const owner = document.createElement('form');
+        owner.method = 'post';
+        const username = document.createElement('input');
+        username.type = 'text';
+        username.autocomplete = 'username';
+        username.name = 'username';
+        username.readOnly = true;
+        username.tabIndex = -1;
+        username.hidden = true;
+        const submit = document.createElement('button');
+        submit.type = 'submit';
+        submit.hidden = true;
+        owner.append(username, submit);
+        container.append(owner);
+        owner.addEventListener('submit', event => {
+          event.preventDefault();
+          event.stopPropagation();
+          const button = form.querySelector('button[type="submit"]');
+          if (button && !button.disabled) form.requestSubmit(button);
+        });
+        groups.set(key, {owner, username, inputs: [], account: null});
+      }
+      groups.get(key).inputs.push(input);
+    }
+    const sync = () => {
+      for (const [key, group] of groups) {
+        const source = accounts[key];
+        const account = (typeof source === 'function' ? source(form) : source) || '';
+        if (group.account !== null && group.account !== account) {
+          group.inputs.forEach(input => { input.value = ''; });
+        }
+        group.account = account;
+        group.username.defaultValue = account;
+        group.username.value = account;
+        group.username.disabled = !account;
+        // Hex code points are reversible and collision-free, including non-ASCII refs.
+        group.owner.id = 'password-' + [...(account || `input:${form.id || form.dataset.submit}:${key}`)]
+          .map(c => c.codePointAt(0).toString(16)).join('-');
+        group.owner.name = group.owner.id;
+        for (const input of group.inputs) {
+          input.setAttribute('form', group.owner.id);
+          if (account) input.autocomplete = key.startsWith('new_') || group.inputs.length > 1 ? 'new-password' : 'current-password';
+          else input.autocomplete = ['otp', 'sms'].includes(key) ? 'one-time-code' : 'off';
+        }
+      }
+    };
+    sync();
+    form.addEventListener('input', sync);
+    form.addEventListener('change', sync);
+    form.addEventListener('submit', event => {
+      sync();
+      if (inputs.some(input => !input.reportValidity())) {
+        event.preventDefault();
+        event.stopImmediatePropagation();
+      }
+    }, true);
+    form.addEventListener('reset', () => groups.forEach(group => group.owner.reset()));
+  }
+}
+
+export function showDialog(title, body, {wide = false, passwords = {}} = {}) {
   const target = dialog();
   target.classList.toggle('wide', wide);
   document.querySelector('#dialog-content').innerHTML = `<div class="dialog-header"><h2 id="dialog-title">${esc(title)}</h2><button class="icon-button" data-ui="close" aria-label="닫기">${icon('close')}</button></div><div class="dialog-body">${body}</div>`;
+  separatePasswordForms(document.querySelector('#dialog-content'), passwords);
   if (!target.open) target.showModal();
   target.querySelector('input,select,textarea,button:not([data-ui="close"])')?.focus();
 }

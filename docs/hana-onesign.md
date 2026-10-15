@@ -90,6 +90,8 @@ PIN이 필요한 이체에서는 거래 확인과 PIN 입력을 마친 뒤 실�
 }
 ```
 
+`amount_krw`는 기존 정수 값 외에 `"3,000,000"`처럼 쉼표가 있는 JSON 문자열도 받습니다. CLI가 쉼표를 제거해 정수로 바꾼 뒤 기존 금액 범위를 검증합니다.
+
 ```sh
 fin hana transfer prepare --name main --session login-1 --transaction payment-1 \
   --run prepare-1 --input /path/to/intent.json --send
@@ -119,7 +121,7 @@ CLI `prepare`도 금융사기 문진은 자동 확인하고, 중복 확인만 �
 
 한 하나은행 출금계좌에서 **1~15건**을 함께 준비하고 한 번 서명·전송합니다. 기존 하나인증서와 서명 로그인 세션을 사용합니다. Python으로 구현했으며 다계좌 경로는 합성 검증 단계이고 실서버 수락은 미검증입니다.
 
-UTF-8 CSV에서 계좌번호와 은행코드는 문자열로 유지합니다. 필수 열은 `to_bank,to_account,amount`이며, 선택 열은 `employee,credit_memo,debit_memo,cms_code`입니다. `employee`는 은행에 보내지 않습니다. `credit_memo`는 받는 통장, `debit_memo`는 출금 통장 표시이며 생략하면 은행이 조회한 기본 표시를 사용합니다.
+UTF-8 CSV에서 계좌번호와 은행코드는 문자열로 유지합니다. 금액에 쉼표를 넣을 때는 `"3,000,000"`처럼 큰따옴표로 감쌉니다. 필수 열은 `to_bank,to_account,amount`이며, 선택 열은 `employee,credit_memo,debit_memo,cms_code`입니다. `employee`는 은행에 보내지 않습니다. `credit_memo`는 받는 통장, `debit_memo`는 출금 통장 표시이며 생략하면 은행이 조회한 기본 표시를 사용합니다.
 
 ```csv
 employee,to_bank,to_account,amount,credit_memo,debit_memo

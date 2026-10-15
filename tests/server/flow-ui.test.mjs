@@ -183,3 +183,40 @@ test('a login dialog leaves remembering the store passphrase to the user; the is
   assert.match(ui.app.rememberField(fields, 'main', {chosen: true}), /name="remember_vault" checked>/);
   assert.equal(ui.app.rememberField([['pin', 'PIN']], 'main'), '');
 });
+
+test('shared secret collection separates browser accounts without extra API calls or metadata in secrets', async t => {
+  const ui = await boot(t);
+  ui.state.vaults = {};
+  const before = ui.server.requests.length;
+  const pending = ui.app.askSecrets('합성 암호 입력', [ui.app.SECRET_LABELS.vault_passphrase, ui.app.SECRET_LABELS.certificate_password], '',
+    {store: 'sample', passwords: {certificate_password: 'finance:joint-certificate:personal'}});
+  const vault = ui.document.querySelector('[name="vault_passphrase"]'), cert = ui.document.querySelector('[name="certificate_password"]');
+  assert.notEqual(vault.form, cert.form);
+  assert.equal(vault.form.querySelector('[name="username"]').value, 'finance:onesign-vault:sample');
+  assert.equal(cert.form.querySelector('[name="username"]').value, 'finance:joint-certificate:personal');
+  ui.type({vault_passphrase: 'synthetic-vault', certificate_password: 'synthetic-cert'});
+  ui.submit('#secret-form');
+  assert.deepEqual(JSON.parse(JSON.stringify(await pending)), {vault_passphrase: 'synthetic-vault', certificate_password: 'synthetic-cert'});
+  assert.equal(ui.server.requests.length, before);
+  assert.equal(vault.value, ''); assert.equal(cert.value, '');
+});
+
+test('transfer amount inputs format through the app while account numbers and requests stay untouched', async t => {
+  const ui = await boot(t, {view: 'transfer', loggedIn: true});
+  const amount = ui.document.querySelector('#transfer-amount'), account = ui.document.querySelector('#recipient-account');
+  const w = ui.document.defaultView, before = ui.server.requests.length;
+  amount.value = '3000000'; amount.setSelectionRange(7, 7);
+  amount.dispatchEvent(new w.InputEvent('input', {bubbles: true}));
+  assert.equal(amount.value, '3,000,000'); assert.equal(amount.selectionStart, 9);
+  amount.setSelectionRange(2, 2);
+  amount.dispatchEvent(new w.InputEvent('beforeinput', {bubbles: true, cancelable: true, inputType: 'deleteContentBackward'}));
+  assert.equal(amount.value, '000,000'); assert.equal(amount.selectionStart, 0);
+  account.value = '00012345678'; account.dispatchEvent(new w.InputEvent('input', {bubbles: true}));
+  assert.equal(account.value, '00012345678');
+  amount.value = '1234'; amount.setSelectionRange(4, 4);
+  amount.dispatchEvent(new w.InputEvent('input', {bubbles: true, isComposing: true}));
+  assert.equal(amount.value, '1234');
+  amount.dispatchEvent(new w.CompositionEvent('compositionend', {bubbles: true}));
+  assert.equal(amount.value, '1,234');
+  assert.equal(ui.server.requests.length, before);
+});

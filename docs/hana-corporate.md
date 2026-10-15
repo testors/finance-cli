@@ -85,7 +85,7 @@ fin hana corporate transfer execute --send
 fin hana corporate transfer result --send
 ```
 
-`--to-bank`는 3자리 은행 코드, `--amount`는 원화 정수입니다. `prepare`는 필요하면 `--memo`, `--debit-memo`, `--credit-memo`, `--cms-code`, `--delayed`를 받습니다. 은행의 기존 지연이체 설정도 유지합니다. 중복 이체 표시가 있으면 내용을 확인한 뒤 `execute --allow-duplicate --send`를 사용합니다. 실행 전 준비만 취소하려면 `transfer cancel --send`를 사용합니다. 이 명령은 제출한 송금을 취소하는 기능이 아닙니다.
+`--to-bank`는 3자리 은행 코드, `--amount`는 원화 정수이며 `--amount 3,000,000`처럼 쉼표를 넣어도 됩니다. CLI가 쉼표를 제거한 뒤 기존 금액 검증을 적용합니다. `prepare`는 필요하면 `--memo`, `--debit-memo`, `--credit-memo`, `--cms-code`, `--delayed`를 받습니다. 은행의 기존 지연이체 설정도 유지합니다. 중복 이체 표시가 있으면 내용을 확인한 뒤 `execute --allow-duplicate --send`를 사용합니다. 실행 전 준비만 취소하려면 `transfer cancel --send`를 사용합니다. 이 명령은 제출한 송금을 취소하는 기능이 아닙니다.
 
 서버가 요구하는 경우에만 출금계좌 비밀번호 4자리, 일반 OTP 6자리, 공동인증서 암호를 각각 숨김 입력합니다. 공동인증서는 로그인에 연결된 공통 인증서 또는 금고의 단일 인증서를 자동 선택합니다. 선택이 모호하면 `--credential 이름` 또는 `--profile 이름`을 지정합니다. 같은 인증서를 기업용으로 다시 가져오지 않습니다. ID/PW 로그인 뒤 공동인증서 서명이 필요한 경우에도 이 경로를 사용합니다.
 
@@ -112,7 +112,7 @@ employee,to_bank,to_account,amount,credit_memo
 직원B,004,000202,2700000,10월급여
 ```
 
-필수 열은 `to_bank`, `to_account`, `amount`입니다. 은행 코드는 3자리, 계좌는 앞자리 0을 보존한 문자열, 금액은 쉼표 없는 양의 원화 정수입니다. 선택 열은 `employee`, `credit_memo`(입금통장 표시), `debit_memo`(출금통장 표시), `memo`, `cms_code`입니다. `employee`는 파일 관리용이며 은행에 전송하지 않습니다. 실제 명의는 은행이 반환한 준비 내역에서 확인합니다. 표시를 비우면 단건 이체와 같은 기본값을 사용합니다. UTF-8 BOM과 CSV 따옴표를 지원합니다.
+필수 열은 `to_bank`, `to_account`, `amount`입니다. 은행 코드는 3자리, 계좌는 앞자리 0을 보존한 문자열, 금액은 양의 원화 정수입니다. 쉼표를 넣는 경우 CSV 열이 나뉘지 않도록 `"3,000,000"`처럼 큰따옴표로 감쌉니다. 선택 열은 `employee`, `credit_memo`(입금통장 표시), `debit_memo`(출금통장 표시), `memo`, `cms_code`입니다. `employee`는 파일 관리용이며 은행에 전송하지 않습니다. 실제 명의는 은행이 반환한 준비 내역에서 확인합니다. 표시를 비우면 단건 이체와 같은 기본값을 사용합니다. UTF-8 BOM과 CSV 따옴표를 지원합니다.
 
 ```sh
 # 로컬 파일 전체 검사: 은행·인증서·세션 접근 없음

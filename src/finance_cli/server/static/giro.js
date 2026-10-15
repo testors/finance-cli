@@ -305,18 +305,18 @@ export const giroActions = {
     await ctx.run('giro.payment.options', {login_id: parent.login_id, parent_job_id: parent.id, input: {ref: element.dataset.ref}}, {panel: 'job-panel', onDone: job => {
       const rows = job.result?.accounts?.filter(r => r.availability === 'available') || [];
       ui.showDialog('출금 계좌 선택', jobState(job) + notices(job) + ui.fieldsList({'세목': job.result?.bill?.tax_name || taxName(job.result?.bill?.tax_type), '납부금액': money(job.result?.amount), '납부기한': job.result?.bill?.due_date}) +
-        (rows.length ? `<form data-submit="giro-payment-prepare" data-job="${esc(job.id)}"><div class="field"><label for="giro-account">등록된 납부계좌</label><select id="giro-account" name="account_index">${options(rows.map(r => [String(r.index), [r.account_alias, r.bank_name, r.account_masked].filter(Boolean).join(' · ')]))}</select></div>${job.result.amount_editable ? `<div class="field"><label for="giro-amount">납부금액 (원)</label><input id="giro-amount" name="amount" inputmode="numeric" pattern="[0-9]+" value="${esc(job.result.amount?.replaceAll(',', ''))}" required></div>` : ''}<div class="dialog-actions">${button('취소', 'data-ui="close"')}<button class="button primary" type="submit">납부 내용 확인</button></div></form>` : note('현재 납부에 사용할 수 있는 등록계좌를 확인하지 못했어요.') + close()));
+        (rows.length ? `<form data-submit="giro-payment-prepare" data-job="${esc(job.id)}"><div class="field"><label for="giro-account">등록된 납부계좌</label><select id="giro-account" name="account_index">${options(rows.map(r => [String(r.index), [r.account_alias, r.bank_name, r.account_masked].filter(Boolean).join(' · ')]))}</select></div>${job.result.amount_editable ? `<div class="field"><label for="giro-amount">납부금액 (원)</label><input id="giro-amount" name="amount" data-amount inputmode="numeric" pattern="[0-9,]+" value="${esc(ui.groupAmount(job.result.amount))}" required></div>` : ''}<div class="dialog-actions">${button('취소', 'data-ui="close"')}<button class="button primary" type="submit">납부 내용 확인</button></div></form>` : note('현재 납부에 사용할 수 있는 등록계좌를 확인하지 못했어요.') + close()));
     }});
   },
   'giro-payment-prepare': async (ctx, form) => {
     const data = Object.fromEntries(new FormData(form)), parent = await api.get('/jobs/' + encodeURIComponent(form.dataset.job));
     ui.closeDialog();
     await ctx.run('giro.payment.prepare', {login_id: parent.login_id, parent_job_id: parent.id,
-      input: {account_index: Number(data.account_index), ...(data.amount ? {amount: data.amount} : {})}}, {panel: 'job-panel', onDone: job => paymentDialog(ctx, job)});
+      input: {account_index: Number(data.account_index), ...(data.amount ? {amount: ui.ungroupAmount(data.amount)} : {})}}, {panel: 'job-panel', onDone: job => paymentDialog(ctx, job)});
   },
   'giro-payment-open': async (ctx, element) => paymentDialog(ctx, await api.get('/jobs/' + encodeURIComponent(element.dataset.job))),
   'giro-payment-confirm': async (ctx, form) => {
-    const inputs = Object.fromEntries(new FormData(form));
+    const inputs = Object.fromEntries(ui.formData(form));
     form.querySelectorAll('input').forEach(input => { input.value = ''; });
     const jobId = form.dataset.job, digest = form.dataset.digest;
     ui.closeDialog();

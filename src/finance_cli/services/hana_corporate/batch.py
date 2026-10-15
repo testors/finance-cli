@@ -3,6 +3,7 @@ import csv
 from pathlib import Path
 import re
 
+from finance_cli.core.amounts import ungroup_amount
 from finance_cli.services.hana.onesign_io import send_http
 from . import operations as op, protocol, queries, store, transfers, transfer_protocol as wire
 
@@ -36,7 +37,7 @@ def read_items(path):
             protocol.require(re.fullmatch('[0-9]{3}', bank) is not None and bank not in ('996', '997', '998', '999'),
                              'ordinary_transfer_bank_required')
             recipient = queries.account_number(row['to_account'].strip())
-            amount = row['amount'].strip()
+            amount = ungroup_amount(row['amount'].strip())
             protocol.require(re.fullmatch('[0-9]+', amount) is not None and int(amount) > 0, 'invalid_transfer_amount')
             item = {'bank': bank, 'recipient': recipient, 'amount': str(int(amount)),
                     'memo': row.get('memo', ''), 'cms_code': row.get('cms_code', ''),

@@ -6,6 +6,7 @@ import re
 import sys
 import warnings
 
+from finance_cli.core.amounts import ungroup_amount
 from . import onesign, onesign_setup, onesign_bundle, onesign_transfer, onesign_multi_transfer, transfer_review
 from .onesign_state import State, remove_identity, rename_identity
 from .onesign_crypto import require
@@ -216,6 +217,10 @@ def dispatch(args):
             intent={'source_account':args.from_account,'items':onesign_multi_transfer.read_items(args.input)}
         elif args.action=='prepare':
             intent=json.loads(args.input.read_text())
+            if isinstance(intent,dict) and isinstance(intent.get('amount_krw'),str) and ',' in intent['amount_krw']:
+                amount=ungroup_amount(intent['amount_krw'])
+                if re.fullmatch('[0-9]+',amount):
+                    intent['amount_krw']=int(amount)
     secret=password(args)
     if args.operation=='onesign' and args.action=='init':
         return onesign.initialize(args.name,args.settings,secret)

@@ -61,12 +61,12 @@ test('ID/password logs in and queries accounts in one form without credentials o
   const form = a.document.querySelector('form');
   assert.deepEqual([...form.querySelectorAll('input')].map(i => i.name), ['credential', 'login_password']);
   assert.equal(form.querySelector('button[type=submit]').disabled, false);
-  form.elements.credential.value = 'SyntheticId'; form.elements.login_password.value = 'SyntheticSecret';
+  form.elements.credential.value = 'SyntheticId'; form.querySelector('[name="login_password"]').value = 'SyntheticSecret';
   await a.corporateActions['corporate-login'](a.ctx, form);
   assert.deepEqual(a.calls.map(r => r.name), ['hana.corporate.login-idpw', 'hana.corporate.accounts']);
   assert.deepEqual(JSON.parse(JSON.stringify(a.calls[0].opts.secrets)), {login_password: 'SyntheticSecret'});
   assert.equal(JSON.stringify(a.requests.filter(r => r.method === 'post')).includes('SyntheticSecret'), false);
-  assert.equal(form.elements.login_password.value, '');
+  assert.equal(form.querySelector('[name="login_password"]').value, '');
   assert.deepEqual(a.changes, ['corporate-accounts']);
 });
 
@@ -77,7 +77,7 @@ test('existing ID login does not recreate connections or ask for a certificate',
   await a.corporateLogin(a.ctx, row);
   const form = a.document.querySelector('form');
   assert.equal(form.querySelector('[name=credential]'), null);
-  form.elements.login_password.value = 'SyntheticSecret';
+  form.querySelector('[name="login_password"]').value = 'SyntheticSecret';
   await a.corporateActions['corporate-login'](a.ctx, form);
   assert.equal(a.requests.filter(r => r.method === 'post').length, 0);
 });
@@ -89,7 +89,9 @@ test('certificate login selects the common vault without device registration', a
   const form = a.document.querySelector('form');
   assert.equal(form.elements.credential.value, 'shared');
   assert.equal(form.querySelector('[name=login_password]'), null);
-  form.elements.certificate_password.value = 'SharedPassword';
+  assert.equal(form.querySelector('[name="certificate_password"]').form.querySelector('[name="username"]').value,
+    'finance:joint-certificate:shared');
+  form.querySelector('[name="certificate_password"]').value = 'SharedPassword';
   await a.corporateActions['corporate-login'](a.ctx, form);
   assert.equal(a.calls[0].name, 'hana.corporate.login');
   assert.equal(a.calls[0].opts.secrets.certificate_password, 'SharedPassword');

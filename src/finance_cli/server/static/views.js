@@ -331,7 +331,7 @@ function invoiceFormView(ctx) {
     ['business_type', '업태', 'maxlength="40"'], ['business_item', '종목', 'maxlength="40"'], ['email', '이메일', 'type="email" maxlength="80"']];
   const calc = 'data-change="invoice-item-calc"';
   // Further items stay folded until asked for; an empty item is not sent.
-  const items = [0, 1, 2, 3].map(i => `<div class="item-editor" ${i ? 'hidden' : ''}><div class="form-grid"><div class="field span"><label for="item-${i}-name">품목 ${i + 1}${i ? ' (선택)' : ''}</label><input id="item-${i}-name" name="items.${i}.name" maxlength="100" ${i || amend ? '' : 'required'}></div><div class="field"><label for="item-${i}-month">월</label><input id="item-${i}-month" name="items.${i}.month" maxlength="2" inputmode="numeric"></div><div class="field"><label for="item-${i}-day">일</label><input id="item-${i}-day" name="items.${i}.day" maxlength="2" inputmode="numeric"></div><div class="field"><label for="item-${i}-quantity">수량</label><input id="item-${i}-quantity" name="items.${i}.quantity" type="number" step="1" ${calc}></div><div class="field"><label for="item-${i}-unit">단가</label><input id="item-${i}-unit" name="items.${i}.unit_price" type="number" step="1" ${calc}></div><div class="field"><label for="item-${i}-supply">공급가액</label><input id="item-${i}-supply" name="items.${i}.supply_amount" type="number" step="1" ${calc}></div><div class="field"><label for="item-${i}-tax">세액</label><input id="item-${i}-tax" name="items.${i}.tax_amount" type="number" step="1"></div></div></div>`).join('');
+  const items = [0, 1, 2, 3].map(i => `<div class="item-editor" ${i ? 'hidden' : ''}><div class="form-grid"><div class="field span"><label for="item-${i}-name">품목 ${i + 1}${i ? ' (선택)' : ''}</label><input id="item-${i}-name" name="items.${i}.name" maxlength="100" ${i || amend ? '' : 'required'}></div><div class="field"><label for="item-${i}-month">월</label><input id="item-${i}-month" name="items.${i}.month" maxlength="2" inputmode="numeric"></div><div class="field"><label for="item-${i}-day">일</label><input id="item-${i}-day" name="items.${i}.day" maxlength="2" inputmode="numeric"></div><div class="field"><label for="item-${i}-quantity">수량</label><input id="item-${i}-quantity" name="items.${i}.quantity" type="number" step="1" ${calc}></div><div class="field"><label for="item-${i}-unit">단가</label><input id="item-${i}-unit" name="items.${i}.unit_price" data-amount inputmode="numeric" pattern="-?[0-9,]+" ${calc}></div><div class="field"><label for="item-${i}-supply">공급가액</label><input id="item-${i}-supply" name="items.${i}.supply_amount" data-amount inputmode="numeric" pattern="-?[0-9,]+" ${calc}></div><div class="field"><label for="item-${i}-tax">세액</label><input id="item-${i}-tax" name="items.${i}.tax_amount" data-amount inputmode="numeric" pattern="-?[0-9,]+"></div></div></div>`).join('');
   return heading(amend ? '수정 계산서 작성' : '전자세금계산서 작성', '일반 과세 · 사업자 간 거래. 홈택스 미리보기까지 준비한 뒤, 내용을 확인하고 발급해요.', ui.button('목록으로', 'data-view="invoices"')) +
     targetBar(taxTargets(), current) +
     (signing ? note(`발급용 인증서: <strong>${esc(signing.ref)}</strong>. 로그인용 인증서로 대신 발급하지 않아요.`)
@@ -340,7 +340,7 @@ function invoiceFormView(ctx) {
     (amend ? `<div class="form-section"><h2>수정 사유</h2><div class="form-grid"><div class="field"><label>당초 승인번호</label><input value="${esc(amend)}" readonly></div><div class="field"><label for="amend-reason">수정 사유</label><select id="amend-reason" name="reason">${[['correction', '기재사항 착오정정 (취소·재발급 2건)'], ['amount-change', '공급가액 변동'], ['return', '환입'], ['cancellation', '계약의 해제'], ['local-credit', '내국신용장 사후개설 (2건)'], ['duplicate', '착오에 의한 이중발급']].map(([v, l]) => `<option value="${v}">${l}</option>`).join('')}</select></div></div><p class="field-help">바꿀 항목만 입력하세요. 서비스 화면에서 잠긴 항목은 바꾸지 않아요.</p></div>` : '') +
     `<div class="form-section"><h2>공급받는 자</h2>${party('buyer', [['business_number', '사업자등록번호', 'maxlength="12" inputmode="numeric" placeholder="123-45-67890"'], ...common], ['business_number'])}</div>` +
     `<div class="form-section"><h2>공급 내용</h2><div class="form-grid"><div class="field"><label for="invoice-date">작성일</label><input id="invoice-date" type="date" name="date" ${amend ? '' : 'required'}></div><div class="field"><label for="invoice-remark">비고 (선택)</label><input id="invoice-remark" name="remark" maxlength="150"></div></div>${items}<div class="section-actions"><button type="button" class="button secondary" data-action="invoice-add-item">${icon('plus')}품목 추가</button></div><p class="field-help">수량과 단가를 넣으면 공급가액과 세액(공급가액의 10%, 원 미만 버림)을 제안값으로 채워요. 직접 고친 값은 그대로 두고, 입력한 값 그대로 보내요.</p></div>` +
-    `<div class="form-section"><h2>결제 구분</h2><div class="form-grid"><div class="field"><label for="settlement-type">청구·영수</label><select id="settlement-type" name="settlement.type"><option value="">서비스 기본</option><option value="claim">청구</option><option value="receipt">영수</option></select></div><div class="field"><label for="settlement-credit">외상미수금 (선택)</label><input id="settlement-credit" name="settlement.credit" inputmode="numeric"></div><div class="field"><label for="settlement-cash">현금 (선택)</label><input id="settlement-cash" name="settlement.cash" inputmode="numeric"></div><div class="field"><label for="settlement-check">수표 (선택)</label><input id="settlement-check" name="settlement.check" inputmode="numeric"></div></div></div>` +
+    `<div class="form-section"><h2>결제 구분</h2><div class="form-grid"><div class="field"><label for="settlement-type">청구·영수</label><select id="settlement-type" name="settlement.type"><option value="">서비스 기본</option><option value="claim">청구</option><option value="receipt">영수</option></select></div><div class="field"><label for="settlement-credit">외상미수금 (선택)</label><input id="settlement-credit" name="settlement.credit" data-amount inputmode="numeric" pattern="-?[0-9,]+"></div><div class="field"><label for="settlement-cash">현금 (선택)</label><input id="settlement-cash" name="settlement.cash" data-amount inputmode="numeric" pattern="-?[0-9,]+"></div><div class="field"><label for="settlement-check">수표 (선택)</label><input id="settlement-check" name="settlement.check" data-amount inputmode="numeric" pattern="-?[0-9,]+"></div></div></div>` +
     `<details class="advanced-block form-section"><summary><span>공급자 정보 바꾸기 (선택)</span><span class="meta">비우면 홈택스 기본값</span>${icon('arrow')}</summary>${party('supplier', common)}</details>` +
     `<div class="form-actions"><button class="button primary" type="submit">초안 확인 ${icon('arrow')}</button><p class="field-help">홈택스 미리보기까지 진행하고 발급하지 않아요. 다음 화면에서 내용을 확인한 뒤 발급을 결정해요.</p></div></form>${panel('job-panel', null)}`;
 }
@@ -358,7 +358,9 @@ function draftInput(form) {
       node = node[part];
     }
     const last = parts[parts.length - 1];
-    node[last] = ['quantity', 'unit_price', 'supply_amount', 'tax_amount'].includes(last) ? Number(raw) : raw;
+    const amount = form.elements.namedItem(name)?.hasAttribute('data-amount');
+    const text = amount ? ui.ungroupAmount(raw) : raw;
+    node[last] = ['quantity', 'unit_price', 'supply_amount', 'tax_amount'].includes(last) ? Number(text) : text;
   }
   if (value.items) value.items = value.items.filter(Boolean);
   return value;
@@ -393,7 +395,12 @@ function confirmDialog(ctx, job) {
     `<div class="summary-lines"><div class="summary-line"><span>프로필</span><strong>${esc(fixed.profile?.name || '전체')}</strong></div><div class="summary-line"><span>로그인</span><strong>${esc(fixed.login?.display_name)}</strong></div><div class="summary-line"><span>대상</span><strong>${esc(fixed.target?.display_name)}</strong></div>${awaiting.signing_credential ? `<div class="summary-line"><span>발급용 인증서</span><strong>${esc(awaiting.signing_credential)}</strong></div>` : ''}</div>` +
     (transfer ? transferPreview(awaiting.preview || {}) : draftPreview(awaiting.preview)) + expires +
     `<form id="confirm-form" autocomplete="off">${review?.message ? `<p class="dialog-note">${esc(review.message)}</p>` : ''}${fields.map(([name, label, pattern]) => `<div class="field"><label for="confirm-${name}">${esc(label)}</label><input id="confirm-${name}" name="${name}" type="password" required autocomplete="off" ${pattern ? `inputmode="numeric" pattern="${pattern}"` : ''}></div>`).join('')}${rememberField(fields, store)}<p class="dialog-note">${review ? '확인하면 같은 이체의 준비를 계속해요. 이 단계에서는 송금하지 않으며, 준비가 끝나면 최종 이체 내용을 다시 확인해요.' : transfer ? '확인하면 이체를 한 번만 전송해요. 응답을 받지 못해도 자동으로 다시 보내지 않고 결과 조회로 확인해요.' : '확인하면 이 초안으로 발급을 한 번만 시도해요. 결과가 불확실하면 다시 발급하지 말고 목록으로 확인하세요.'}</p><div class="dialog-actions"><button type="button" class="button secondary" data-ui="close">나중에</button><button type="button" class="button secondary" data-action="cancel-job" data-job="${esc(job.id)}">준비 취소</button><button class="button primary" type="submit">${review ? '확인 후 준비 계속' : transfer ? `이체 ${money(awaiting.preview?.amount_krw)}원` : '발급'}</button></div></form>`;
-  ui.showDialog(review ? review.kind === 'duplicate' ? '중복 이체 확인' : '이체 준비 계속' : transfer ? '이 내용으로 보낼까요?' : '발급 전 초안 확인', body, {wide: !transfer});
+  ui.showDialog(review ? review.kind === 'duplicate' ? '중복 이체 확인' : '이체 준비 계속' : transfer ? '이 내용으로 보낼까요?' : '발급 전 초안 확인', body, {wide: !transfer, passwords: {
+    vault_passphrase: ui.passwordAccount('onesign-vault', store),
+    pin: ui.passwordAccount('onesign-pin', store),
+    certificate_password: ui.passwordAccount('joint-certificate', awaiting.signing_credential || login(job.login_id)?.credential?.ref),
+    account_password: ui.passwordAccount('hana-account', job.target_id),
+  }});
   const timer = setInterval(() => {
     const clock = document.querySelector('.countdown');
     if (!clock) { clearInterval(timer); return; }
@@ -407,7 +414,7 @@ function confirmDialog(ctx, job) {
     form.querySelector('button[type=submit]').disabled = true;
     try {
       if (transfer && !await ensureBankSession(ctx, job.login_id)) return;
-      const values = Object.fromEntries(new FormData(form).entries());
+      const values = Object.fromEntries(ui.formData(form).entries());
       const secrets = await applyRemember(values, store);
       form.reset();
       await api.post(`/jobs/${encodeURIComponent(job.id)}/confirm`, {confirmation: awaiting.digest, secrets}, {label: job.title});
@@ -575,7 +582,7 @@ async function transferView(ctx) {
   const level = ui.VERIFICATION[featureOf('hana-transfer')?.verification]?.[0];
   return heading('이체', '받는 분과 금액을 은행에서 확인한 뒤, 내용을 보고 한 번만 보내요.') + setupNotice('hana-transfer') +
     note(`하나인증서 로그인 한 번으로 조회와 이체를 할 수 있어요. 이체 후에도 조회는 계속할 수 있고, 다음 이체를 준비할 때는 새 로그인이 필요해요.${level ? ` 지원 상태: ${esc(level)}.` : ''}`) +
-    `<form class="panel form-panel transfer-form" data-submit="transfer-prepare"><div class="field"><label for="source-account">어느 계좌에서 보낼까요?</label><select id="source-account" name="target_id">${list.map(t => `<option value="${esc(t.id)}" ${t.id === draft.target_id ? 'selected' : ''}>${esc(t.display_name)} · ${esc(t.identity?.account_number)} (${esc(login(t.login_id)?.display_name)} · ${esc(login(t.login_id)?.readiness === 'ready' ? '세션 있음' : '새 이체 로그인 필요')})</option>`).join('')}</select><p class="field-help">새 로그인이 필요하면 확인을 누를 때 로그인 창이 먼저 열리고, 로그인하면 이어서 이체를 준비해요. 지금 로그인하려면 제목 옆의 다시 로그인을 누르세요. 입력한 내용은 그대로 남아요.</p></div><div class="field"><label for="recipient-account">받는 계좌</label><div class="field-row"><select id="recipient-bank" name="bank" aria-label="받는 은행">${BANKS.map(([code, name]) => `<option value="${code}" ${code === draft.bank ? 'selected' : ''}>${name}</option>`).join('')}</select><input id="recipient-account" name="account" inputmode="numeric" autocomplete="off" required pattern="[0-9-]{8,30}" placeholder="숫자만 입력" value="${esc(draft.account || '')}"></div></div><div class="field"><label for="transfer-amount">얼마를 보낼까요?</label><div class="amount-input"><input id="transfer-amount" name="amount" inputmode="numeric" autocomplete="off" required pattern="[0-9,]+" value="${esc(draft.amount || '')}"><span>원</span></div><div class="amount-presets">${presets.map(v => `<button type="button" data-action="amount-add" data-add="${v}">+${money(v / 10000)}만</button>`).join('')}<button type="button" data-action="amount-clear">지우기</button></div></div><div class="form-actions"><button class="button primary" type="submit">이체 내용 확인 ${icon('arrow')}</button><p class="field-help">다음 단계에서 저장소 암호와 출금 계좌 비밀번호를 받아 은행의 확인 화면까지 준비해요. 이때는 이체하지 않아요. 내용을 확인한 뒤 한 번만 전송하고, 결과는 이체 내역으로 따로 대조해요.</p></div></form>${panel('job-panel', null)}`;
+    `<form class="panel form-panel transfer-form" data-submit="transfer-prepare"><div class="field"><label for="source-account">어느 계좌에서 보낼까요?</label><select id="source-account" name="target_id">${list.map(t => `<option value="${esc(t.id)}" ${t.id === draft.target_id ? 'selected' : ''}>${esc(t.display_name)} · ${esc(t.identity?.account_number)} (${esc(login(t.login_id)?.display_name)} · ${esc(login(t.login_id)?.readiness === 'ready' ? '세션 있음' : '새 이체 로그인 필요')})</option>`).join('')}</select><p class="field-help">새 로그인이 필요하면 확인을 누를 때 로그인 창이 먼저 열리고, 로그인하면 이어서 이체를 준비해요. 지금 로그인하려면 제목 옆의 다시 로그인을 누르세요. 입력한 내용은 그대로 남아요.</p></div><div class="field"><label for="recipient-account">받는 계좌</label><div class="field-row"><select id="recipient-bank" name="bank" aria-label="받는 은행">${BANKS.map(([code, name]) => `<option value="${code}" ${code === draft.bank ? 'selected' : ''}>${name}</option>`).join('')}</select><input id="recipient-account" name="account" inputmode="numeric" autocomplete="off" required pattern="[0-9-]{8,30}" placeholder="숫자만 입력" value="${esc(draft.account || '')}"></div></div><div class="field"><label for="transfer-amount">얼마를 보낼까요?</label><div class="amount-input"><input id="transfer-amount" name="amount" data-amount inputmode="numeric" autocomplete="off" required pattern="[0-9,]+" value="${esc(ui.groupAmount(draft.amount))}"><span>원</span></div><div class="amount-presets">${presets.map(v => `<button type="button" data-action="amount-add" data-add="${v}">+${money(v / 10000)}만</button>`).join('')}<button type="button" data-action="amount-clear">지우기</button></div></div><div class="form-actions"><button class="button primary" type="submit">이체 내용 확인 ${icon('arrow')}</button><p class="field-help">다음 단계에서 저장소 암호와 출금 계좌 비밀번호를 받아 은행의 확인 화면까지 준비해요. 이때는 이체하지 않아요. 내용을 확인한 뒤 한 번만 전송하고, 결과는 이체 내역으로 따로 대조해요.</p></div></form>${panel('job-panel', null)}`;
 }
 
 // Transfer-list fields this project reads by name, in the order a transfer is read.
@@ -913,11 +920,11 @@ export const actions = {
     const whole = value => /^-?\d+$/.test(value);
     const suggest = (target, value) => {
       if (target.value !== '' && target.dataset.suggested !== target.value) return;
-      target.value = target.dataset.suggested = String(value);
+      target.value = target.dataset.suggested = ui.groupAmount(value);
     };
-    const quantity = field('quantity').value, unit = field('unit_price').value;
+    const quantity = field('quantity').value, unit = ui.ungroupAmount(field('unit_price').value);
     if (whole(quantity) && whole(unit)) suggest(field('supply_amount'), BigInt(quantity) * BigInt(unit));
-    const supply = field('supply_amount').value;
+    const supply = ui.ungroupAmount(field('supply_amount').value);
     if (whole(supply)) suggest(field('tax_amount'), BigInt(supply) / 10n);
   },
   'invoice-new': () => changeView('invoiceform', {}),
@@ -981,7 +988,9 @@ export const actions = {
     const discover = row.institution === 'hometax' && !state.targets.some(t => t.login_id === row.id);
     const balances = row.institution === 'hana' && state.view !== 'transfer' && button.dataset.reason !== 'transfer_login_required';
     const next = balances ? ' 로그인한 뒤 잔액을 이어서 조회해요.' : '';
-    const secrets = await askSecrets(`${row.display_name} 로그인`, loginSecrets(row), reason + (row.institution === 'hometax' ? '공동인증서로 홈택스에 로그인해요.' + (discover ? ' 로그인한 뒤 사용자·사업장을 이어서 확인해요.' : '') : (row.method === 'onesign' ? '하나인증서로 새 로그인 세션을 만들어요.' : '앱 인증과 공동인증서 로그인을 진행해요.') + next), {store: onesignStore(row)});
+    const secrets = await askSecrets(`${row.display_name} 로그인`, loginSecrets(row), reason + (row.institution === 'hometax' ? '공동인증서로 홈택스에 로그인해요.' + (discover ? ' 로그인한 뒤 사용자·사업장을 이어서 확인해요.' : '') : (row.method === 'onesign' ? '하나인증서로 새 로그인 세션을 만들어요.' : '앱 인증과 공동인증서 로그인을 진행해요.') + next), {store: onesignStore(row), passwords: {
+      certificate_password: ui.passwordAccount('joint-certificate', row.credential?.ref),
+    }});
     if (!secrets) return;
     await runForLogin(ctx, loginJob(row), row, {}, {secrets, onDone: async job => {
       const stopped = job.local?.stopped ? ui.message(job.local.stopped) : '';
@@ -1125,7 +1134,7 @@ export const actions = {
       return;
     }
     if (state.params) delete state.params.transferDraft;
-    const secrets = await askSecrets('이체 준비', [SECRET_LABELS.vault_passphrase, SECRET_LABELS.account_password], '은행의 확인 화면까지 준비해요. 이 단계에서는 이체하지 않아요.', {store: onesignStore(owner, true)});
+    const secrets = await askSecrets('이체 준비', [SECRET_LABELS.vault_passphrase, SECRET_LABELS.account_password], '은행의 확인 화면까지 준비해요. 이 단계에서는 이체하지 않아요.', {store: onesignStore(owner, true), passwords: {account_password: ui.passwordAccount('hana-account', source.id)}});
     if (!secrets) return;
     await ctx.run('hana.transfer.prepare', {login_id: source.login_id, target_id: source.id, input: {
       recipient_bank_code: data.get('bank'), recipient_account_number: String(data.get('account')).replace(/\s/g, ''), amount_krw: amount}}, {
@@ -1377,10 +1386,10 @@ export const actions = {
   },
   'unlock-vault': async (ctx, button) => {
     const store = button.dataset.store;
-    ui.showDialog('하나인증서 저장소 잠금 해제', `<form data-submit="save-unlock" data-store="${esc(store)}" autocomplete="off"><p class="dialog-note">입력한 저장소 암호는 서버를 끌 때까지 서버 메모리에만 기억하고 디스크에는 저장하지 않아요. 그동안 이 저장소를 쓰는 로그인·조회·이체에서 저장소 암호를 묻지 않아요.</p><div class="field"><label for="unlock-passphrase">저장소 암호</label><input id="unlock-passphrase" name="passphrase" type="password" required autocomplete="off"></div><p class="form-error" id="unlock-error" role="alert"></p><div class="dialog-actions"><button type="button" class="button secondary" data-ui="close">취소</button><button class="button primary" type="submit">잠금 해제</button></div></form>`);
+    ui.showDialog('하나인증서 저장소 잠금 해제', `<form data-submit="save-unlock" data-store="${esc(store)}" autocomplete="off"><p class="dialog-note">입력한 저장소 암호는 서버를 끌 때까지 서버 메모리에만 기억하고 디스크에는 저장하지 않아요. 그동안 이 저장소를 쓰는 로그인·조회·이체에서 저장소 암호를 묻지 않아요.</p><div class="field"><label for="unlock-passphrase">저장소 암호</label><input id="unlock-passphrase" name="passphrase" type="password" required autocomplete="off"></div><p class="form-error" id="unlock-error" role="alert"></p><div class="dialog-actions"><button type="button" class="button secondary" data-ui="close">취소</button><button class="button primary" type="submit">잠금 해제</button></div></form>`, {passwords: {passphrase: ui.passwordAccount('onesign-vault', store)}});
   },
   'save-unlock': async (ctx, form) => {
-    const passphrase = new FormData(form).get('passphrase');
+    const passphrase = ui.formData(form).get('passphrase');
     try {
       await api.post(`/vaults/${encodeURIComponent(form.dataset.store)}/unlock`, {passphrase});
       form.reset(); ui.closeDialog(); ui.toast('서버를 끌 때까지 저장소 암호를 기억해요.'); await afterModel(ctx);

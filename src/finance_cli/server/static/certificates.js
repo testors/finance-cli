@@ -191,13 +191,18 @@ async function stageDialog(name, stage, progress = {}, warning = '') {
     : stage === 'list-accounts' ? '본인 계좌 불러오기를 누르면 은행에 발급용 계좌 목록을 요청해요.'
     : SCREEN[stage] === 2 ? '은행에서 제공한 본인계좌를 선택하세요. 계좌 확인을 누르면 선택한 계좌의 비밀번호를 은행에 보내 확인해요.'
     : stage === 'complete' ? '가입 완료를 누르면 이미 발급한 인증서의 가입 절차를 마무리해요.' : '하나인증서 발급을 누르면 인증서를 새로 발급하고 가입 완료까지 진행해요.';
-  ui.showDialog('하나인증서 발급', `${stage === 'inspect' ? '' : steps(stage)}${before}${warning ? note(esc(warning)) : ''}<form data-submit="certificate-hana-submit" data-name="${esc(name)}" data-stage="${esc(stage)}" data-digest="${esc(digest)}" autocomplete="off"><h3>${stage === 'inspect' ? '발급 이어하기' : SCREENS[SCREEN[stage]]}</h3>${issuanceLevel() ? `<p class="meta">지원 상태: ${esc(issuanceLevel())}</p>` : ''}${fields}<p class="field-help">${approval}</p>${controls(label)}</form>`, {wide: stage !== 'inspect'});
+  ui.showDialog('하나인증서 발급', `${stage === 'inspect' ? '' : steps(stage)}${before}${warning ? note(esc(warning)) : ''}<form data-submit="certificate-hana-submit" data-name="${esc(name)}" data-stage="${esc(stage)}" data-digest="${esc(digest)}" autocomplete="off"><h3>${stage === 'inspect' ? '발급 이어하기' : SCREENS[SCREEN[stage]]}</h3>${issuanceLevel() ? `<p class="meta">지원 상태: ${esc(issuanceLevel())}</p>` : ''}${fields}<p class="field-help">${approval}</p>${controls(label)}</form>`, {wide: stage !== 'inspect', passwords: {
+    vault_passphrase: form => ui.passwordAccount('onesign-vault', stage === 'init' ? form.querySelector('[name="name"]').value : name),
+    idcard_passphrase: form => ui.passwordAccount('idcard', form.querySelector('[name="id_source"]')?.value),
+    new_pin: ui.passwordAccount('onesign-pin', name),
+  }});
   const form = document.querySelector('[data-submit="certificate-hana-submit"]');
   if (stage === 'account' && !progress.accounts?.length) form.querySelector('button[type="submit"]').disabled = true;
   if (stage === 'init') {
     let candidate = 'hana', suffix = 2;
     while (state.credentials.some(c => c.ref === candidate)) candidate = 'hana-' + suffix++;
     form.elements.name.value = candidate;
+    form.elements.name.dispatchEvent(new Event('input', {bubbles: true}));
     form.querySelector('button[type="submit"]').disabled = !options.hana.settings.length;
   }
   const source = form.querySelector('[name="id_source"]');
@@ -210,7 +215,7 @@ async function submitWizard(form) {
   const stage = form.dataset.stage, chain = GROUPS[stage];
   if (!chain) return;
   form.dataset.started = 'true';
-  let data = new FormData(form), name = stage === 'init' ? data.get('name') : form.dataset.name;
+  let data = ui.formData(form), name = stage === 'init' ? data.get('name') : form.dataset.name;
   let vault = data.has('vault_passphrase') ? {vault_passphrase: data.get('vault_passphrase')} : {};
   let privateInputs = {}, holder, last = null, issued = false, submitted = false, warning = '', idCard = '';
   const settings = stage === 'init' ? data.get('settings') : null;
@@ -278,7 +283,9 @@ export const certificateActions = {
     ui.showDialog('인증서 발급·가져오기', `<div class="settings-body"><div class="setting-row"><span><strong>공동인증서</strong><span class="meta">신규 발급은 미지원이에요. 발급기관에서 받은 NPKI/PFX를 가져올 수 있어요.</span></span>${button('가져오기', 'data-action="certificate-joint"')}</div><div class="setting-row"><span><strong>금융인증서</strong><span class="meta">신규 발급·클라우드 연결은 아직 미지원이에요.</span></span>${ui.tag('미지원', 'neutral')}</div><div class="setting-row"><span><strong>하나인증서</strong><span class="meta">국내 성인 기존 하나은행 고객 · SMS·신분증·본인 계좌 확인${issuanceLevel() ? ' · ' + esc(issuanceLevel()) : ''}</span></span>${button('신규 발급·진행 확인', 'data-action="certificate-hana"', 'primary')}</div></div><p class="dialog-note">인증서 비밀과 파일은 브라우저 저장소·작업 기록에 남기지 않아요. 기관 로그인은 발급·가져오기 후 별도로 추가하세요.</p>`);
   },
   'certificate-joint': () => {
-    ui.showDialog('공동인증서 가져오기', `<form data-submit="certificate-import" autocomplete="off">${nameField()}<div class="field"><label for="cert-format">파일 형식</label><select id="cert-format" name="format" data-change="certificate-format"><option value="pfx">PFX / P12</option><option value="npki">NPKI (signCert.der + signPri.key)</option></select></div>${field('certificate_file', 'PFX 또는 signCert.der 파일 (2 MiB 이하)', 'type="file" accept=".pfx,.p12,.der"')}<div id="certificate-npki" hidden>${field('private_key_file', 'signPri.key (2 MiB 이하)', 'type="file" accept=".key" disabled')}<div class="field"><label for="cert-compatibility">암호 호환 규칙</label><select id="cert-compatibility" name="compatibility"><option value="hana">하나은행 (기본)</option><option value="hometax">홈택스</option></select></div></div><div id="certificate-pfx-index">${field('pfx_index', 'PFX 인증서 순번 (여럿이면 지정, 0부터)', 'type="number" min="0"')}</div>${field('certificate_password', '인증서 비밀번호', 'type="password"')}<p class="dialog-note">새로 발급하지 않고 원본 파일을 암호화 보관해요. 기관에는 접속하지 않아요.</p>${controls('가져오기')}</form>`);
+    ui.showDialog('공동인증서 가져오기', `<form data-submit="certificate-import" autocomplete="off">${nameField()}<div class="field"><label for="cert-format">파일 형식</label><select id="cert-format" name="format" data-change="certificate-format"><option value="pfx">PFX / P12</option><option value="npki">NPKI (signCert.der + signPri.key)</option></select></div>${field('certificate_file', 'PFX 또는 signCert.der 파일 (2 MiB 이하)', 'type="file" accept=".pfx,.p12,.der"')}<div id="certificate-npki" hidden>${field('private_key_file', 'signPri.key (2 MiB 이하)', 'type="file" accept=".key" disabled')}<div class="field"><label for="cert-compatibility">암호 호환 규칙</label><select id="cert-compatibility" name="compatibility"><option value="hana">하나은행 (기본)</option><option value="hometax">홈택스</option></select></div></div><div id="certificate-pfx-index">${field('pfx_index', 'PFX 인증서 순번 (여럿이면 지정, 0부터)', 'type="number" min="0"')}</div>${field('certificate_password', '인증서 비밀번호', 'type="password"')}<p class="dialog-note">새로 발급하지 않고 원본 파일을 암호화 보관해요. 기관에는 접속하지 않아요.</p>${controls('가져오기')}</form>`, {passwords: {
+      certificate_password: form => ui.passwordAccount('joint-certificate', form.querySelector('[name="name"]').value),
+    }});
     document.querySelector('[name="pfx_index"]').required = false;
   },
   'certificate-format': (ctx, select) => {
@@ -289,7 +296,7 @@ export const certificateActions = {
     document.querySelector('[name="pfx_index"]').disabled = npki;
   },
   'certificate-import': async (ctx, form) => {
-    const data = new FormData(form), format = data.get('format');
+    const data = ui.formData(form), format = data.get('format');
     try {
       const input = {name: data.get('name'), format};
       if (format === 'npki') input.compatibility = data.get('compatibility');
@@ -323,11 +330,13 @@ export const certificateActions = {
   },
   'certificate-hana-submit': (ctx, form) => submitWizard(form),
   'idcard-add': () => {
-    ui.showDialog('신분증 보관', `<form data-submit="idcard-save" autocomplete="off">${note('본인 신분증의 카드 영역 사진과 확인한 정보를 신분증 보관 암호로 암호화해 이 서버에 보관해요. 기관에는 접속하지 않아요. 보관한 신분증은 하나인증서 발급의 신분증 확인 단계에서 골라 써요.')}<div class="certificate-grid">${field('name', '보관할 이름', 'maxlength="64" pattern="[A-Za-z0-9][A-Za-z0-9_.-]{0,63}" placeholder="예: resident-card"')}${field('idcard_passphrase', '신분증 보관 암호 (4자 이상)', 'type="password" minlength="4"')}${field('idcard_passphrase_confirmation', '보관 암호 확인', 'type="password" minlength="4"')}</div>${identityFields()}${controls('보관')}</form>`, {wide: true});
+    ui.showDialog('신분증 보관', `<form data-submit="idcard-save" autocomplete="off">${note('본인 신분증의 카드 영역 사진과 확인한 정보를 신분증 보관 암호로 암호화해 이 서버에 보관해요. 기관에는 접속하지 않아요. 보관한 신분증은 하나인증서 발급의 신분증 확인 단계에서 골라 써요.')}<div class="certificate-grid">${field('name', '보관할 이름', 'maxlength="64" pattern="[A-Za-z0-9][A-Za-z0-9_.-]{0,63}" placeholder="예: resident-card"')}${field('idcard_passphrase', '신분증 보관 암호 (4자 이상)', 'type="password" minlength="4"')}${field('idcard_passphrase_confirmation', '보관 암호 확인', 'type="password" minlength="4"')}</div>${identityFields()}${controls('보관')}</form>`, {wide: true, passwords: {
+      idcard_passphrase: form => ui.passwordAccount('idcard', form.querySelector('[name="name"]').value),
+    }});
   },
   'idcard-save': async (ctx, form) => {
     if (form.dataset.started || !form.reportValidity()) return;
-    const data = new FormData(form);
+    const data = ui.formData(form);
     try {
       if (data.get('idcard_passphrase') !== data.get('idcard_passphrase_confirmation')) throw new Error('passphrase_confirmation_mismatch');
       const secrets = {idcard_passphrase: data.get('idcard_passphrase'), identity_capture: await captureOf(data)};

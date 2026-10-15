@@ -128,11 +128,11 @@ test('payment confirmation names the same login PIN, sends fixed digest once and
   await a.giroActions['giro-payment-open'](a.ctx, {dataset: {job: 'pay'}});
   const form = a.document.querySelector('form');
   assert.match(a.document.body.textContent, /로그인할 때 사용한/);
-  form.elements.account_password.value = '5678'; form.elements.pin.value = '654321';
+  form.querySelector('[name="account_password"]').value = '5678'; form.querySelector('[name="pin"]').value = '654321';
   a.responses.set('/jobs/pay/confirm', {...job, status: 'finished', outcome: 'success', result: {payment_attempted: true}});
   await a.giroActions['giro-payment-confirm'](a.ctx, form);
   assert.deepEqual(a.requests[0], {path: '/jobs/pay/confirm', value: {confirmation: 'fixed', secrets: {account_password: '5678', pin: '654321'}}});
-  assert.equal(form.elements.pin.value, ''); assert.equal(form.elements.account_password.value, '');
+  assert.equal(form.querySelector('[name="pin"]').value, ''); assert.equal(form.querySelector('[name="account_password"]').value, '');
   assert.match(a.document.body.textContent, /기관의 납부 성공 응답/);
   assert.equal(a.calls.length, 0);
   assert.equal(JSON.stringify(a.state).includes('654321'), false);
@@ -415,4 +415,20 @@ test('a bill detail adds what only the detail states, under the names of that bi
   assert.match(dialog.querySelector('details.verdict summary').textContent, /그 밖의 항목 1개/, 'and is folded under the named ones');
   lines = await open({tax_type: 'kepco', amount_raw: '3000'}, {pay1date: null});
   assert.equal(lines['납부기한'], '상세 응답에 없음');
+});
+
+test('editable payment amounts display separators but prepare with the original digit string', async t => {
+  const a = await setup(t);
+  a.add({id: 'bills', login_id: 'giro'});
+  const options = {id: 'options', login_id: 'giro', outcome: 'success', result: {amount: '3000000', amount_editable: true,
+    bill: {tax_type: 'national'}, accounts: [{index: 1, availability: 'available', account_masked: '****5678'}]}};
+  a.add(options);
+  a.responses.set('giro.payment.options', options);
+  await a.giroActions['giro-payment-options'](a.ctx, {dataset: {job: 'bills', ref: '0'}});
+  const form = a.document.querySelector('[data-submit="giro-payment-prepare"]');
+  assert.equal(form.querySelector('[name="amount"]').value, '3,000,000');
+  assert.equal(form.checkValidity(), true);
+  await a.giroActions['giro-payment-prepare'](a.ctx, form);
+  assert.equal(a.calls.at(-1).fields.input.amount, '3000000');
+  assert.equal(a.calls.at(-1).name, 'giro.payment.prepare');
 });

@@ -919,6 +919,7 @@ test('a first Hometax login goes on to the user and business check; a later logi
   ui.row.institution = 'hometax'; ui.state.targets = [];
   await ui.actions.login(ui.ctx, {dataset: {login: 'login'}});
   assert.match(ui.asked[0][2], /사용자·사업장을 이어서 확인/);
+  assert.equal(ui.asked[0][3].passwords.certificate_password, 'finance:joint-certificate:synthetic');
   await ui.calls[0].options.onDone({outcome: 'rejected'});
   assert.equal(ui.calls.length, 1, 'a login that did not succeed asks for nothing more');
   await ui.calls[0].options.onDone({outcome: 'success'});
@@ -956,15 +957,22 @@ test('invoice amounts are suggested from quantity and unit price without overwri
   ui.actions['invoice-add-item'](ui.ctx, form.querySelector('[data-action="invoice-add-item"]'));
   assert.equal(form.querySelectorAll('.item-editor:not([hidden])').length, 2);
   const field = name => form.querySelector(`[name="items.0.${name}"]`);
-  field('quantity').value = '3'; field('unit_price').value = '3335';
+  field('quantity').value = '3'; field('unit_price').value = '3,335';
   ui.actions['invoice-item-calc'](ui.ctx, field('unit_price'));
-  assert.equal(field('supply_amount').value, '10005');
-  assert.equal(field('tax_amount').value, '1000', 'a fraction of a won is dropped');
-  field('tax_amount').value = '1001'; field('quantity').value = '4';
+  assert.equal(field('supply_amount').value, '10,005');
+  assert.equal(field('tax_amount').value, '1,000', 'a fraction of a won is dropped');
+  field('tax_amount').value = '1,001'; field('quantity').value = '4';
   ui.actions['invoice-item-calc'](ui.ctx, field('quantity'));
-  assert.equal(field('supply_amount').value, '13340');
-  assert.equal(field('tax_amount').value, '1001', 'a typed amount stays');
+  assert.equal(field('supply_amount').value, '13,340');
+  assert.equal(field('tax_amount').value, '1,001', 'a typed amount stays');
   assert.equal(ui.calls.length, 0);
+  form.querySelector('[name="settlement.cash"]').value = '14,341';
+  await ui.actions['invoice-prepare'](ui.ctx, form);
+  const draft = ui.calls[0].fields.input;
+  assert.equal(draft.items[0].unit_price, 3335);
+  assert.equal(draft.items[0].supply_amount, 13340);
+  assert.equal(draft.items[0].tax_amount, 1001);
+  assert.equal(draft.settlement.cash, '14341');
 });
 
 for (const method of ['onesign', 'joint_certificate']) {
@@ -976,6 +984,7 @@ for (const method of ['onesign', 'joint_certificate']) {
     main.innerHTML = await ui.views.accounts(ui.ctx);
     await ui.actions.login(ui.ctx, {dataset: {login: 'login'}});
     assert.match(ui.asked[0][2], /잔액을 이어서 조회/, 'the dialog says so before any password is typed');
+    if (method === 'joint_certificate') assert.equal(ui.asked[0][3].passwords.certificate_password, 'finance:joint-certificate:synthetic');
     await ui.calls[0].options.onDone({outcome: 'rejected'});
     await ui.calls[0].options.onDone({outcome: 'success', local: {stopped: 'session_not_saved'}});
     assert.deepEqual(names(), [loginJob], 'a login that did not succeed asks for nothing more');

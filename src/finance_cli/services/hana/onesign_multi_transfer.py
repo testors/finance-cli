@@ -6,6 +6,8 @@ from pathlib import Path
 import re
 from zoneinfo import ZoneInfo
 
+from finance_cli.core.amounts import ungroup_amount
+
 from . import onesign_crypto as pin, onesign_compat as compat, nfilter_crypto
 from . import onesign_transfer as transfer, onesign_transfer_protocol as protocol, transfer_format as fmt
 from .evidence import account, amount, identifiers
@@ -27,6 +29,7 @@ def checked_items(items):
                     'invalid_batch_row')
         pin.require(all(isinstance(v, str) for v in item.values()), 'invalid_batch_row')
         bank, recipient, raw_amount = (item[k].strip() for k in ('to_bank', 'to_account', 'amount'))
+        raw_amount = ungroup_amount(raw_amount)
         pin.require(re.fullmatch('[0-9]{3}', bank) is not None, 'recipient_bank_code_format')
         recipient = account(recipient)
         pin.require(recipient is not None, 'transfer_account_format')

@@ -7,6 +7,7 @@ import sys
 import warnings
 
 from finance_cli.cli.credentials import add_selection, resolve
+from finance_cli.core.amounts import ungroup_amount
 from . import batch, idpw, keypad, login, store, protocol, queries, transfers
 
 
@@ -55,7 +56,7 @@ def add_parser(sub):
     item.add_argument('--from-account', required=True)
     item.add_argument('--to-bank', required=True, help='입금은행 코드 3자리')
     item.add_argument('--to-account', required=True)
-    item.add_argument('--amount', required=True, help='원화 정수 금액')
+    item.add_argument('--amount', required=True, type=ungroup_amount, help='원화 정수 금액; 3,000,000처럼 쉼표 허용')
     item.add_argument('--memo', default='')
     item.add_argument('--debit-memo', help='출금통장 표시; 기본 수취인명')
     item.add_argument('--credit-memo', help='입금통장 표시; 기본 출금계좌 예금주명')

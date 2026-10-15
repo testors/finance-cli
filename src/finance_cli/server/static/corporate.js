@@ -74,7 +74,12 @@ export async function corporateLogin(ctx, row = null, method = 'id_password', se
   const settingChoice = settings && !settings.selected && settings.settings.length > 1
     ? select('settings', '키패드 설정', settings.settings.map(s => [s, s])) : '';
   const unavailable = method === 'id_password' ? !settings.settings.length : !row && !available.length;
-  ui.showDialog('하나기업뱅킹 로그인', `<form data-submit="corporate-login" data-login="${esc(row?.id || '')}" data-method="${method}" autocomplete="off">${selection}${credential}${settingChoice}${fields.map(([name, label, pattern]) => field(name, label, `type="password" required ${pattern ? `pattern="${pattern}" inputmode="numeric"` : ''}`)).join('')}${rememberField(fields, store)}${unavailable && method === 'id_password' ? note('서버에 하나은행 키패드 설정을 먼저 설치해야 해요. 이미 설치한 개인뱅킹 설정도 공유해요.') : ''}<p class="dialog-note">${method === 'id_password' ? '기업 ID와 비밀번호로 로그인해요. 인증서 등록은 필요 없어요.' : method === 'onesign' ? '기업 ID에 연결된 기존 하나인증서를 사용해요.' : '기존 공동인증서로 기업뱅킹에 로그인해요.'} 로그인 후 계좌를 조회해 바로 연결해요.</p><p class="form-error" role="alert"></p><div class="dialog-actions">${button('취소', 'data-ui="close"')}<button class="button primary" type="submit" ${unavailable ? 'disabled' : ''}>로그인하고 계좌 보기</button></div></form>`);
+  ui.showDialog('하나기업뱅킹 로그인', `<form data-submit="corporate-login" data-login="${esc(row?.id || '')}" data-method="${method}" autocomplete="off">${selection}${credential}${settingChoice}${fields.map(([name, label, pattern]) => field(name, label, `type="password" required ${pattern ? `pattern="${pattern}" inputmode="numeric"` : ''}`)).join('')}${rememberField(fields, store)}${unavailable && method === 'id_password' ? note('서버에 하나은행 키패드 설정을 먼저 설치해야 해요. 이미 설치한 개인뱅킹 설정도 공유해요.') : ''}<p class="dialog-note">${method === 'id_password' ? '기업 ID와 비밀번호로 로그인해요. 인증서 등록은 필요 없어요.' : method === 'onesign' ? '기업 ID에 연결된 기존 하나인증서를 사용해요.' : '기존 공동인증서로 기업뱅킹에 로그인해요.'} 로그인 후 계좌를 조회해 바로 연결해요.</p><p class="form-error" role="alert"></p><div class="dialog-actions">${button('취소', 'data-ui="close"')}<button class="button primary" type="submit" ${unavailable ? 'disabled' : ''}>로그인하고 계좌 보기</button></div></form>`, {passwords: {
+    vault_passphrase: ui.passwordAccount('onesign-vault', store),
+    pin: ui.passwordAccount('onesign-pin', store),
+    certificate_password: form => ui.passwordAccount('joint-certificate', row?.credential?.ref || form.querySelector('[name="credential"]')?.value),
+    login_password: form => ui.passwordAccount('hana-corporate-login', row?.credential?.ref || form.querySelector('[name="credential"]')?.value.toUpperCase()),
+  }});
 }
 
 async function queryAccounts(ctx, row, category = 'withdrawal') {
@@ -151,7 +156,14 @@ async function transferDialog(ctx, job) {
     const challenge = await api.get('/jobs/' + encodeURIComponent(job.id) + '/corporate-ars');
     input += `<div class="info-block">은행에서 걸려 온 전화에 인증번호 <strong>${esc(challenge.code)}</strong>를 입력한 뒤 아래 버튼을 누르세요.</div>`;
   }
-  ui.showDialog(next === 'execute' ? '기업 이체 내용 확인' : '기업 이체 인증', `${preview(awaiting.preview)}${duplicate ? note('은행에서 중복 이체 가능성을 알렸어요.') : ''}<form data-submit="corporate-transfer-confirm" data-job="${esc(job.id)}" data-digest="${esc(awaiting.digest)}" autocomplete="off">${input}${duplicate && next === 'execute' ? '<label><input type="checkbox" required>중복 안내를 확인했으며 이체를 진행합니다.</label>' : ''}<p class="dialog-note">${next === 'execute' ? '확인하면 필요한 인증을 진행하고 이체를 한 번만 전송해요.' : '은행이 요구한 인증만 입력해요. 인증을 마치면 확인한 이체를 진행해요.'}</p><div class="dialog-actions">${button('나중에', 'data-ui="close"')}${button('준비 취소', `data-action="corporate-transfer-cancel" data-job="${esc(job.id)}"`)}<button class="button primary" type="submit">${next === 'ars' ? '전화 인증 완료 · 계속' : next === 'execute' ? '확인하고 이체' : '인증하고 계속'}</button></div></form>`);
+  ui.showDialog(next === 'execute' ? '기업 이체 내용 확인' : '기업 이체 인증', `${preview(awaiting.preview)}${duplicate ? note('은행에서 중복 이체 가능성을 알렸어요.') : ''}<form data-submit="corporate-transfer-confirm" data-job="${esc(job.id)}" data-digest="${esc(awaiting.digest)}" autocomplete="off">${input}${duplicate && next === 'execute' ? '<label><input type="checkbox" required>중복 안내를 확인했으며 이체를 진행합니다.</label>' : ''}<p class="dialog-note">${next === 'execute' ? '확인하면 필요한 인증을 진행하고 이체를 한 번만 전송해요.' : '은행이 요구한 인증만 입력해요. 인증을 마치면 확인한 이체를 진행해요.'}</p><div class="dialog-actions">${button('나중에', 'data-ui="close"')}${button('준비 취소', `data-action="corporate-transfer-cancel" data-job="${esc(job.id)}"`)}<button class="button primary" type="submit">${next === 'ars' ? '전화 인증 완료 · 계속' : next === 'execute' ? '확인하고 이체' : '인증하고 계속'}</button></div></form>`, {passwords: {
+    certificate_password: form => ui.passwordAccount('joint-certificate', form.querySelector('[name="signing_credential"]')?.value || awaiting.signing_credential
+      || target(job.target_id)?.signing?.transfer_sign?.ref || login(job.login_id)?.signing?.transfer_sign?.ref
+      || (login(job.login_id)?.method === 'joint_certificate' ? login(job.login_id)?.credential?.ref : null)),
+    vault_passphrase: ui.passwordAccount('onesign-vault', onesignStore(login(job.login_id), true)),
+    pin: ui.passwordAccount('onesign-pin', onesignStore(login(job.login_id), true)),
+    account_password: ui.passwordAccount('hana-corporate-account', job.target_id),
+  }});
 }
 
 function resultDialog(job) {
@@ -179,7 +191,7 @@ async function transferView() {
   const recent = previous.length ? `<section class="panel"><div class="panel-heading"><h2>진행한 이체</h2></div><div class="settings-body">${previous.map(j => `<div class="setting-row"><span>${esc(j.fixed?.login?.display_name)} · ${ui.time(j.created_at)} ${ui.statusTags(j)}</span>${button(j.status === 'awaiting_input' ? '이어하기' : '결과 보기', `data-action="corporate-transfer-open" data-job="${esc(j.id)}"`)}</div>`).join('')}</div></section>` : '';
   const intro = heading('기업 이체', '일반 원화 이체의 수취인과 금액을 확인하고 진행해요.');
   if (!rows.length) return intro + `<section class="panel"><div class="empty-state">기업 계좌를 조회하면 출금 계좌를 선택할 수 있어요.<div class="section-actions">${button('기업 계좌', 'data-view="corporate-accounts"', 'primary')}</div></div></section>` + recent;
-  return intro + `<form class="panel form-panel corporate-transfer-form" data-submit="corporate-transfer">${select('target_id', '출금 계좌', accountOptions(rows))}<div class="field-row">${select('bank', '받는 은행', ui.BANKS, '081')}${field('recipient', '받는 계좌', 'required inputmode="numeric" pattern="[0-9- ]+" maxlength="24"')}</div>${field('amount', '이체 금액 (원)', 'required inputmode="numeric" pattern="[0-9,]+"')}<details class="advanced-block"><summary>통장 표시·메모·지연이체</summary>${field('sender_text', '입금 통장 표시', 'maxlength="100"')}${field('recipient_text', '출금 통장 표시', 'maxlength="100"')}${field('memo', '메모', 'maxlength="100"')}${field('cms_code', 'CMS 코드', 'pattern="[A-Za-z0-9-]+" maxlength="100"')}<label><input name="delayed" type="checkbox">지연이체</label></details><div class="form-actions"><button class="button primary" type="submit">받는 분·금액 확인</button><p class="field-help">이 단계에서는 이체하지 않아요. 은행이 요구하는 인증은 내용 확인 후 입력해요.</p></div></form>${panel()}${recent}`;
+  return intro + `<form class="panel form-panel corporate-transfer-form" data-submit="corporate-transfer">${select('target_id', '출금 계좌', accountOptions(rows))}<div class="field-row">${select('bank', '받는 은행', ui.BANKS, '081')}${field('recipient', '받는 계좌', 'required inputmode="numeric" pattern="[0-9- ]+" maxlength="24"')}</div>${field('amount', '이체 금액 (원)', 'data-amount required inputmode="numeric" pattern="[0-9,]+"')}<details class="advanced-block"><summary>통장 표시·메모·지연이체</summary>${field('sender_text', '입금 통장 표시', 'maxlength="100"')}${field('recipient_text', '출금 통장 표시', 'maxlength="100"')}${field('memo', '메모', 'maxlength="100"')}${field('cms_code', 'CMS 코드', 'pattern="[A-Za-z0-9-]+" maxlength="100"')}<label><input name="delayed" type="checkbox">지연이체</label></details><div class="form-actions"><button class="button primary" type="submit">받는 분·금액 확인</button><p class="field-help">이 단계에서는 이체하지 않아요. 은행이 요구하는 인증은 내용 확인 후 입력해요.</p></div></form>${panel()}${recent}`;
 }
 
 export const corporateViews = {'corporate-accounts': accountsView, 'corporate-history': historyView, 'corporate-transfer': transferView};
@@ -189,7 +201,7 @@ export const corporateActions = {
   'corporate-login-credential': (ctx, select) => corporateLogin(ctx, null, 'onesign', select.value),
   'corporate-relogin': (ctx, el) => corporateLogin(ctx, login(el.dataset.login)),
   'corporate-login': async (ctx, form) => {
-    const data = Object.fromEntries(new FormData(form)), method = form.dataset.method;
+    const data = Object.fromEntries(ui.formData(form)), method = form.dataset.method;
     let row = login(form.dataset.login);
     try {
       if (!row) {
@@ -234,7 +246,7 @@ export const corporateActions = {
   },
   'corporate-transfer-confirm': async (ctx, form) => {
     const id = form.dataset.job;
-    const secrets = Object.fromEntries(new FormData(form));
+    const secrets = Object.fromEntries(ui.formData(form));
     form.reset();
     const job = await api.post('/jobs/' + encodeURIComponent(id) + '/confirm', {confirmation: form.dataset.digest, secrets}, {label: '기업 원화 이체'});
     ui.closeDialog();
