@@ -75,6 +75,11 @@ def post_certificate(payload, cookie='', *, path):
     return _post('ca.shinhan.com', payload, headers, path, 30)
 
 
+def post_cmp(payload, *, path):
+    return _post('ca.shinhan.com', payload, {'Content-Type': 'application/pkixcmp',
+                 'Accept-Encoding': 'gzip'}, path, 10)
+
+
 def update_cookie(state, headers):
     for name, value in headers:
         if name.lower() != 'set-cookie':

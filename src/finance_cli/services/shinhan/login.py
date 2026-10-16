@@ -7,15 +7,31 @@ import re
 
 from finance_cli.core import storage
 from finance_cli.credentials.registry import decode
-from finance_cli.credentials.shinhan import Registry
+from finance_cli.credentials.shinhan import Registry, SelectionRequired
 from . import crypto, e2e, login_protocol, setup
 from .exchange import Exchange
+
+
+def select(reference=None):
+    registry = Registry()
+    if reference is not None:
+        return registry.select(reference)
+    path = setup.root() / 'session.json'
+    state = storage.read_json(path) if path.exists() else {}
+    disabled = state.get('disabled_credentials', [])
+    active = [row['name'] for row in registry.list() if row['name'] not in disabled]
+    preferred = state.get('credential')
+    if preferred in active:
+        return preferred
+    if len(active) == 1:
+        return active[0]
+    raise SelectionRequired(len(active))
 
 
 def run(reference, password, pin_input):
     settings = setup.load()
     registry = Registry()
-    reference = registry.select(reference)
+    reference = select(reference)
     credential = registry.load(reference, password)
     if credential.get('state') != 'issued':
         raise ValueError('issued_certificate_required')

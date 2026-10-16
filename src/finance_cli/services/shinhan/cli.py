@@ -69,7 +69,7 @@ def main(argv=None):
         elif args.command == 'certificate':
             result = {'certificates': Registry().list(), 'network_used': False}
         elif args.command == 'login':
-            reference = Registry().select(args.credential)
+            reference = login.select(args.credential)
             password = sys.stdin.buffer.readline().removesuffix(b'\n').removesuffix(b'\r') if args.password_stdin else getpass.getpass('신한인증서 보관 암호: ').encode()
             def pin_input():
                 if args.pin_file:

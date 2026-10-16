@@ -10,7 +10,7 @@ from cryptography.hazmat.primitives.ciphers.aead import AESGCM
 
 from finance_cli.core import storage
 from finance_cli.core.paths import data_home
-from .registry import name, key, encode, decode, matched
+from .registry import name, key, encode, decode
 
 FORMAT = 'finance-shinhan-credential-v1'
 
@@ -54,10 +54,7 @@ class Registry:
                 decode(envelope['nonce']), decode(envelope['sealed']), (FORMAT+'/'+reference).encode())
         except InvalidTag:
             raise ValueError('incorrect_password_or_damaged_credential') from None
-        value = json.loads(plain)
-        if value.get('certificate'):
-            matched(decode(value['certificate']), decode(value['private_key']))
-        return value
+        return json.loads(plain)
 
     def save(self, reference, password, value, *, create=False):
         name(reference)

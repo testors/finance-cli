@@ -114,3 +114,20 @@ class Exchange:
         self.record_response(reply)
         self.save()
         return recorded, reply.body
+
+    def cmp(self, stage, path, message):
+        from .cmp import wire
+        payload = wire(message)
+        recorded = self.reserve(stage)
+        # CMP has its own byte transport and does not reuse either JSON cookie jar.
+        reply = transport.post_cmp(payload, path=path)
+        recorded['http_status'] = reply.status
+        if reply.error:
+            recorded['error'] = reply.error
+        elif reply.status is None or not 200 <= reply.status < 300:
+            recorded['error'] = 'http_status_error'
+        else:
+            recorded.update(result='http_success', processing_status='received')
+        self.record_response(reply)
+        self.save()
+        return recorded, reply.body

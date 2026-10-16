@@ -27,7 +27,7 @@ fin --format json-v1 shinhan session extend --send
 
 ## 인증서 로그인 연결
 
-`fin shinhan login --send`는 공통 저장소의 발급된 신한인증서가 하나면 자동 선택합니다. 여러 개면 `fin shinhan certificate list`로 확인해 `--credential`로 선택합니다. 기존 SOL뱅크 앱의 인증서를 PIN만으로 가져올 수는 없습니다. 신규 발급 경로가 연결되기 전까지 이 명령을 첫 로그인용으로 사용할 수 있다고 보장하지 않습니다.
+`fin shinhan login --send`는 현재 은행 연결의 인증서를 우선 선택하고, 연결이 없으면 사용 중지되지 않은 인증서가 하나일 때 자동 선택합니다. 선택이 모호하면 `fin shinhan certificate list`로 확인해 `--credential`로 선택합니다. 기존 SOL뱅크 앱의 인증서를 PIN만으로 가져올 수는 없습니다. 신규 발급 경로가 연결되기 전까지 이 명령을 첫 로그인용으로 사용할 수 있다고 보장하지 않습니다.
 
 보관 암호와 6자리 PIN은 각각 숨김 입력합니다. `--password-stdin`은 보관 암호 한 줄만 읽습니다. 자동화의 `--pin-file`은 소유자만 읽을 수 있는 파일의 PIN 한 줄을 읽으며, PIN을 암호 입력에서 추정하지 않습니다. 개인키·PIN salt·인증서 자료는 공통 사용자 보관함에서 scrypt/AES-GCM으로 암호화합니다. 은행 세션에는 인증서 참조만 저장합니다.
 
