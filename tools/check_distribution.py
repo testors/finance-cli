@@ -37,6 +37,7 @@ for args, source in (
     (['--format','json-v1','shinhan','session','status'], ''),
     (['shinhan','accounts','--help'], ''),
     (['shinhan','loans','--help'], ''),
+    (['shinhan','phone','verify','--help'], ''),
     (['hana','encode-header'], '{"CHNL_SYS_HDPT":{"synthetic":true}}'),
     (['hana','session','list'], ''),
     (['hana','corporate','login','--session','synthetic','--credential','synthetic'], ''),

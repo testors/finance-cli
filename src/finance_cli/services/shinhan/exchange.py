@@ -132,12 +132,12 @@ class Exchange:
         self.save()
         return recorded, reply.body
 
-    def web(self, stage, transaction, body, *, program):
+    def web(self, stage, transaction, body, *, program, response_parser=None):
         from . import web
         payload = web.encode(transaction, body, self.settings, program)
         recorded = self.reserve(stage, transaction=transaction)
         reply = transport.post_web(payload, self.state.get('cookie', ''))
-        verdict, document = web.parse(reply)
+        verdict, document = (response_parser or web.parse)(reply)
         recorded.update(verdict)
         recorded['result'] = verdict['bank_result']
         try:

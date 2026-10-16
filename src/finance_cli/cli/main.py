@@ -17,7 +17,9 @@ def capabilities():
     from finance_cli.core.live_verification import HANA_LEVEL, REVIEWED_ON, hana_report, giro_report, corporate_report, hometax_report
     return {'schema_version': 1, 'services': {
         'shinhan': {'offline': ['user-package-settings-extraction', 'local-session-status'],
-                    'live': ['startup-request', 'explicit-session-extension', 'shinhan-account-list', 'shinhan-loan-list'],
+                    'live': ['startup-request', 'explicit-session-extension', 'device-phone-sms-verification', 'shinhan-account-list', 'shinhan-loan-list'],
+                    'device_phone': {'command': 'fin shinhan phone verify', 'verification': 'synthetic_only',
+                                     'requires': 'interactive terminal and SMS sent by the user from their phone'},
                     'accounts': {'commands': ['fin shinhan accounts', 'fin shinhan loans'],
                                  'verification': 'synthetic_only', 'requires': 'authenticated session',
                                  'scope': 'visible Shinhan rows; account data is saved to a private file'},

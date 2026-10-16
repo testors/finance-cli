@@ -1,11 +1,12 @@
 """Shinhan command entry point. All transmission requires explicit --send."""
 import getpass
+import json
 import sys
 
 from finance_cli.cli.output import ArgumentParser, emit
 from finance_cli.core import storage
 from finance_cli.credentials.shinhan import Registry, SelectionRequired
-from . import accounts, login, session, setup
+from . import accounts, device_phone, login, session, setup
 
 
 class DeviceInputRequired(ValueError):
@@ -47,6 +48,8 @@ def main(argv=None):
     auth.add_argument('--password-stdin', action='store_true', help='보관 암호 한 줄만 stdin으로 입력')
     auth.add_argument('--pin-file', help='소유자만 읽을 수 있는 PIN 한 줄 파일; 생략 시 숨김 입력')
     auth.add_argument('--send', action='store_true')
+    phone = commands.add_parser('phone', help='문자 발신으로 휴대폰 번호 확인').add_subparsers(dest='action', required=True)
+    phone.add_parser('verify', help='본인 휴대폰으로 안내된 문자를 전송하고 은행 확인').add_argument('--send', action='store_true')
     for name, description in (('accounts', '표시 가능한 신한 계좌 목록'), ('loans', '표시 가능한 신한 대출 목록')):
         item = commands.add_parser(name, help=description)
         item.add_argument('--send', action='store_true')
@@ -60,7 +63,7 @@ def main(argv=None):
             item.add_argument('--apk', help='설정이 없을 때 사용할 버전 20.0.40 기본 설치 패키지')
             item.add_argument('--device-input', help='기기 JSON; 최초 설정 시 생략하면 숨김 입력')
     args = parser.parse_args(argv)
-    if (args.command in ('login', 'accounts', 'loans') or args.command == 'session' and args.action != 'status') and not args.send:
+    if (args.command in ('login', 'accounts', 'loans', 'phone') or args.command == 'session' and args.action != 'status') and not args.send:
         emit({'error': 'send_required', 'network_used': False,
               'message': '기관 연결에는 --send가 필요합니다.'}, 2)
         return 2
@@ -84,6 +87,19 @@ def main(argv=None):
         elif args.command in ('accounts', 'loans'):
             network_used = None
             result = accounts.run(loans=args.command == 'loans', refresh=args.refresh)
+        elif args.command == 'phone':
+            if not sys.stdin.isatty():
+                emit({'error': 'interactive_input_required', 'network_used': False,
+                      'message': '문자 발신 확인을 위해 터미널에서 실행하세요.'}, 2)
+                return 2
+            def sms_input(exchange, destination, message):
+                path = exchange.run/'sms-instructions.json'
+                storage.write_new(path, (json.dumps({'destination': destination, 'message': message}, ensure_ascii=False)+'\n').encode())
+                print(f'문자 수신번호와 내용은 {path} 에 저장했습니다. 이 파일은 공유하지 마세요.', file=sys.stderr)
+                getpass.getpass('파일의 내용 그대로 본인 휴대폰에서 문자를 전송한 뒤 Enter를 누르세요. 취소: Ctrl+C ')
+                return True
+            network_used = None
+            result = device_phone.run(sms_input)
         elif args.action == 'status':
             result = session.status()
         else:
