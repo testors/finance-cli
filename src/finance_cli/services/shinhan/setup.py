@@ -68,14 +68,17 @@ def extract(package):
             if archive.getinfo(name).file_size > 64*1024*1024:
                 raise ValueError('service_data_too_large')
         key = decode_key(archive.read('classes9.dex'))
-        e2e_key = decode_e2e_key(archive.read('classes5.dex'))
+        keypad_data = archive.read('classes5.dex')
+        e2e_key = decode_e2e_key(keypad_data)
+        keypad_alphabet = decode_keypad_alphabet(keypad_data)
         menu = archive.read('assets/menu_program_nss_default.json')
     if hashlib.sha256(menu).hexdigest() != MENU_SHA256:
         raise ValueError('unsupported_menu_data')
-    return {'version': VERSION, 'bank_key': key, 'menu_version': json.loads(menu)['G1'], 'e2e_key': e2e_key}
+    return {'version': VERSION, 'bank_key': key, 'menu_version': json.loads(menu)['G1'],
+            'e2e_key': e2e_key, 'keypad_alphabet': keypad_alphabet}
 
 
-def decode_e2e_key(data):
+def _e2e_profile(data):
     if hashlib.sha256(data).hexdigest() != E2E_DATA_SHA256:
         raise ValueError('unsupported_e2e_data')
     arrays = [struct.pack('>256i', *struct.unpack_from('<256i', data, offset)) for offset in E2E_ARRAY_OFFSETS]
@@ -90,7 +93,18 @@ def decode_e2e_key(data):
     profile = json.loads(plain)
     if 'com.shinhan.sbanking' not in json.loads(profile['ffff']) or not isinstance(profile['b'], str):
         raise ValueError('invalid_e2e_profile')
-    return profile['b']
+    return profile
+
+
+def decode_e2e_key(data):
+    return _e2e_profile(data)['b']
+
+
+def decode_keypad_alphabet(data):
+    alphabet = bytes.fromhex(_e2e_profile(data)['mmmm'])
+    if len(alphabet) != 109 or alphabet[:10] != b'0123456789':
+        raise ValueError('invalid_keypad_alphabet')
+    return alphabet.hex()
 
 
 def refresh(package):

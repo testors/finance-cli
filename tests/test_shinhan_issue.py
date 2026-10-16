@@ -13,7 +13,7 @@ from finance_cli.core import storage
 from finance_cli.credentials.registry import decode
 from finance_cli.credentials.shinhan import Registry
 from finance_cli.credentials.joint.cms import sequence
-from finance_cli.services.shinhan import cmp, crypto, issue, login, setup, transport
+from finance_cli.services.shinhan import cmp, crypto, issue, issuance_auth, login, setup, transport
 from finance_cli.services.shinhan.exchange import Exchange
 from test_shinhan import PrivateHome, settings, response
 from test_shinhan_cmp import genp, ip
@@ -87,6 +87,21 @@ class IssueTests(PrivateHome):
 
     def run_issue(self):
         return issue.complete(self.exchange, self.enrollment, self.password, self.unique, self.salt)
+
+    def test_bank_reference_flows_into_real_cmp_and_registration_without_user_supplied_reference(self):
+        self.state['enrollment'] = {
+            'identity': {'birth': '900101', 'gender': '1', 'telecom': '1', 'phoneNumber': 'SYN-PHONE'},
+            'resident_identity': {'secret': 'SYN-CIPHER'},
+            'customer': {'customerNumber': 'SYN-CUSTOMER', 'customerName': 'Synthetic Customer'}}
+        reply = transport.Reply(200, [], response(body={'refNoS20': 'SYN-REF', 'ingaCS20': 'SYN-AUTH'}))
+        with patch.object(transport, 'post_web', return_value=reply) as reference:
+            self.enrollment = issuance_auth.reference(self.exchange, account='SYN-ACCOUNT', bank='088')
+        result = self.run_issue()
+        reference.assert_called_once()
+        self.assertEqual(result['issuance_reference'], 'success')
+        self.assertEqual(result['certificate_issuance'], 'success')
+        self.assertEqual(result['certificate_registration'], 'success')
+        self.assertEqual(result['stages'][0]['transaction'], 'RSMCM0890A01')
 
     def test_complete_saves_issued_credential_and_preserves_empty_registration_fields(self):
         Registry().prepare('previous', self.password, self.unique, self.salt, settings()['device']['device_id'])
