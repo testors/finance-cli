@@ -95,7 +95,8 @@ def security_card_serial(exchange, result):
         raise Pending('security_media_unverified')
 
 
-def additional_authentication(exchange, authenticate, *, program=ACCOUNT_PROGRAM):
+def additional_authentication(exchange, authenticate=None, *, select=None, respond=None,
+                              login_info=None, program=ACCOUNT_PROGRAM):
     customer = exchange.state['enrollment']['customer']
     _, body, header = request(exchange, 'issuance_additional_auth_check', 'RSMCM1005A04',
                               {'cusnoS10': customer['customerNumber']}, program=program)
@@ -106,8 +107,12 @@ def additional_authentication(exchange, authenticate, *, program=ACCOUNT_PROGRAM
     required = field(body, 'addAuthDsYnS1') == 'Y' and not web.nullish(sequence)
     exchange.report['additional_auth_required'] = required
     if required:
-        result = authenticate({'serviceSeq': sequence, '고객번호': customer['customerNumber'],
-                               '고객성명': customer['customerName']})
+        params = {'serviceSeq': sequence, '고객번호': customer['customerNumber'], '고객성명': customer['customerName']}
+        if authenticate is None:
+            from .additional_auth import authenticate as phone_authenticate
+            result = phone_authenticate(exchange, params, select, respond, login_info=login_info)
+        else:
+            result = authenticate(params)
         if field(result, '인증여부') != 'Y':
             raise Pending('additional_authentication_incomplete')
         exchange.report['additional_authentication'] = 'success'

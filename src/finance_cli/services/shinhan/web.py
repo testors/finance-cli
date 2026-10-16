@@ -18,8 +18,8 @@ def nullish(value):
     return value is None or value == '' or isinstance(value, (list, dict)) and not value
 
 
-def encode(transaction, body, settings, program):
-    header = {'trxCd': transaction, 'uuid': settings['device']['device_id'],
+def encode(transaction, body, settings, program, *, header=None):
+    header = {**(header or {}), 'trxCd': transaction, 'uuid': settings['device']['device_id'],
               'subChannel': '03', 'programId': program, 'appG': 'supersol', 'encG': '1'}
     key = bytes.fromhex(settings['bank_key'])
     plain = json.dumps(body, ensure_ascii=False, separators=(',', ':'), allow_nan=False).encode()

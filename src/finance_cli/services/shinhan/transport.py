@@ -67,8 +67,10 @@ def post(payload, cookie='', *, path=ENDPOINT):
     return _post(BANK_HOST, payload, headers, path, 60)
 
 
-def post_web(payload, cookie='', *, path=ENDPOINT):
+def post_web(payload, cookie='', *, path=ENDPOINT, show_message=None):
     headers = {'Content-Type': 'application/json', 'Accept-Encoding': 'gzip'}
+    if show_message is not None:
+        headers['isShowMsg'] = 'Y' if show_message else 'N'
     if cookie:
         headers['Cookie'] = cookie
     return _post(BANK_HOST, payload, headers, path, 60)
