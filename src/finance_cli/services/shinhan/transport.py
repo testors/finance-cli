@@ -34,13 +34,10 @@ class Reply:
     error: str | None = None
 
 
-def post(payload, cookie='', *, path=ENDPOINT):
-    connection = http.client.HTTPSConnection(BANK_HOST, timeout=60)
+def _post(host, payload, headers, path, timeout):
+    connection = http.client.HTTPSConnection(host, timeout=timeout)
     reply = Reply()
     try:
-        headers = {'Content-Type': 'application/json; charset=UTF-8', 'Accept-Encoding': 'gzip'}
-        if cookie:
-            headers['Cookie'] = cookie
         connection.request('POST', path, payload, headers)
         response = connection.getresponse()
         reply.status, reply.headers = response.status, response.getheaders()
@@ -61,6 +58,21 @@ def post(payload, cookie='', *, path=ENDPOINT):
             pass  # Closing cannot erase an already received response.
     # Deliberately no redirect, recovery, retry or automatic login.
     return reply
+
+
+def post(payload, cookie='', *, path=ENDPOINT):
+    headers = {'Content-Type': 'application/json; charset=UTF-8', 'Accept-Encoding': 'gzip'}
+    if cookie:
+        headers['Cookie'] = cookie
+    return _post(BANK_HOST, payload, headers, path, 60)
+
+
+def post_certificate(payload, cookie='', *, path):
+    headers = {'Content-Type': 'application/json; charset=utf-8', 'Accept': 'application/json',
+               'Accept-Encoding': 'gzip'}
+    if cookie:
+        headers['Cookie'] = cookie
+    return _post('ca.shinhan.com', payload, headers, path, 30)
 
 
 def update_cookie(state, headers):

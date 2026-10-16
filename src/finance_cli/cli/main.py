@@ -18,6 +18,10 @@ def capabilities():
     return {'schema_version': 1, 'services': {
         'shinhan': {'offline': ['user-package-settings-extraction', 'local-session-status'],
                     'live': ['startup-request', 'explicit-session-extension'],
+                    'login': {'command': 'fin shinhan login', 'verification': 'synthetic_only',
+                              'implemented': ['pin-e2e', 'pin-authentication', 'nonce-rsa-pkcs7-login',
+                                              'shared-encrypted-certificate-storage'],
+                              'requires': 'issued Shinhan credential; enrollment is not connected yet'},
                     'verification': 'implemented_live_untested', 'live_tested': False,
                     'automatic_retry': False,
                     'requirements': ['user-supplied settings for version 20.0.40',

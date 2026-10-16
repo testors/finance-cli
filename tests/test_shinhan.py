@@ -24,7 +24,7 @@ from finance_cli.services.shinhan import session, setup, transport
 
 
 def settings():
-    return {'version': setup.VERSION, 'bank_key': bytes(range(32)).hex(), 'menu_version': 'SYN-MENU',
+    return {'version': setup.VERSION, 'bank_key': bytes(range(32)).hex(), 'menu_version': 'SYN-MENU', 'e2e_key': 'SYN-E2E',
             'device': setup.device('SYN-ANDROID', 'SYN-MODEL', 'SYN-OS')}
 
 
@@ -66,10 +66,12 @@ class SetupTests(PrivateHome):
         menu = b'{"G1":"SYN-MENU"}'
         with zipfile.ZipFile(target, 'w') as archive:
             archive.writestr('classes9.dex', b'SYNTHETIC-DATA')
+            archive.writestr('classes5.dex', b'SYNTHETIC-E2E')
             archive.writestr('assets/menu_program_nss_default.json', menu)
         with patch.object(setup, 'PACKAGE_SHA256', hashlib.sha256(target.read_bytes()).hexdigest()), \
              patch.object(setup, 'MENU_SHA256', hashlib.sha256(menu).hexdigest()), \
-             patch.object(setup, 'decode_key', return_value=bytes(range(32)).hex()):
+             patch.object(setup, 'decode_key', return_value=bytes(range(32)).hex()), \
+             patch.object(setup, 'decode_e2e_key', return_value='SYN-E2E'):
             result = setup.install(target, {'android_id': 'SYN-ANDROID', 'model': 'SYN-MODEL', 'os_version': 'SYN-OS'})
             self.assertFalse(result['network_used'])
             self.assertEqual(setup.load(), settings())
@@ -85,6 +87,17 @@ class SetupTests(PrivateHome):
         with self.assertRaises(ValueError):
             setup.install(target, {'android_id': '', 'model': '', 'os_version': ''})
         self.assertFalse(self.home.exists())
+
+    def test_refresh_changes_service_settings_without_replacing_identity_or_session(self):
+        self.install()
+        storage.atomic_json(setup.root() / 'session.json', {'cookie': 'SYN-COOKIE'})
+        before = setup.load()
+        with patch.object(setup, 'extract', return_value={'version': setup.VERSION, 'bank_key': before['bank_key'],
+                                                         'menu_version': 'SYN-MENU', 'e2e_key': 'SYN-REFRESH'}):
+            setup.refresh('synthetic.zip')
+        self.assertEqual(setup.load()['device'], before['device'])
+        self.assertEqual(setup.load()['e2e_key'], 'SYN-REFRESH')
+        self.assertEqual(storage.read_json(setup.root() / 'session.json'), {'cookie': 'SYN-COOKIE'})
 
 
 class TransportTests(unittest.TestCase):

@@ -20,6 +20,7 @@ def status():
         saved = storage.read_json(folder / 'session.json')
         result['cookie_present'] = bool(saved.get('cookie'))
         result['last_operation'] = saved.get('last_operation')
+        result['login_previously_accepted'] = bool(saved.get('authenticated'))
     return result
 
 

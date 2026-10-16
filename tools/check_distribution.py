@@ -33,6 +33,7 @@ for args, source in (
     (['idcard','list'], ''),
     (['capabilities'], ''),
     (['shinhan','session','status'], ''),
+    (['shinhan','certificate','list'], ''),
     (['--format','json-v1','shinhan','session','status'], ''),
     (['hana','encode-header'], '{"CHNL_SYS_HDPT":{"synthetic":true}}'),
     (['hana','session','list'], ''),
@@ -131,6 +132,7 @@ def main():
                      'finance_cli/server/static/index.html', 'finance_cli/server/static/app.js',
                      'finance_cli/server/static/busy.js', 'finance_cli/services/shinhan/cli.py',
                      'finance_cli/services/shinhan/setup.py', 'finance_cli/services/shinhan/transport.py',
+                     'finance_cli/services/shinhan/login.py', 'finance_cli/credentials/shinhan.py',
                      'finance_cli/server/static/app.css', 'finance_cli/server/Caddyfile.example',
                      'finance_cli/services/hana_corporate/cli.py'):
         if required not in names:

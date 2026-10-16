@@ -7,6 +7,8 @@ import re
 import struct
 import zipfile
 
+from Crypto.Cipher import AES
+from Crypto.Util.Padding import unpad
 from finance_cli.core import storage
 from finance_cli.core.paths import data_home
 
@@ -16,6 +18,9 @@ DATA_SHA256 = '7beaf1bd59de5cd754cfc1be1726c0287e01546d5a8cc01c53ff40dde5a10748'
 MENU_SHA256 = '80b30a1348696d09fbf978728928b541ba8f0cc30a1933d6d02e3a8f64195dd0'
 KEY_OFFSET = 16388928
 PARAMETER_OFFSETS = (16388846, 16388852, 16388858, 16388840)
+E2E_DATA_SHA256 = 'afed8b2a314d3e4f8672c27bafafb893b0727269003ab2bb468a07a7cccb0d9c'
+E2E_ARRAY_OFFSETS = (7021452, 7022484, 7023516)
+E2E_CIPHER_OFFSET, E2E_CIPHER_LENGTH = 2729082, 20192
 
 
 def root():
@@ -59,14 +64,43 @@ def extract(package):
     if len(data) > 512*1024*1024 or hashlib.sha256(data).hexdigest() != PACKAGE_SHA256:
         raise ValueError('unsupported_package')
     with zipfile.ZipFile(io.BytesIO(data)) as archive:
-        for name in ('classes9.dex', 'assets/menu_program_nss_default.json'):
+        for name in ('classes9.dex', 'classes5.dex', 'assets/menu_program_nss_default.json'):
             if archive.getinfo(name).file_size > 64*1024*1024:
                 raise ValueError('service_data_too_large')
         key = decode_key(archive.read('classes9.dex'))
+        e2e_key = decode_e2e_key(archive.read('classes5.dex'))
         menu = archive.read('assets/menu_program_nss_default.json')
     if hashlib.sha256(menu).hexdigest() != MENU_SHA256:
         raise ValueError('unsupported_menu_data')
-    return {'version': VERSION, 'bank_key': key, 'menu_version': json.loads(menu)['G1']}
+    return {'version': VERSION, 'bank_key': key, 'menu_version': json.loads(menu)['G1'], 'e2e_key': e2e_key}
+
+
+def decode_e2e_key(data):
+    if hashlib.sha256(data).hexdigest() != E2E_DATA_SHA256:
+        raise ValueError('unsupported_e2e_data')
+    arrays = [struct.pack('>256i', *struct.unpack_from('<256i', data, offset)) for offset in E2E_ARRAY_OFFSETS]
+    left, middle, right = arrays
+    def xor(a, b):
+        return bytes(x ^ y for x, y in zip(a, b))
+    for _ in range(16):
+        left, middle, right = xor(left, middle), xor(middle, right), xor(xor(left, middle), right)
+    encrypted = bytes.fromhex(data[E2E_CIPHER_OFFSET:E2E_CIPHER_OFFSET+E2E_CIPHER_LENGTH].decode('ascii'))
+    plain = unpad(AES.new(hashlib.sha256(left).digest(), AES.MODE_CBC,
+                         hashlib.sha256(middle).digest()[:16]).decrypt(encrypted), 16)
+    profile = json.loads(plain)
+    if 'com.shinhan.sbanking' not in json.loads(profile['ffff']) or not isinstance(profile['b'], str):
+        raise ValueError('invalid_e2e_profile')
+    return profile['b']
+
+
+def refresh(package):
+    replacement = extract(package)
+    folder = prepare_directory()
+    with storage.lock(folder / '.lock'):
+        existing = load()
+        existing.update(replacement)
+        storage.atomic_json(folder / 'settings.json', existing)
+    return {'installed': True, 'version': VERSION, 'network_used': False}
 
 
 def device(android_id, model, os_version):
