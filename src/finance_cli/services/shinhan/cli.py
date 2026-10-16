@@ -5,7 +5,7 @@ import sys
 from finance_cli.cli.output import ArgumentParser, emit
 from finance_cli.core import storage
 from finance_cli.credentials.shinhan import Registry, SelectionRequired
-from . import login, session, setup
+from . import accounts, login, session, setup
 
 
 class DeviceInputRequired(ValueError):
@@ -34,7 +34,7 @@ def device_input(path):
 
 
 def main(argv=None):
-    parser = Parser(prog='fin shinhan', description='신한은행 기동·인증서 로그인·세션 (실서버 미검증)')
+    parser = Parser(prog='fin shinhan', description='신한은행 기동·인증서 로그인·계좌·대출 목록 (실서버 미검증)')
     commands = parser.add_subparsers(dest='command', required=True)
     install = commands.add_parser('setup', help='서비스 자료와 새 형식 기기 정보를 로컬에 설치')
     install.add_argument('--apk', required=True, help='버전 20.0.40 기본 설치 패키지')
@@ -47,6 +47,10 @@ def main(argv=None):
     auth.add_argument('--password-stdin', action='store_true', help='보관 암호 한 줄만 stdin으로 입력')
     auth.add_argument('--pin-file', help='소유자만 읽을 수 있는 PIN 한 줄 파일; 생략 시 숨김 입력')
     auth.add_argument('--send', action='store_true')
+    for name, description in (('accounts', '표시 가능한 신한 계좌 목록'), ('loans', '표시 가능한 신한 대출 목록')):
+        item = commands.add_parser(name, help=description)
+        item.add_argument('--send', action='store_true')
+        item.add_argument('--refresh', action='store_true', help='은행에 목록 새로고침을 요청')
     sessions = commands.add_parser('session').add_subparsers(dest='action', required=True)
     sessions.add_parser('status', help='로컬 상태만 확인; 은행 로그인 유효성 확인 아님')
     for action in ('start', 'extend'):
@@ -56,7 +60,7 @@ def main(argv=None):
             item.add_argument('--apk', help='설정이 없을 때 사용할 버전 20.0.40 기본 설치 패키지')
             item.add_argument('--device-input', help='기기 JSON; 최초 설정 시 생략하면 숨김 입력')
     args = parser.parse_args(argv)
-    if (args.command == 'login' or args.command == 'session' and args.action != 'status') and not args.send:
+    if (args.command in ('login', 'accounts', 'loans') or args.command == 'session' and args.action != 'status') and not args.send:
         emit({'error': 'send_required', 'network_used': False,
               'message': '기관 연결에는 --send가 필요합니다.'}, 2)
         return 2
@@ -77,6 +81,9 @@ def main(argv=None):
                 return getpass.getpass('신한인증서 PIN (6자리): ').encode()
             network_used = None
             result = login.run(reference, password, pin_input)
+        elif args.command in ('accounts', 'loans'):
+            network_used = None
+            result = accounts.run(loans=args.command == 'loans', refresh=args.refresh)
         elif args.action == 'status':
             result = session.status()
         else:
@@ -101,6 +108,9 @@ def main(argv=None):
     except session.SessionRequired:
         result, code = {'error': 'session_required', 'network_used': False,
                         'message': '저장된 신한 세션이 없습니다. 먼저 session start를 실행하세요.'}, 2
+    except accounts.LoginRequired:
+        result, code = {'error': 'login_required', 'network_used': False,
+                        'message': '계좌 조회에는 로그인된 세션이 필요합니다. 먼저 login을 실행하세요.'}, 2
     except (ValueError, OSError, TypeError, KeyError):
         result, code = {'error': 'local_input_or_processing_error', 'network_used': network_used,
                         'bank_result': 'unknown',

@@ -35,6 +35,8 @@ for args, source in (
     (['shinhan','session','status'], ''),
     (['shinhan','certificate','list'], ''),
     (['--format','json-v1','shinhan','session','status'], ''),
+    (['shinhan','accounts','--help'], ''),
+    (['shinhan','loans','--help'], ''),
     (['hana','encode-header'], '{"CHNL_SYS_HDPT":{"synthetic":true}}'),
     (['hana','session','list'], ''),
     (['hana','corporate','login','--session','synthetic','--credential','synthetic'], ''),
@@ -66,10 +68,15 @@ for args, source in (
     sys.stdin = io.StringIO(source)
     capture = io.StringIO()
     with contextlib.redirect_stdout(capture):
-        code = main(args)
+        try:
+            code = main(args)
+        except SystemExit as exc:
+            if args[-1] != '--help':
+                raise
+            code = exc.code
     if code != 0:
         raise RuntimeError('installed command failed: ' + repr(args))
-    result = json.loads(capture.getvalue())
+    result = {'help': bool(capture.getvalue())} if args[-1] == '--help' else json.loads(capture.getvalue())
     if args[:2] == ['--format', 'json-v1']:
         assert result['schema_version'] == 1 and result['exit_code'] == code
         assert result['service'] == args[2] and 'result' in result

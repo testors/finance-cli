@@ -61,14 +61,14 @@ class Exchange:
         except Exception:
             self.warning('response_save_error')
 
-    def bank(self, stage, transaction, body, *, device_id=None, path=transport.ENDPOINT):
+    def bank(self, stage, transaction, body, *, device_id=None, path=transport.ENDPOINT, response_parser=transport.parse):
         settings = self.settings
         if device_id is not None:
             settings = {**settings, 'device': {**settings['device'], 'device_id': device_id}}
         payload = transport.encode(transaction, body, settings)
         recorded = self.reserve(stage, transaction=transaction)
         reply = transport.post(payload, self.state.get('cookie', ''), path=path)
-        verdict, document = transport.parse(reply)
+        verdict, document = response_parser(reply)
         recorded.update(verdict)
         recorded['result'] = verdict['bank_result']
         try:

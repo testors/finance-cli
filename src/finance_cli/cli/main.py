@@ -17,7 +17,10 @@ def capabilities():
     from finance_cli.core.live_verification import HANA_LEVEL, REVIEWED_ON, hana_report, giro_report, corporate_report, hometax_report
     return {'schema_version': 1, 'services': {
         'shinhan': {'offline': ['user-package-settings-extraction', 'local-session-status'],
-                    'live': ['startup-request', 'explicit-session-extension'],
+                    'live': ['startup-request', 'explicit-session-extension', 'shinhan-account-list', 'shinhan-loan-list'],
+                    'accounts': {'commands': ['fin shinhan accounts', 'fin shinhan loans'],
+                                 'verification': 'synthetic_only', 'requires': 'authenticated session',
+                                 'scope': 'visible Shinhan rows; account data is saved to a private file'},
                     'login': {'command': 'fin shinhan login', 'verification': 'synthetic_only',
                               'implemented': ['pin-e2e', 'pin-authentication', 'nonce-rsa-pkcs7-login',
                                               'shared-encrypted-certificate-storage'],
@@ -26,7 +29,7 @@ def capabilities():
                     'automatic_retry': False,
                     'requirements': ['user-supplied settings for version 20.0.40',
                                      'user-supplied Android device metadata', 'explicit --send'],
-                    'not_included': ['certificate issuance', 'login', 'accounts',
+                    'not_included': ['certificate issuance', 'first-time login provisioning',
                                      'loan details and certificates', 'transactions', 'transfers']},
         'hana': {'offline': ['protocol', 'shared-certificate-login-signature', 'onesign-vault-bundle',
                             'user-package-settings-extraction', 'onesign-identity-initialization', 'onesign-identity-removal', 'onesign-identity-rename', 'personal-transfer-csv-check'],
@@ -285,7 +288,7 @@ def dispatch(argv):
   idcard      신분증 사진·정보 암호화 보관·확인·내보내기 (발급 단계에서 선택)
   profile     프로필·기관별 인증서 선택
   hana        하나은행 로그인·조회·하나인증서 발급·원화 이체 (통신 시 --send)
-  shinhan     신한은행 기동·세션 연결 (통신 시 --send, 실서버 미검증)
+  shinhan     신한은행 로그인·계좌·대출 목록 (통신 시 --send, 실서버 미검증)
   hometax     홈택스 로그인·조회·보고서·세금계산서 (통신 시 --send)
   giro        지로 기기 등록·인증·조회·납부 (--send/--live)
   runtime     홈택스 Node 런타임 status/install
