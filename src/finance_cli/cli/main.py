@@ -16,6 +16,14 @@ def capabilities():
     from giro.bill_catalog import catalog as giro_bill_catalog
     from finance_cli.core.live_verification import HANA_LEVEL, REVIEWED_ON, hana_report, giro_report, corporate_report, hometax_report
     return {'schema_version': 1, 'services': {
+        'shinhan': {'offline': ['user-package-settings-extraction', 'local-session-status'],
+                    'live': ['startup-request', 'explicit-session-extension'],
+                    'verification': 'implemented_live_untested', 'live_tested': False,
+                    'automatic_retry': False,
+                    'requirements': ['user-supplied settings for version 20.0.40',
+                                     'user-supplied Android device metadata', 'explicit --send'],
+                    'not_included': ['certificate issuance', 'login', 'accounts',
+                                     'loan details and certificates', 'transactions', 'transfers']},
         'hana': {'offline': ['protocol', 'shared-certificate-login-signature', 'onesign-vault-bundle',
                             'user-package-settings-extraction', 'onesign-identity-initialization', 'onesign-identity-removal', 'onesign-identity-rename', 'personal-transfer-csv-check'],
                  'live': ['app-authentication', 'joint-certificate-login', 'accounts', 'transfer-history-query',
@@ -247,7 +255,7 @@ def main(argv=None):
         else:
             option_error = 'unsupported_output_format'
             break
-    service = argv[0] if argv and argv[0] in ('hana', 'hometax', 'giro') else 'fin'
+    service = argv[0] if argv and argv[0] in ('hana', 'hometax', 'giro', 'shinhan') else 'fin'
     with rendering(format_name, service):
         if option_error:
             return error(option_error, '전역 옵션은 --home 경로와 --format legacy|json-v1을 지원합니다.')
@@ -273,6 +281,7 @@ def dispatch(argv):
   idcard      신분증 사진·정보 암호화 보관·확인·내보내기 (발급 단계에서 선택)
   profile     프로필·기관별 인증서 선택
   hana        하나은행 로그인·조회·하나인증서 발급·원화 이체 (통신 시 --send)
+  shinhan     신한은행 기동·세션 연결 (통신 시 --send, 실서버 미검증)
   hometax     홈택스 로그인·조회·보고서·세금계산서 (통신 시 --send)
   giro        지로 기기 등록·인증·조회·납부 (--send/--live)
   runtime     홈택스 Node 런타임 status/install
@@ -305,6 +314,9 @@ def dispatch(argv):
         elif command == 'hana':
             from finance_cli.services.hana.cli import main as run
             return record_history('hana', rest, run(rest or ['--help']))
+        elif command == 'shinhan':
+            from finance_cli.services.shinhan.cli import main as run
+            return record_history('shinhan', rest, run(rest or ['--help']))
         elif command == 'hometax':
             return record_history('hometax', rest, hometax_main(rest))
         elif command == 'giro':

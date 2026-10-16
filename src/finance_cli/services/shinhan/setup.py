@@ -1,0 +1,100 @@
+"""Install versioned settings from a user-supplied package, without executing it."""
+import hashlib
+import io
+import json
+from pathlib import Path
+import re
+import struct
+import zipfile
+
+from finance_cli.core import storage
+from finance_cli.core.paths import data_home
+
+VERSION = '20.0.40'
+PACKAGE_SHA256 = '78c1f7e87f11b2493e3ec843a6c244b5f74f9f2bb49f0fa5030dbae21d19b733'
+DATA_SHA256 = '7beaf1bd59de5cd754cfc1be1726c0287e01546d5a8cc01c53ff40dde5a10748'
+MENU_SHA256 = '80b30a1348696d09fbf978728928b541ba8f0cc30a1933d6d02e3a8f64195dd0'
+KEY_OFFSET = 16388928
+PARAMETER_OFFSETS = (16388846, 16388852, 16388858, 16388840)
+
+
+def root():
+    return data_home() / 'shinhan'
+
+
+def prepare_directory():
+    storage.directory(data_home())
+    return storage.directory(root())
+
+
+def rotate(value, count):
+    value &= 0xffffffff
+    return ((value << count) | (value >> (32-count))) & 0xffffffff
+
+
+def decode_key(data):
+    if hashlib.sha256(data).hexdigest() != DATA_SHA256:
+        raise ValueError('unsupported_service_data')
+    a, b, c, d = (struct.unpack_from('<i', data, offset)[0] for offset in PARAMETER_OFFSETS)
+    value = (-660212165-d) ^ a
+    value = ((rotate(value, 8)-c) ^ d) ^ c
+    value = rotate(value, 5)-a
+    value = rotate(value, 8)+c
+    value = (rotate(value, 30)+d) ^ a
+    value = rotate(value, 4)-b+2*d
+    value = (rotate(value, 7) ^ c)-c
+    value = rotate(rotate(rotate(value, 7), 7), 20)
+    value = (a ^ ((value+2*b) ^ c)) ^ d
+    mask = rotate(value, 9).to_bytes(4, 'little')
+    encoded = data[KEY_OFFSET:KEY_OFFSET+64]
+    decoded = bytes(byte ^ mask[i % 4] for i, byte in enumerate(encoded)).decode('ascii')
+    if not re.fullmatch('[0-9a-fA-F]{64}', decoded):
+        raise ValueError('invalid_service_data')
+    return decoded
+
+
+def extract(package):
+    with Path(package).expanduser().open('rb') as stream:
+        data = stream.read(512*1024*1024+1)
+    if len(data) > 512*1024*1024 or hashlib.sha256(data).hexdigest() != PACKAGE_SHA256:
+        raise ValueError('unsupported_package')
+    with zipfile.ZipFile(io.BytesIO(data)) as archive:
+        for name in ('classes9.dex', 'assets/menu_program_nss_default.json'):
+            if archive.getinfo(name).file_size > 64*1024*1024:
+                raise ValueError('service_data_too_large')
+        key = decode_key(archive.read('classes9.dex'))
+        menu = archive.read('assets/menu_program_nss_default.json')
+    if hashlib.sha256(menu).hexdigest() != MENU_SHA256:
+        raise ValueError('unsupported_menu_data')
+    return {'version': VERSION, 'bank_key': key, 'menu_version': json.loads(menu)['G1']}
+
+
+def device(android_id, model, os_version):
+    if not all(isinstance(value, str) for value in (android_id, model, os_version)):
+        raise ValueError('invalid_device_input')
+    # A new-format identity. This does not import an existing app's stored ID.
+    identity = hashlib.sha256((android_id+model).encode('utf-8')).hexdigest()
+    return {'device_id': identity, 'uuid1': identity[:32], 'uuid2': identity,
+            'model': model, 'os_version': os_version}
+
+
+def install(package, device_input):
+    settings = extract(package)
+    settings['device'] = device(**device_input)
+    folder = prepare_directory()
+    with storage.lock(folder / '.lock'):
+        # Changing identity would invalidate the session/certificate association.
+        storage.write_new(folder / 'settings.json', (json.dumps(settings)+'\n').encode())
+    return {'installed': True, 'version': VERSION, 'network_used': False}
+
+
+def load():
+    settings = storage.read_json(root() / 'settings.json')
+    if settings.get('version') != VERSION or not re.fullmatch('[0-9a-fA-F]{64}', settings.get('bank_key', '')):
+        raise ValueError('invalid_settings')
+    for field in ('device_id', 'uuid1', 'uuid2', 'model', 'os_version'):
+        if not isinstance(settings['device'][field], str):
+            raise ValueError('invalid_settings')
+    if not isinstance(settings.get('menu_version'), str):
+        raise ValueError('invalid_settings')
+    return settings

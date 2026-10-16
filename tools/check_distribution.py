@@ -32,6 +32,8 @@ for args, source in (
     (['cert','list'], ''),
     (['idcard','list'], ''),
     (['capabilities'], ''),
+    (['shinhan','session','status'], ''),
+    (['--format','json-v1','shinhan','session','status'], ''),
     (['hana','encode-header'], '{"CHNL_SYS_HDPT":{"synthetic":true}}'),
     (['hana','session','list'], ''),
     (['hana','corporate','login','--session','synthetic','--credential','synthetic'], ''),
@@ -127,7 +129,8 @@ def main():
     for required in ('giro/model_schema.json', 'hometax_cli/InvoiceSigner.java', 'hometax_cli/runtime/package-lock.json',
                      'hometax_cli/runtime_require.cjs', 'finance_cli/credentials/registry.py',
                      'finance_cli/server/static/index.html', 'finance_cli/server/static/app.js',
-                     'finance_cli/server/static/busy.js',
+                     'finance_cli/server/static/busy.js', 'finance_cli/services/shinhan/cli.py',
+                     'finance_cli/services/shinhan/setup.py', 'finance_cli/services/shinhan/transport.py',
                      'finance_cli/server/static/app.css', 'finance_cli/server/Caddyfile.example',
                      'finance_cli/services/hana_corporate/cli.py'):
         if required not in names:
