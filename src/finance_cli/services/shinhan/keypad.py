@@ -22,15 +22,20 @@ def table(kr1, kr2, alphabet):
             for index, character in enumerate(alphabet)]
 
 
-def message(value, kr1, alphabet, *, random_bytes=secrets.token_bytes):
-    if not isinstance(value, bytes) or not re.fullmatch(rb'[0-9]{1,125}', value):
-        raise ValueError('numeric_keypad_input_required')
+def key_material(kr1, alphabet, *, random_bytes=secrets.token_bytes):
     for _ in range(11):
         kr2 = random_bytes(64)
         keys = table(kr1, kr2, alphabet)
         if len(set(keys)) == len(keys):
             break
     # The original keeps the final table even if all local rebuilds collide.
+    return kr2, keys
+
+
+def message(value, kr1, alphabet, *, random_bytes=secrets.token_bytes, material=None):
+    if not isinstance(value, bytes) or not re.fullmatch(rb'[0-9]{1,125}', value):
+        raise ValueError('numeric_keypad_input_required')
+    kr2, keys = material if material is not None else key_material(kr1, alphabet, random_bytes=random_bytes)
     right = expand(kr2, kr1)
     strokes = b''.join(bytes(left ^ mask for left, mask in zip(keys[alphabet.index(character)], right[index:index+4]))
                        for index, character in enumerate(value))
@@ -43,6 +48,7 @@ class Channel:
     def __init__(self, exchange):
         self.exchange = exchange
         self.handshake = None
+        self.material = None
 
     def send(self, stage, payload):
         step, document = self.exchange.bank(stage, 'RSMCM9006A03', {'trxG': '1', 'encData': payload})
@@ -78,13 +84,17 @@ class Channel:
         self.exchange.report['sol_e2e_health'] = 'success'
         if not self.handshake.kr1:
             raise Pending('keypad_material_unavailable')
+        self.material = key_material(self.handshake.kr1, bytes.fromhex(self.exchange.settings['keypad_alphabet']))
 
     def read(self, input_provider, length):
-        alphabet = bytes.fromhex(self.exchange.settings['keypad_alphabet'])
         self.prepare()
-        value = input_provider()
+        return self.encrypt(input_provider(), length)
+
+    def encrypt(self, value, length):
+        """Complete another field on the same prepared keypad, without health IO."""
         if value is None:
             raise Pending('keypad_input_cancelled')
         if not isinstance(value, bytes) or len(value) != length:
             raise ValueError('keypad_input_length')
-        return self.handshake.encrypt(message(value, self.handshake.kr1, alphabet))
+        alphabet = bytes.fromhex(self.exchange.settings['keypad_alphabet'])
+        return self.handshake.encrypt(message(value, self.handshake.kr1, alphabet, material=self.material))

@@ -89,6 +89,21 @@ class KeypadTests(PrivateHome):
         self.channel.read(lambda: b'1111', 4)
         self.assertEqual(self.calls, ['7E01', '7E03', '7E06', '7E06'])
 
+    def test_card_fields_share_one_prepared_keypad_without_extra_health_requests(self):
+        from finance_cli.services.shinhan.security_media import card_input
+        result = card_input(self.channel, {'cardType': '3', 'firstNumber': '04', 'secondNumber': '09',
+                            'serialNumberArray': ['1', '3', '5']}, Mock(side_effect=[b'617', b'24', b'86']))
+        self.assertEqual(self.calls, ['7E01', '7E03', '7E06'])
+        self.assertEqual(result['responseSerialNumberArray'], ['6', '1', '7'])
+        challenges = []
+        for name, length in [('firstPassword', 2), ('secondPassword', 2)]:
+            raw = bytes.fromhex(json.loads(result[name])['SeProtocolMessage']['data'])
+            message = json.loads(unpad(AES.new(self.aes_key, AES.MODE_CBC, self.iv).decrypt(raw), 16))
+            self.assertEqual(len(bytes.fromhex(message['SkProtocolMessage']['data'])), 64+length*4)
+            challenges.append(message['SkProtocolMessage']['data'][:128])
+        self.assertEqual(challenges[0], challenges[1])
+        self.assertEqual(challenges[0], self.channel.material[0].hex().upper())
+
     def test_protocol_health_error_reinitializes_but_network_failure_does_not(self):
         self.health = ['{"DSErrProtocolMessage":{"result":"0000"}}', '{}']
         self.channel.read(lambda: b'1234', 4)
