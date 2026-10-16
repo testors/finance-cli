@@ -67,6 +67,13 @@ def post(payload, cookie='', *, path=ENDPOINT):
     return _post(BANK_HOST, payload, headers, path, 60)
 
 
+def post_web(payload, cookie='', *, path=ENDPOINT):
+    headers = {'Content-Type': 'application/json', 'Accept-Encoding': 'gzip'}
+    if cookie:
+        headers['Cookie'] = cookie
+    return _post(BANK_HOST, payload, headers, path, 60)
+
+
 def post_certificate(payload, cookie='', *, path):
     headers = {'Content-Type': 'application/json; charset=utf-8', 'Accept': 'application/json',
                'Accept-Encoding': 'gzip'}

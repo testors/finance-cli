@@ -131,3 +131,26 @@ class Exchange:
         self.record_response(reply)
         self.save()
         return recorded, reply.body
+
+    def web(self, stage, transaction, body, *, program):
+        from . import web
+        payload = web.encode(transaction, body, self.settings, program)
+        recorded = self.reserve(stage, transaction=transaction)
+        reply = transport.post_web(payload, self.state.get('cookie', ''))
+        verdict, document = web.parse(reply)
+        recorded.update(verdict)
+        recorded['result'] = verdict['bank_result']
+        try:
+            transport.update_cookie(self.state, reply.headers)
+            if document is not None:
+                transport.update_challenges(self.state, document)
+        except Exception:
+            self.warning('bank_state_update_error')
+        try:
+            if verdict['bridge_success'] and verdict['callback_ready']:
+                web.update_challenges(self.state, document)
+        except Exception:
+            self.warning('web_state_update_error')
+        self.record_response(reply)
+        self.save()
+        return recorded, document
