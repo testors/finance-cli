@@ -7,6 +7,7 @@ fin hana onesign extend --name main --send
 fin hana corporate session extend --send
 fin giro session extend --send
 fin hometax session extend --session 세션.json --output 새세션.json --send
+fin shinhan session extend --send
 ```
 
 | 명령 | 세션 선택과 입력 | 결과 |
@@ -15,10 +16,13 @@ fin hometax session extend --session 세션.json --output 새세션.json --send
 | `hana corporate session extend` | 최근 성공한 기업 로그인; 선택적으로 `--session 이름` | 은행의 연장 수락 또는 세션 종료 관측 |
 | `giro session extend` | 저장된 지로 로그인 자동 사용 | 등록계좌 조회 성공(`login_extension_accepted=true`) 또는 세션 종료 관측. 계좌 정보는 출력하지 않음 |
 | `hometax session extend` | 로그인이나 이전 명령이 저장한 세션 파일 `--session`, 새 파일 `--output` | 세션 확인의 `tokenOK`(`login_extension_accepted=true`) 또는 로그인 종료 관측. 확인한 세션은 `--output`에 저장 |
+| `shinhan session extend` | 저장된 신한 세션 쿠키; PIN·보관 암호 입력 없음 | `bank_result`에 연장 요청 판정. `authentication: unverified`는 별도 로그인 판정을 하지 않는다는 뜻 |
 
 하나인증서는 인증서 PIN·재서명을 요구하지 않습니다. `--password-stdin`은 저장소 암호 한 줄만 읽습니다. 실행 기록 이름은 자동 생성하며, 필요하면 `--run 새이름`으로 지정할 수 있습니다. 시도한 이름은 다시 쓰지 않습니다. 파일형 공동인증서 로그인은 기존 `fin hana session extend --session 이름 --run 새이름 --send`를 사용합니다.
 
 기업뱅킹은 ID/PW·공동인증서·하나인증서로 만든 기업 세션에 같은 명령을 사용합니다. 새 인증서 선택이나 비밀번호 입력이 필요하지 않습니다. 세션 종료가 확인되면 그 상태를 저장하고 이후 해당 세션을 사용하지 않습니다.
+
+신한은행은 2026-10-17 실사용에서 연장 요청 수락과 약 96초 뒤 대출 목록 조회 성공을 확인했습니다. 이 조회는 최초 로그인 후 약 8분 시점이므로 유휴 만료 시간이나 연장으로 늘어난 시간까지 확인한 것은 아닙니다. 명시적 `--send`가 필요하며 자동 연장·재로그인·재시도는 하지 않습니다.
 
 지로에는 전용 연장 요청이 없어 로그인이 필요한 등록계좌 조회를 한 번 보냅니다. `session keepalive`는 `session extend`의 별칭입니다. 기존 세션 키와 쿠키만 사용하며 PIN·추가 로그인·납부 요청을 하지 않습니다. 조회한 계좌 정보는 결과와 기록에 포함하지 않습니다.
 

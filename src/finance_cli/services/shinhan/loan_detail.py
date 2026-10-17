@@ -3,7 +3,7 @@ import copy
 import json
 
 from finance_cli.core import storage
-from . import account_protocol, legacy_web, menu as navigation, menu_protocol, navigation_guard, setup
+from . import account_protocol, legacy_web, loan_react, menu as navigation, menu_protocol, navigation_guard, setup
 from .accounts import LoginRequired
 from .enrollment import Pending
 from .exchange import Exchange
@@ -48,9 +48,13 @@ def program(settings, state, row, exchange=None, acknowledge=None, queue_progres
         if found is None or not found['PR_ID']:
             raise Pending('loan_destination_server_lookup_required')
     name = found.get('PR_ID')
-    if name not in PROGRAMS or found.get('PR_TYPE') != 'W':
+    if name == loan_react.PROGRAM and found.get('PR_TYPE') == 'R':
+        expected = loan_react.PATH
+    elif name in PROGRAMS and found.get('PR_TYPE') == 'W':
+        expected = f'/web/pages/BM/BM03/{name[:6]}/{name}.html'
+    else:
         raise Pending('loan_destination_not_implemented')
-    if found.get('MOVE_URL') != f'/web/pages/BM/BM03/{name[:6]}/{name}.html':
+    if found.get('MOVE_URL') != expected:
         raise Pending('loan_destination_path_not_implemented')
     return navigation_guard.open_program(settings, state, found, exchange, acknowledge, queue_progress)
 
@@ -67,6 +71,8 @@ def parameters(value, kind):
     if not isinstance(source, dict):
         raise Pending('loan_parameters_not_supported')
     source = copy.deepcopy(source)
+    if kind == 'react':
+        return source
     selected = source.get('P')
     if legacy_web.nullish(selected):
         selected = source if kind == 'installment' else {}
@@ -196,7 +202,12 @@ def run(index=None, *, acknowledge=None, queue_progress=None):
             row, attempt = select(state, index)
             exchange.report['list_attempt'] = attempt
             name = program(settings, state, row, exchange, acknowledge, queue_progress)
-            params = parameters(row.get('programParam'), PROGRAMS[name])
+            if name == loan_react.PROGRAM:
+                params = loan_react.prepare(exchange, parameters(row.get('programParam'), 'react'))
+                exchange.report['entry_program'] = name
+                name = program(settings, state, {'programId': loan_react.MANAGEMENT}, exchange, acknowledge, queue_progress)
+            else:
+                params = parameters(row.get('programParam'), PROGRAMS[name])
             inquiry(exchange, name, params)
         except Pending as error:
             exchange.report.update(processing_status='incomplete', required_action=error.action)

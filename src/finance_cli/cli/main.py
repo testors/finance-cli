@@ -29,8 +29,12 @@ def capabilities():
                     'device_phone': {'command': 'fin shinhan phone verify', 'verification': 'live_verified',
                                      'requires': 'current attempt SMS sent by the user from their phone'},
                     'accounts': {'commands': ['fin shinhan accounts', 'fin shinhan loans'],
-                                 'verification': 'synthetic_only', 'requires': 'authenticated session',
+                                 'verification': 'live_partial', 'verified_commands': ['fin shinhan loans'],
+                                 'pending': ['unfiltered accounts command live verification'], 'requires': 'authenticated session',
                                  'scope': 'visible Shinhan rows; account data is saved to a private file'},
+                    'session_extension': {'command': 'fin shinhan session extend', 'verification': 'live_verified',
+                                          'scope': 'extension accepted and subsequent authenticated loan list succeeded',
+                                          'pending': ['server expiry duration measurement']},
                     'transactions': {'command': 'fin shinhan transactions', 'verification': 'synthetic_only',
                                      'requires': 'authenticated session, recent accounts list and installed program menu',
                                      'scope': 'native Shinhan history destination; account header, filters and explicit next page',
@@ -41,13 +45,13 @@ def capabilities():
                                        'scope': 'existing rate statements and credit-certificate applications; selected rate statement PDF'},
                     'loan_detail': {'command': 'fin shinhan loan-detail', 'verification': 'synthetic_only',
                                     'requires': 'authenticated session, recent loan list and installed program menu',
-                                    'scope': 'three supported account-management destinations; raw amounts, rates and dates',
+                                    'scope': 'three account-management destinations and installment overview management action; raw amounts, rates and dates',
                                     'navigation': ['menu download and ordered recovery', 'native destination lookup',
                                                    'account ownership guard', 'ordinary program notice and confirmation', 'NetFunnel'],
                                     'pending': ['long-term transfer notice', 'group agreement', 'extended parameter syntax']},
                     'netfunnel': {'verification': 'synthetic_only', 'scope': 'startup and selected program navigation',
                                   'sdk_retry_limit': 2, 'http_retry_limit': 3, 'bank_request_retry': False},
-                    'login': {'command': 'fin shinhan login', 'verification': 'synthetic_only',
+                    'login': {'command': 'fin shinhan login', 'verification': 'live_verified',
                               'implemented': ['pin-e2e', 'pin-authentication', 'nonce-rsa-pkcs7-login',
                                               'shared-encrypted-certificate-storage'],
                               'requires': 'issued Shinhan credential'},
@@ -314,7 +318,7 @@ def dispatch(argv):
   idcard      신분증 사진·정보 암호화 보관·확인·내보내기 (발급 단계에서 선택)
   profile     프로필·기관별 인증서 선택
   hana        하나은행 로그인·조회·하나인증서 발급·원화 이체 (통신 시 --send)
-  shinhan     신한은행 로그인·계좌·대출 목록 (통신 시 --send, 실서버 미검증)
+  shinhan     신한은행 로그인·계좌·대출 조회 (통신 시 --send, 상세 검증 범위는 capabilities)
   hometax     홈택스 로그인·조회·보고서·세금계산서 (통신 시 --send)
   giro        지로 기기 등록·인증·조회·납부 (--send/--live)
   runtime     홈택스 Node 런타임 status/install

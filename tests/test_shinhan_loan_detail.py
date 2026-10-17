@@ -9,7 +9,7 @@ from Crypto.Cipher import AES
 from Crypto.Util.Padding import unpad
 
 from finance_cli.core import storage
-from finance_cli.services.shinhan import account_protocol, accounts, loan_detail as detail, setup, transport
+from finance_cli.services.shinhan import account_protocol, accounts, loan_detail as detail, loan_react, setup, transport
 from test_shinhan import PrivateHome, response, settings
 
 
@@ -29,7 +29,7 @@ class LoanDetailTests(PrivateHome):
         self.state = {'cookie': 'JSESSIONID=SYN-COOKIE', 'authenticated': True, 'credential': 'SYN-CERT',
                       'login': {'user': {'membGdS2': '02', 'loginLevS2': '8'}}}
         self.calls, self.replies = [], []
-        def send(payload, cookie, *, show_message):
+        def send(payload, cookie, *, show_message=None):
             document = json.loads(payload); key = bytes.fromhex(settings()['bank_key'])
             body = json.loads(unpad(AES.new(key, AES.MODE_CBC, key[:16]).decrypt(base64.b64decode(document['dataBody'])),16))
             self.calls.append((document['dataHeader'], body, show_message))
@@ -54,6 +54,90 @@ class LoanDetailTests(PrivateHome):
 
     def clock(self):
         self.answer({'getCurrentDateFmt':{'valueS20':'20261017'}})
+
+    def react(self, **changes):
+        self.settings['menu']['R'].append({'B': loan_react.PROGRAM, 'PR_TYPE': 'R', 'MOVE_URL': loan_react.PATH,
+                                         'LOGIN_LEVEL': '2', **changes})
+        storage.atomic_json(setup.root()/'settings.json', self.settings)
+        self.selected(loan_react.PROGRAM, {'acnoS12': 'SYN-SELECTED', 'bnkCdS3': '999', 'curCS3': 'USD', 'assetK': 'IGNORED'})
+
+    def overview(self, *, header=None, grid=None, result='SUCCESS'):
+        self.answer({} if header is None else header, result)
+        self.answer({'grid01': [{'dcAcnoN12_originalValue': 'SYN-SELECTED', 'dcDueDdS8': '2027.11.17'}] if grid is None else grid}, result)
+
+    def test_react_overview_opens_its_management_action_before_detail(self):
+        self.react(); self.overview()
+        self.answer({'acno': 'SYN-SELECTED', 'dcTamt': '100000.01', 'aplIyul': '4.555'})
+        self.clock()
+        code, out, err = self.call(['loan-detail', '--loan', '1', '--send'])
+        result = json.loads(out)['result']
+        self.assertEqual((code, result['detail_result'], result['bank_result']), (0, 'success', 'success'))
+        self.assertEqual([c[0]['trxCd'] for c in self.calls], ['RSMDE0105A21', 'RSMLO1001A04', 'RSMLO1002A01', 'RSMCM9000A03'])
+        self.assertEqual([c[0]['programId'] for c in self.calls], [loan_react.PROGRAM]*2 + [loan_react.MANAGEMENT]*2)
+        self.assertEqual([c[2] for c in self.calls], [None, None, True, False])
+        self.assertEqual(self.calls[0][1], {'acno': 'SYN-SELECTED', 'bnkCdS3': '088', 'assetK': ''})
+        self.assertEqual(self.calls[1][1], {'acno': 'SYN-SELECTED'})
+        self.assertEqual(self.calls[2][1]['ysAcno'], 'SYN-SELECTED')
+        self.assertEqual(storage.read_json(result['data_file'])['fields']['interest_rate'], '4.555')
+        self.assertEqual(Path(result['entry_data_file']).stat().st_mode & 0o777, 0o600)
+        for private in ('SYN-SELECTED', '100000.01', '4.555'):
+            self.assertNotIn(private, out+err)
+
+    def test_react_unknown_result_and_empty_header_do_not_reject_management(self):
+        self.react(); self.overview(result='SYN-UNKNOWN')
+        self.answer({'acno': 'SYN-SELECTED'}); self.clock()
+        result = detail.run()
+        self.assertEqual(result['overview_header_result'], 'unknown')
+        self.assertEqual(result['overview_summary_result'], 'unknown')
+        self.assertEqual(result['detail_result'], 'success')
+        self.assertEqual(len(self.calls), 4)
+
+    def test_react_no_matching_loan_does_not_fall_back_to_another_row(self):
+        self.react(); self.overview(grid=[{'dcAcnoN12_originalValue': 'SYN-OTHER'}])
+        result = detail.run()
+        self.assertEqual((result['bank_result'], result['required_action']), ('success', 'loan_management_unavailable'))
+        self.assertEqual(len(self.calls), 2)
+        self.assertIn('entry_data_file', result)
+
+    def test_react_failed_header_does_not_suppress_independent_summary(self):
+        self.react(); self.answer({}, 'FAIL'); self.answer({'grid01': []})
+        result = detail.run()
+        self.assertEqual(result['overview_header_result'], 'failure')
+        self.assertEqual(result['overview_summary_result'], 'success')
+        self.assertEqual(result['required_action'], 'loan_overview_request_unavailable')
+        self.assertEqual(len(self.calls), 2)
+
+    def test_react_consumer_exception_preserves_bank_success_and_private_body(self):
+        self.react(); self.overview(grid=[{'dcAcnoN12_originalValue': 'SYN-SELECTED', 'dcDueDdS8': 20271117}])
+        result = detail.run()
+        self.assertEqual((result['bank_result'], result['error']), ('success', 'loan_detail_processing_error'))
+        self.assertTrue(Path(result['entry_data_file']).exists())
+        self.assertEqual(len(self.calls), 2)
+
+    def test_react_entry_save_error_does_not_suppress_detail(self):
+        self.react(); self.overview(); self.answer({'acno': 'SYN-SELECTED'}); self.clock()
+        write = storage.atomic_json
+        def fail(path, value):
+            if Path(path).name == 'loan-entry.json':
+                raise OSError('SYN-PRIVATE')
+            return write(path, value)
+        with patch.object(storage, 'atomic_json', side_effect=fail):
+            result = detail.run()
+        self.assertEqual((result['detail_result'], result['processing_status'], result['local_status']), ('success', 'complete', 'incomplete'))
+        self.assertEqual(len(self.calls), 4)
+
+    def test_react_management_keeps_destination_guard(self):
+        self.settings['menu']['R'][0]['ACCOUNT_CHECK_YN'] = 'Y'
+        self.react(); self.overview()
+        result = detail.run()
+        self.assertEqual(result['required_action'], 'loan_account_required')
+        self.assertEqual(result['overview_summary_result'], 'success')
+        self.assertEqual(len(self.calls), 2)
+
+    def test_react_changed_url_stops_before_queries(self):
+        self.react(MOVE_URL='/react/SYN-UNKNOWN')
+        self.assertEqual(detail.run()['required_action'], 'loan_destination_path_not_implemented')
+        self.assertEqual(self.calls, [])
 
     def test_selected_installment_uses_row_parameters_and_private_fields(self):
         self.answer({'acno':'SYN-ACCOUNT','dcTamt':'100000.01','dcJan':'0','aplIyul':'4.555','prdtCNmS100':'SYN-PRODUCT',
