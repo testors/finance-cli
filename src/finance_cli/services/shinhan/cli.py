@@ -9,10 +9,6 @@ from finance_cli.credentials.shinhan import Registry, SelectionRequired
 from . import accounts, device_phone, issuance, issuance_input, login, session, setup
 
 
-class DeviceInputRequired(ValueError):
-    pass
-
-
 class Parser(ArgumentParser):
     def error(self, message):
         # Also protect legacy mode from argparse echoing arbitrary input values.
@@ -27,11 +23,7 @@ def device_input(path):
         if not isinstance(value, dict) or set(value) != {'android_id', 'model', 'os_version'}:
             raise ValueError('invalid_device_input')
         return value
-    if not sys.stdin.isatty():
-        raise DeviceInputRequired()
-    return {name: getpass.getpass(prompt) for name, prompt in (
-        ('android_id', 'Android ID (숨김): '), ('model', '기기 모델명 (숨김): '),
-        ('os_version', 'Android 버전 (숨김): '))}
+    return None
 
 
 def main(argv=None):
@@ -39,14 +31,14 @@ def main(argv=None):
     commands = parser.add_subparsers(dest='command', required=True)
     install = commands.add_parser('setup', help='서비스 자료와 새 형식 기기 정보를 로컬에 설치')
     install.add_argument('--apk', required=True, help='버전 20.0.40 기본 설치 패키지')
-    install.add_argument('--device-input', help='소유자만 읽을 수 있는 기기 JSON; 생략 시 숨김 입력')
+    install.add_argument('--device-input', help='선택 사항: 소유자만 읽을 수 있는 기기 JSON; 기본은 자동 생성')
     install.add_argument('--refresh', action='store_true', help='기존 기기 정보를 유지하고 공통 설정만 갱신')
     certificates = commands.add_parser('certificate').add_subparsers(dest='action', required=True)
     certificates.add_parser('list', help='공통 저장소의 신한인증서 참조 목록')
     issuing = certificates.add_parser('issue', help='계좌·보안카드/실물 OTP로 최초 신한인증서 발급')
     issuing.add_argument('--send', action='store_true')
     issuing.add_argument('--apk', help='첫 설정 또는 발급 설정 갱신에 사용할 기본 설치 패키지')
-    issuing.add_argument('--device-input', help='최초 설정용 기기 JSON; 생략하면 숨김 입력')
+    issuing.add_argument('--device-input', help='선택 사항: 최초 설정용 기기 JSON; 기본은 자동 생성')
     auth = commands.add_parser('login', help='공통 저장소의 발급된 신한인증서로 PIN 로그인')
     auth.add_argument('--credential', help='인증서 참조; 하나만 있으면 자동 선택')
     auth.add_argument('--password-stdin', action='store_true', help='보관 암호 한 줄만 stdin으로 입력')
@@ -65,7 +57,7 @@ def main(argv=None):
         item.add_argument('--send', action='store_true')
         if action == 'start':
             item.add_argument('--apk', help='설정이 없을 때 사용할 버전 20.0.40 기본 설치 패키지')
-            item.add_argument('--device-input', help='기기 JSON; 최초 설정 시 생략하면 숨김 입력')
+            item.add_argument('--device-input', help='선택 사항: 최초 설정용 기기 JSON; 기본은 자동 생성')
     args = parser.parse_args(argv)
     issue_requested = args.command == 'certificate' and args.action == 'issue'
     if (issue_requested or args.command in ('login', 'accounts', 'loans', 'phone') or args.command == 'session' and args.action != 'status') and not args.send:
@@ -143,9 +135,6 @@ def main(argv=None):
         result, code = {'error': 'credential_selection_required', 'network_used': False,
                         'message': ('보관된 신한인증서가 필요합니다. certificate issue --send로 최초 발급을 진행하세요.' if exc.count == 0 else
                                     '인증서가 여러 개입니다. certificate list에서 확인하고 --credential로 선택하세요.')}, 2
-    except DeviceInputRequired:
-        result, code = {'error': 'device_input_required', 'network_used': False,
-                        'message': '터미널에서 숨김 입력하거나 --device-input으로 기기 JSON 파일을 지정하세요.'}, 2
     except session.SessionRequired:
         result, code = {'error': 'session_required', 'network_used': False,
                         'message': '저장된 신한 세션이 없습니다. 먼저 session start를 실행하세요.'}, 2

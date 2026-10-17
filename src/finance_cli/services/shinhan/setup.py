@@ -4,6 +4,7 @@ import io
 import json
 from pathlib import Path
 import re
+import secrets
 import struct
 import zipfile
 
@@ -144,9 +145,11 @@ def device(android_id, model, os_version):
             'model': model, 'os_version': os_version}
 
 
-def install(package, device_input):
+def install(package, device_input=None):
     settings = extract(package)
-    settings['device'] = device(**device_input)
+    # One local CLI identity, persisted for issuance and subsequent logins.
+    settings['device'] = (device(**device_input) if device_input is not None else
+                          device(secrets.token_hex(8), 'SM-S921N', '14'))
     folder = prepare_directory()
     with storage.lock(folder / '.lock'):
         # Changing identity would invalidate the session/certificate association.

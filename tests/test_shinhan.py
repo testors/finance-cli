@@ -54,6 +54,39 @@ class PrivateHome(unittest.TestCase):
 
 
 class SetupTests(PrivateHome):
+    def test_setup_without_device_input_is_private_noninteractive_and_offline(self):
+        extracted = {key: value for key, value in settings().items() if key != 'device'}
+        with patch.object(setup, 'extract', return_value=extracted), \
+             patch.object(setup.secrets, 'token_hex', return_value='0123456789abcdef') as random_id, \
+             patch('sys.stdin.isatty', return_value=False), \
+             patch('getpass.getpass', side_effect=AssertionError('Device prompt')), \
+             patch('socket.socket.connect', side_effect=AssertionError('Network forbidden')):
+            code, out, err = self.call(['setup', '--apk', 'synthetic.zip'])
+        self.assertEqual(code, 0)
+        self.assertFalse(json.loads(out)['result']['network_used'])
+        random_id.assert_called_once_with(8)
+        saved = setup.load()['device']
+        self.assertEqual(saved, setup.device('0123456789abcdef', 'SM-S921N', '14'))
+        self.assertNotIn(saved['device_id'], out+err)
+        self.assertNotIn('0123456789abcdef', out+err)
+        self.assertEqual((setup.root()/'settings.json').stat().st_mode & 0o777, 0o600)
+        with patch.object(setup, 'extract', return_value=extracted), \
+             patch.object(setup.secrets, 'token_hex', side_effect=AssertionError('Identity regenerated')):
+            self.assertEqual(self.call(['setup', '--apk', 'synthetic.zip', '--refresh'])[0], 0)
+        self.assertEqual(setup.load()['device'], saved)
+
+    def test_explicit_device_file_remains_supported_without_random_identity(self):
+        path = Path(self.temp).resolve()/'device.json'
+        supplied = {'android_id': 'SYN-ANDROID', 'model': 'SYN-MODEL', 'os_version': 'SYN-OS'}
+        storage.write_new(path, json.dumps(supplied).encode())
+        with patch.object(setup, 'extract', return_value={key: value for key, value in settings().items() if key != 'device'}), \
+             patch.object(setup.secrets, 'token_hex', side_effect=AssertionError('Unexpected random identity')), \
+             patch('getpass.getpass', side_effect=AssertionError('Device prompt')):
+            code, out, err = self.call(['setup', '--apk', 'synthetic.zip', '--device-input', str(path)])
+        self.assertEqual(code, 0)
+        self.assertEqual(setup.load()['device'], setup.device(**supplied))
+        self.assertNotIn('SYN-ANDROID', out+err)
+
     def test_new_device_identity_preserves_empty_unicode_and_input_order(self):
         actual = setup.device('가', '나', '')
         self.assertEqual(actual['device_id'], hashlib.sha256('가나'.encode()).hexdigest())
@@ -206,6 +239,7 @@ class SessionTests(PrivateHome):
 
     def test_missing_send_help_and_status_never_read_settings_or_prompt(self):
         with patch.object(setup, 'load', side_effect=AssertionError('Settings read')), \
+             patch.object(setup, 'install', side_effect=AssertionError('Settings installed')), \
              patch('getpass.getpass', side_effect=AssertionError('Secret input')):
             for action in ('start', 'extend'):
                 code, text, _ = self.call(['session', action])
@@ -213,6 +247,7 @@ class SessionTests(PrivateHome):
                 self.assertEqual(json.loads(text)['result']['error'], 'send_required')
             self.assertEqual(self.call(['--help'])[0], 0)
             self.assertEqual(self.call(['session', 'status'])[0], 0)
+            self.assertEqual(self.call(['session', 'start', '--apk', 'synthetic.zip'])[0], 2)
         self.assertFalse(self.home.exists())
 
     def test_arguments_and_local_errors_never_echo_private_values(self):
@@ -226,18 +261,20 @@ class SessionTests(PrivateHome):
                 self.assertNotIn('SYN-PRIVATE-EXCEPTION', text+error)
 
     def test_shortest_start_path_installs_once_then_reuses_default(self):
-        def install(package, device):
-            self.assertEqual(package, 'synthetic.zip')
-            self.install()
         reply = transport.Reply(200, [], response(body={}))
-        with patch('finance_cli.services.shinhan.cli.device_input', return_value={}) as inputs, \
-             patch.object(setup, 'install', side_effect=install) as installer, \
+        with patch.object(setup, 'extract', return_value={key: value for key, value in settings().items() if key != 'device'}) as extract, \
+             patch.object(setup.secrets, 'token_hex', return_value='0123456789abcdef') as random_id, \
+             patch('sys.stdin.isatty', return_value=False), \
+             patch('getpass.getpass', side_effect=AssertionError('Device prompt')), \
              patch.object(transport, 'post', return_value=reply) as sender:
             self.assertEqual(self.call(['session', 'start', '--apk', 'synthetic.zip', '--send'])[0], 0)
             self.assertEqual(self.call(['session', 'start', '--send'])[0], 0)
-            self.assertEqual(installer.call_count, 1)
-            self.assertEqual(inputs.call_count, 1)
+            extract.assert_called_once_with('synthetic.zip')
+            random_id.assert_called_once_with(8)
             self.assertEqual(sender.call_count, 2)
+        saved = setup.load()['device']
+        for call in sender.call_args_list:
+            self.assertEqual(json.loads(call.args[0])['dataHeader']['uuid'], saved['device_id'])
 
     def test_start_preserves_private_state_and_report_excludes_sensitive_values(self):
         self.install()

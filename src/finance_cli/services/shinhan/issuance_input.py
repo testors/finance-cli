@@ -53,8 +53,8 @@ def factory(exchange):
         if kind == 'account_security_route':
             return yes('계좌 비밀번호와 보안카드 또는 실물 OTP로 인증을 진행할까요?')
         if kind == 'network_info':
-            return {'useVPN': yes('휴대폰에서 현재 VPN을 사용 중인가요?'),
-                    'countryCode': getpass.getpass('휴대폰 통신망 국가코드(예: kr, 확인할 수 없으면 빈칸): ').strip().lower()}
+            # CLI profile defaults; no mobile radio information is available.
+            return {'useVPN': False, 'countryCode': ''}
         if kind == 'account':
             selection = '0'
             if value:

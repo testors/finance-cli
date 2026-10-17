@@ -195,12 +195,19 @@ class FirstIssuanceTests(PrivateHome):
         self.assertEqual(Registry().list(), [])
 
     def test_terminal_adapter_completes_short_command_and_keeps_choices_private(self):
-        answers = ['y', 'Synthetic Customer', '900101', '1', '1', '246802', 'y', '1000000', 'n', 'kr',
+        (setup.root()/'settings.json').unlink()
+        answers = ['y', 'Synthetic Customer', '900101', '1', '1', '246802', 'y', '1000000',
                    '1', '2468', '617', '24', '86', '246802', '246802', self.password.decode(), self.password.decode()]
-        with patch('sys.stdin.isatty', return_value=True), patch('getpass.getpass', side_effect=answers) as inputs:
-            code, output, error = self.call(['certificate', 'issue', '--send'])
+        with patch('sys.stdin.isatty', return_value=True), patch('getpass.getpass', side_effect=answers) as inputs, \
+             patch.object(setup, 'extract', return_value={key: value for key, value in settings().items() if key != 'device'}):
+            code, output, error = self.call(['certificate', 'issue', '--apk', 'synthetic.zip', '--send'])
         self.assertEqual(code, 0)
         self.assertEqual(inputs.call_count, len(answers))
+        device = setup.load()['device']
+        fds = next(body for trx, body in self.requests if trx == 'RSMCM1005A02')
+        self.assertEqual((fds['phoneModel'], fds['osVersion']), (device['model'], device['os_version']))
+        self.assertEqual((fds['vpnYn'], fds['networkCntryCd']), ('N', ''))
+        self.assertNotIn(device['device_id'], output+error)
         files = list((setup.root()/'runs').glob('*/input-*.json'))
         self.assertTrue(files)
         self.assertTrue(all(path.stat().st_mode & 0o777 == 0o600 for path in files))
@@ -236,8 +243,10 @@ class FirstIssuanceTests(PrivateHome):
         self.assertEqual(self.calls, ['RSMCM9000C10'])
 
     def test_no_send_never_reads_settings_or_prompts(self):
-        with patch.object(setup, 'load', side_effect=AssertionError()), patch.object(issuance_input, 'factory', side_effect=AssertionError()):
-            code, out, _ = self.call(['certificate', 'issue'])
+        with patch.object(setup, 'load', side_effect=AssertionError()), \
+             patch.object(setup, 'install', side_effect=AssertionError()), \
+             patch.object(issuance_input, 'factory', side_effect=AssertionError()):
+            code, out, _ = self.call(['certificate', 'issue', '--apk', 'synthetic.zip'])
         self.assertEqual(code, 2)
         self.assertEqual(json.loads(out)['result']['error'], 'send_required')
 
