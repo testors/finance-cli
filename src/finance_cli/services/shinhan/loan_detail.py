@@ -4,7 +4,7 @@ import json
 import re
 
 from finance_cli.core import storage
-from . import account_protocol, legacy_web, setup
+from . import account_protocol, legacy_web, menu as navigation, menu_protocol, setup
 from .accounts import LoginRequired
 from .enrollment import Pending
 from .exchange import Exchange
@@ -25,30 +25,33 @@ def select(state, index):
     return rows[index-1], saved['attempt']
 
 
-def program(settings, state, row):
+def program(settings, state, row, exchange=None):
     # Only the selected row supplies navigation. Buttons and account prefixes
     # do not substitute for a row's destination.
     identity = row.get('programId', '').strip().upper().replace(' ', '')
     if not identity:
         raise Pending('loan_row_has_no_destination')
-    menu = settings.get('menu')
-    if not isinstance(menu, dict):
-        raise Pending('loan_menu_settings_refresh_required')
     intro = state.get('intro') or {}
-    if intro.get('menuDownlYnS1') == 'Y':
-        raise Pending('loan_menu_download_required')
-    key = menu['LIGHT_PRG_KEY_DATA']
-    expand = lambda value: {key.get(k, k): v for k, v in value.items()}
-    programs = {r.get('PR_ID', ''): r for r in map(expand, menu['R'])}
-    aliases = {r.get('ASIS_SCRID', ''): r.get('PR_ID', '') for r in map(expand, menu.get('P', []))}
-    found = programs.get(identity) or programs.get(aliases.get(identity))
-    if len(identity.encode('utf-16-le', errors='surrogatepass')) // 2 > 20:
-        raise Pending('loan_destination_unavailable')
-    if found is None:
-        raise Pending('loan_destination_server_lookup_required')
+    if exchange is not None:
+        found = navigation.resolve(exchange, identity)
+    else:
+        value = (state.get('menu') or {}).get('value')
+        if value is None:
+            if 'menu' not in settings:
+                raise Pending('loan_menu_settings_refresh_required')
+            if intro.get('menuDownlYnS1') == 'Y':
+                raise Pending('loan_menu_download_required')
+            value = menu_protocol.decode(json.dumps(settings['menu']))
+        found = menu_protocol.local(value, identity)
+        if len(identity.encode('utf-16-le', errors='surrogatepass')) // 2 > 20:
+            raise Pending('loan_destination_unavailable')
+        if found is None or not found['PR_ID']:
+            raise Pending('loan_destination_server_lookup_required')
     name = found.get('PR_ID')
     if name not in PROGRAMS or found.get('PR_TYPE') != 'W':
         raise Pending('loan_destination_not_implemented')
+    if found.get('MOVE_URL') != f'/web/pages/BM/BM03/{name[:6]}/{name}.html':
+        raise Pending('loan_destination_path_not_implemented')
     minimum = found.get('AND_MIN_APP_VER', '')
     if minimum:
         versions = [value.replace('.', '') for value in (settings['version'], minimum)]
@@ -215,7 +218,7 @@ def run(index=None):
         try:
             row, attempt = select(state, index)
             exchange.report['list_attempt'] = attempt
-            name = program(settings, state, row)
+            name = program(settings, state, row, exchange)
             params = parameters(row.get('programParam'), PROGRAMS[name])
             inquiry(exchange, name, params)
         except Pending as error:

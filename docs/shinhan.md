@@ -13,7 +13,7 @@ fin --format json-v1 shinhan session status
 
 기기 값을 따로 지정할 때만 `--device-input /path/to/device.json`을 사용합니다. 이 JSON은 문자열 `android_id`, `model`, `os_version` 세 필드를 가지며 파일 권한은 `0600`이어야 합니다. 네트워크 없이 설정만 설치하려면 `fin shinhan setup --apk /path/to/base.apk`을 사용합니다. 이미 설치된 설정은 덮어쓰지 않습니다.
 
-기동 요청이 성공해도 로그인 성공을 뜻하지 않습니다. `session status`는 로컬 파일의 존재만 읽고, 세션의 서버 유효성을 확인하지 않습니다. 기동 시 받은 공지·강제 종료·강제 업데이트·메뉴 갱신 여부를 결과의 `intro`에 표시합니다. 이 명령은 전체 앱 기동이나 공지 처리·메뉴 다운로드를 대신하지 않습니다.
+기동 요청이 성공해도 로그인 성공을 뜻하지 않습니다. `session status`는 로컬 파일의 존재만 읽고, 세션의 서버 유효성을 확인하지 않습니다. 기동 시 받은 공지·강제 종료·강제 업데이트·메뉴 갱신 여부를 결과의 `intro`에 표시합니다. 서버가 메뉴 갱신을 지시하면 해당 파일을 내려받고, 다운로드 실패 시 서버 기본 메뉴·로컬 백업·기본 메뉴 순서로 복구합니다. 메뉴 준비 상태는 결과의 `menu`에 별도로 표시하며 기동 성공과 구별합니다. 공지 처리는 아직 연결 중입니다.
 
 ```sh
 fin --format json-v1 shinhan session extend --send
@@ -114,7 +114,7 @@ fin --format json-v1 shinhan loan-detail --loan 1 --send
 
 이전 설정에 메뉴가 없으면 `loan_menu_settings_refresh_required`가 나옵니다. 최초 설정에 썼던 설치 패키지로 `fin shinhan setup --apk /path/to/base.apk --refresh`를 한 번 실행하세요. 기기 식별자는 유지합니다. 신규 설치·발급 설정에서는 메뉴를 함께 준비합니다.
 
-서버 메뉴 갱신, 모르는 이동 화면의 서버 확인, 프로그램 공지, 별도 계좌 확인 또는 지원하지 않는 파라미터 문법이 필요하면 현재 명령은 `processing_status=incomplete`와 `required_action`을 반환합니다. 이 후속 단계들은 연결 중이며 대출 부재나 은행 실패를 뜻하지 않습니다. 대출 상환·연기·한도 변경 등 관리 작업은 실행하지 않습니다.
+선택한 행의 화면 정보가 메뉴에 없으면 서버에서 확인합니다. 서버가 반환한 화면 권한과 주소를 적용하며, 화면 확인 결과는 `program_lookup_result`로 따로 표시합니다. 프로그램 공지, 별도 계좌 확인, 지원하지 않는 화면 주소 또는 파라미터 문법이 필요하면 현재 명령은 `processing_status=incomplete`와 `required_action`을 반환합니다. 이 후속 단계들은 연결 중이며 대출 부재나 은행 실패를 뜻하지 않습니다. 대출 상환·연기·한도 변경 등 관리 작업은 실행하지 않습니다.
 
 ## 기존 대출 증빙 조회
 

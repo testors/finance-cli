@@ -14,8 +14,8 @@ from test_shinhan import PrivateHome, response, settings
 
 
 def menu():
-    return {'LIGHT_PRG_KEY_DATA': {'B': 'PR_ID', 'A': 'ASIS_SCRID'},
-            'R': [{'B': name, 'PR_TYPE': 'W', 'LOGIN_LEVEL': '2', 'ID_USABLE_YN': 'N'} for name in detail.PROGRAMS],
+    return {'VERSION':'SYN-MENU', 'CHATBOT_ERR_LIST':'', 'BANK_CODE_SERACH_LIST':[], 'CATEGORY_MENU_LIST':[], 'LIGHT_PRG_KEY_DATA': {'B': 'PR_ID', 'A': 'ASIS_SCRID', 'R':'PROGRAM_LIST', 'P':'ASIS_PRID_MAP'},
+            'R': [{'B': name, 'PR_TYPE': 'W', 'MOVE_URL': f'/web/pages/BM/BM03/{name[:6]}/{name}.html', 'LOGIN_LEVEL': '2', 'ID_USABLE_YN': 'N'} for name in detail.PROGRAMS],
             'P': [{'A': 'SYN-OLD-PAGE', 'B': 'BM0310S0402F01'}]}
 
 
@@ -134,16 +134,38 @@ class LoanDetailTests(PrivateHome):
         self.assertEqual(self.calls,[])
 
     def test_unknown_row_destination_never_uses_first_button_or_account_prefix(self):
-        for name,action in [('', 'loan_row_has_no_destination'),('SYN-UNKNOWN','loan_destination_server_lookup_required')]:
+        for name,action in [('', 'loan_row_has_no_destination'),('SYN-UNKNOWN','loan_destination_unavailable')]:
             self.selected(name)
-            self.assertEqual(detail.run()['required_action'],action)
+            with patch.object(transport,'post',return_value=transport.Reply(200,[],response('FAIL',{}))):
+                self.assertEqual(detail.run()['required_action'],action)
+        self.assertEqual(self.calls,[])
+
+    def test_server_program_lookup_selects_actual_destination_and_preserves_row_parameters(self):
+        from finance_cli.services.shinhan import menu_protocol
+        self.selected('SYN-REMOTE', {'P':{'acno':'SYN-SELECTED'}})
+        remote=dict.fromkeys(menu_protocol.REMOTE_FIELDS,'') | {
+            'prId':'BM0302S0404F01','prType':'W','loginLevel':'2',
+            'moveUrl':'/web/pages/BM/BM03/BM0302/BM0302S0404F01.html'}
+        self.answer({'acno':'SYN-SELECTED'});self.clock()
+        with patch.object(transport,'post',return_value=transport.Reply(200,[],response('SUCCESS',remote))) as lookup:
+            result=detail.run()
+        lookup.assert_called_once()
+        self.assertEqual(result['program_lookup_result'],'success')
+        self.assertEqual(result['detail_result'],'success')
+        self.assertEqual(self.calls[0][1]['ysAcno'],'SYN-SELECTED')
+        self.assertEqual([c[0]['trxCd'] for c in self.calls],['RSMLO1002A01','RSMCM9000A03'])
+
+    def test_changed_page_url_never_executes_previous_page_contract(self):
+        self.settings['menu']['R'][0]['MOVE_URL']='/web/pages/SYN-CHANGED.html'
+        storage.atomic_json(setup.root()/'settings.json',self.settings)
+        result=detail.run()
+        self.assertEqual(result['required_action'],'loan_destination_path_not_implemented')
         self.assertEqual(self.calls,[])
 
     def test_known_navigation_restrictions_stop_before_loan_request(self):
         variants=[({'emergency':True},'loan_banking_login_required'),
                   ({'login':{'user':{'membGdS2':'01'}}},'loan_banking_grade_required'),
                   ({'login':{'user':{'loginLevS2':'2'}}},'loan_other_login_required'),
-                  ({'intro':{'menuDownlYnS1':'Y'}},'loan_menu_download_required'),
                   ({'intro':{'programNotiList':[{'prId':'BM0302S0404F01'}]}},'loan_program_notice_required')]
         baseline=copy.deepcopy(self.state)
         for changes,action in variants:

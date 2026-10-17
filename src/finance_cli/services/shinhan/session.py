@@ -5,7 +5,7 @@ import json
 import uuid
 
 from finance_cli.core import storage
-from . import setup, transport
+from . import menu, setup, transport
 
 
 class SessionRequired(ValueError):
@@ -41,7 +41,6 @@ def execute(action):
             body = {'osGS10': '03', 'appVersion': settings['version'], 'osVer': settings['device']['os_version']}
         else:
             raise ValueError('invalid_operation')
-        payload = transport.encode(transaction, body, settings)
         attempt = uuid.uuid4().hex
         runs = storage.directory(folder / 'runs')
         run = storage.directory(runs / attempt)
@@ -51,6 +50,10 @@ def execute(action):
                   'authentication': 'unverified', 'network_used': False,
                   'automatic_retry': False}
         storage.write_new(run / 'report.json', (json.dumps(result)+'\n').encode())
+        menus = menu.Store(settings, state, result, run) if action == 'start' else None
+        if menus is not None:
+            body['pgmVerS10'] = menus.before_start()
+        payload = transport.encode(transaction, body, settings)
         # Reserve and persist before attempting network; never resume by resending.
         result.update(network_used=True, processing_status='sending')
         storage.atomic_json(run / 'report.json', result)
@@ -77,6 +80,14 @@ def execute(action):
                 result['intro'] = {name: data.get(field) == 'Y' for name, field in (
                     ('notice', 'appNotiYnS1'), ('force_end', 'appNotiAfForcEndYnS1'),
                     ('force_update', 'appNotiAfForcUpdateYnS1'), ('menu_update', 'menuDownlYnS1'))}
+                try:
+                    menus.load(data)
+                except (KeyboardInterrupt, EOFError):
+                    result['menu']['status'] = 'interrupted'
+                    result.update(processing_status='incomplete', error='interrupted')
+                except Exception:
+                    result['menu']['status'] = 'unavailable'
+                    warnings.append('menu_processing_error')
         state['last_operation'] = action
         try:
             storage.atomic_json(state_path, state)
@@ -92,8 +103,8 @@ def execute(action):
         except Exception:
             warnings.append('response_save_error')
         result['cookie_present'] = bool(state.get('cookie'))
-        if warnings:
-            result['warnings'] = warnings
+        if warnings or result.get('warnings'):
+            result.setdefault('warnings', []).extend(warnings)
             result['local_status'] = 'incomplete'
         else:
             result['local_status'] = 'complete'
