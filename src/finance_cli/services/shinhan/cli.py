@@ -6,7 +6,7 @@ import sys
 from finance_cli.cli.output import ArgumentParser, emit
 from finance_cli.core import storage
 from finance_cli.credentials.shinhan import Registry, SelectionRequired
-from . import accounts, device_phone, history, history_protocol, history_screen, issuance, issuance_input, loan_detail, loan_documents, login, session, setup
+from . import accounts, device_phone, history, history_protocol, history_screen, issuance, issuance_input, loan_detail, loan_documents, loan_history, loan_history_protocol, login, session, setup
 from .enrollment import Pending
 
 
@@ -86,6 +86,13 @@ def main(argv=None):
     detail = commands.add_parser('loan-detail', help='최근 대출 목록에서 선택한 계좌의 금액·금리·기간 조회')
     detail.add_argument('--loan', type=int, help='대출 목록의 순번; 한 건이면 자동 선택')
     detail.add_argument('--send', action='store_true')
+    ledger = commands.add_parser('loan-transactions', help='선택한 대출의 기간별 거래·이자 내역과 월별 자료')
+    ledger.add_argument('--loan', type=int, help='loans 목록의 순번; 한 건이면 자동 선택')
+    ledger.add_argument('--year', type=int, help='조회 연도; 예: 2025')
+    ledger.add_argument('--start-date', help='조회 시작일 YYYY-MM-DD; --year 대신 종료일과 함께 지정')
+    ledger.add_argument('--end-date', help='조회 종료일 YYYY-MM-DD')
+    ledger.add_argument('--sort', choices=('oldest', 'latest'), default='oldest')
+    ledger.add_argument('--send', action='store_true')
     documents = commands.add_parser('loan-documents', help='발급된 대출 증빙 조회').add_subparsers(dest='action', required=True)
     document_list = documents.add_parser('list', help='금리산정내역서 또는 여신증명서 신청 목록')
     document_list.add_argument('--type', choices=('rate', 'credit'), default='rate', help='기본: rate(금리산정내역서); credit(여신증명서 신청내역)')
@@ -105,7 +112,7 @@ def main(argv=None):
             item.add_argument('--device-input', help='선택 사항: 최초 설정용 기기 JSON; 기본은 자동 생성')
     args = parser.parse_args(argv)
     issue_requested = args.command == 'certificate' and args.action == 'issue'
-    if (issue_requested or args.command in ('login', 'accounts', 'loans', 'transactions', 'phone', 'loan-documents', 'loan-detail') or args.command == 'session' and args.action != 'status') and not args.send:
+    if (issue_requested or args.command in ('login', 'accounts', 'loans', 'transactions', 'phone', 'loan-documents', 'loan-detail', 'loan-transactions') or args.command == 'session' and args.action != 'status') and not args.send:
         emit({'error': 'send_required', 'network_used': False,
               'message': '기관 연결에는 --send가 필요합니다.'}, 2)
         return 2
@@ -168,6 +175,13 @@ def main(argv=None):
                 parser.error('invalid_loan_index')
             network_used = None
             result = loan_detail.run(args.loan, acknowledge=acknowledge_program_notice, queue_progress=queue_progress)
+        elif args.command == 'loan-transactions':
+            if args.loan is not None and args.loan < 1:
+                parser.error('invalid_loan_index')
+            loan_history_protocol.period(args.year, args.start_date, args.end_date)
+            network_used = None
+            result = loan_history.run(args.loan, year=args.year, start=args.start_date, end=args.end_date,
+                                      order=args.sort.upper(), acknowledge=acknowledge_program_notice, queue_progress=queue_progress)
         elif args.command == 'loan-documents':
             def acknowledge(path):
                 print(f'은행 안내를 확인하세요: {path}', file=sys.stderr)
