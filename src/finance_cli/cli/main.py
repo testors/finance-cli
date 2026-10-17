@@ -17,7 +17,13 @@ def capabilities():
     from finance_cli.core.live_verification import HANA_LEVEL, REVIEWED_ON, hana_report, giro_report, corporate_report, hometax_report
     return {'schema_version': 1, 'services': {
         'shinhan': {'offline': ['user-package-settings-extraction', 'local-session-status'],
-                    'live': ['startup-request', 'explicit-session-extension', 'device-phone-sms-verification', 'certificate-issuance-account-security', 'shinhan-account-list', 'shinhan-loan-list', 'selected-account-transactions', 'selected-loan-detail', 'selected-loan-transactions', 'loan-document-list', 'loan-rate-statement-pdf'],
+                    'live': ['startup-request', 'explicit-session-extension', 'device-phone-sms-verification', 'certificate-issuance-account-security', 'shinhan-account-list', 'shinhan-loan-list', 'selected-account-transactions', 'selected-loan-detail', 'selected-loan-transactions', 'loan-document-list', 'loan-rate-statement-pdf', 'native-immediate-transfer'],
+                    'transfer': {'commands': ['fin shinhan transfer accounts', 'fin shinhan transfer prepare',
+                                               'fin shinhan transfer show', 'fin shinhan transfer execute'],
+                                 'verification': 'synthetic_only', 'requires': 'authenticated session and a fresh single-use preparation',
+                                 'scope': 'native immediate transfer from Shinhan, account password, Shinhan certificate PIN/PISP, physical OTP, ARS/SMS additional authentication',
+                                 'pending': ['live verification', 'security card', 'mobile OTP', 'fraud questionnaire',
+                                             'backup route', 'openbanking withdrawal', 'reservation', 'tax payment']},
                     'issuance': {'command': 'fin shinhan certificate issue', 'verification': 'live_verified',
                                  'verified_route': 'Shinhan account and physical OTP',
                                  'requires': 'matching registered phone, eligible Shinhan account and security card or physical OTP',
@@ -71,7 +77,7 @@ def capabilities():
                     'requirements': ['user-supplied settings for version 20.0.40',
                                      'automatically prepared persistent device identity', 'explicit --send'],
                     'not_included': ['mobile OTP issuance authentication', 'no-face authentication', 'cloud certificate download',
-                                     'other loan destinations', 'new loan certificate applications and delivery', 'credit certificate PDF', 'other transaction-history destinations', 'transfers']},
+                                     'other loan destinations', 'new loan certificate applications and delivery', 'credit certificate PDF', 'other transaction-history destinations', 'other transfer routes']},
         'hana': {'offline': ['protocol', 'shared-certificate-login-signature', 'onesign-vault-bundle',
                             'user-package-settings-extraction', 'onesign-identity-initialization', 'onesign-identity-removal', 'onesign-identity-rename', 'personal-transfer-csv-check'],
                  'live': ['app-authentication', 'joint-certificate-login', 'accounts', 'transfer-history-query',

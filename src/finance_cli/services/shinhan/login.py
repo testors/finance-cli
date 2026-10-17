@@ -10,6 +10,7 @@ from finance_cli.credentials.registry import decode
 from finance_cli.credentials.shinhan import Registry, SelectionRequired
 from . import crypto, e2e, login_protocol, setup
 from .exchange import Exchange
+from .enrollment import Pending
 
 
 def select(reference=None):
@@ -49,53 +50,7 @@ def run(reference, password, pin_input):
         report = exchange.report
         report['authentication'] = 'unverified'
         try:
-            step, raw = exchange.ca('e2e_init', '/v2.0/skeypad/init', e2e.initial(settings['e2e_key']))
-            if step['result'] != 'http_success':
-                return finish(exchange, 'e2e_init_unavailable')
-            handshake = e2e.Handshake.challenge(raw)
-            step['processing_status'] = 'complete'
-            step, raw = exchange.ca('e2e_complete', '/v2.0/skeypad/init', handshake.request)
-            if step['result'] != 'http_success':
-                return finish(exchange, 'e2e_response_unavailable')
-            if not handshake.finish(raw):
-                step.update(result='failure', processing_status='complete')
-                return finish(exchange, 'e2e_rejected')
-            step.update(result='success', processing_status='complete')
-            step, raw = exchange.ca('e2e_health', '/v2.0/skeypad/init', handshake.health_request())
-            if step['result'] != 'http_success':
-                return finish(exchange, 'e2e_health_unavailable')
-            if e2e.health_error(raw):
-                return finish(exchange, 'e2e_reinitialization_required')
-            step.update(result='success', processing_status='complete')
-            if not handshake.kr1:
-                return finish(exchange, 'keypad_material_unavailable')
-            # PIN is requested only when the protected channel is available.
-            pin = pin_input()
-            if not isinstance(pin, bytes) or not re.fullmatch(rb'[0-9]{6}', pin):
-                return finish(exchange, 'six_digit_pin_required')
-            unique = crypto.unique_value(pin, decode(credential['pin_salt']))
-            encrypted = handshake.encrypt(unique)
-            step, raw = exchange.ca('pin_auth', '/v1.1/prsn-cert/sec/auth',
-                                    login_protocol.pin_request(credential, settings['device'], encrypted))
-            if step['result'] != 'http_success':
-                return finish(exchange, 'pin_auth_unavailable')
-            document = json.loads(raw)
-            verdict = login_protocol.pin_verdict(document)
-            step.update(verdict)
-            step['processing_status'] = verdict.get('processing_status', 'complete')
-            if verdict['increment_failure_count']:
-                count = (state.get('login_failed_count') or 0)+1
-                state['login_failed_count'] = (count+2**31) % 2**32-2**31
-            if verdict['clear_local']:
-                # Make the app connection unusable without deleting shared credential archives.
-                state['disabled_credentials'] = [row['name'] for row in registry.list()]
-                state['authenticated'] = False
-                step['local_cleanup'] = 'disabled'
-            exchange.save()
-            if verdict['result'] != 'success':
-                report['pin_authentication'] = verdict['result']
-                return finish(exchange, 'pin_auth_rejected')
-            report['pin_authentication'] = 'success'
+            unique = authenticate_pin(exchange, credential, pin_input)
             plaintext = 'login'+datetime.now().strftime('%y%m%d%H%M%S')
             step, document = exchange.bank('nonce', 'RSMCM0800C12', {}, path='/serviceEndpoint/httpDigital/')
             nonce = ''
@@ -115,6 +70,7 @@ def run(reference, password, pin_input):
             if step['result'] != 'success':
                 return finish(exchange, 'bank_login_unavailable')
             report['authentication'] = 'bank_accepted'
+            state.pop('transfer_pending', None)
             data = document.get('dataBody')
             if not isinstance(data, dict):
                 return finish(exchange, 'login_body_unavailable')
@@ -130,6 +86,8 @@ def run(reference, password, pin_input):
             report['processing_status'] = 'complete'
             exchange.save()
             return report
+        except Pending as error:
+            return finish(exchange, error.action)
         except (KeyboardInterrupt, EOFError):
             return finish(exchange, 'interrupted')
         except Exception:
@@ -141,3 +99,56 @@ def finish(exchange, error):
     exchange.report.update(processing_status='incomplete', error=error)
     exchange.save()
     return exchange.report
+
+
+def authenticate_pin(exchange, credential, pin_input):
+    """Authenticate once on the existing bank/CA session, without bank login."""
+    settings, state, report = exchange.settings, exchange.state, exchange.report
+    step, raw = exchange.ca('e2e_init', '/v2.0/skeypad/init', e2e.initial(settings['e2e_key']))
+    if step['result'] != 'http_success':
+        raise Pending('e2e_init_unavailable')
+    handshake = e2e.Handshake.challenge(raw)
+    step['processing_status'] = 'complete'
+    step, raw = exchange.ca('e2e_complete', '/v2.0/skeypad/init', handshake.request)
+    if step['result'] != 'http_success':
+        raise Pending('e2e_response_unavailable')
+    if not handshake.finish(raw):
+        step.update(result='failure', processing_status='complete')
+        raise Pending('e2e_rejected')
+    step.update(result='success', processing_status='complete')
+    step, raw = exchange.ca('e2e_health', '/v2.0/skeypad/init', handshake.health_request())
+    if step['result'] != 'http_success':
+        raise Pending('e2e_health_unavailable')
+    if e2e.health_error(raw):
+        raise Pending('e2e_reinitialization_required')
+    step.update(result='success', processing_status='complete')
+    if not handshake.kr1:
+        raise Pending('keypad_material_unavailable')
+    # PIN is requested only when the protected channel is available.
+    pin = pin_input()
+    if not isinstance(pin, bytes) or not re.fullmatch(rb'[0-9]{6}', pin):
+        raise Pending('six_digit_pin_required')
+    unique = crypto.unique_value(pin, decode(credential['pin_salt']))
+    encrypted = handshake.encrypt(unique)
+    step, raw = exchange.ca('pin_auth', '/v1.1/prsn-cert/sec/auth',
+                            login_protocol.pin_request(credential, settings['device'], encrypted))
+    if step['result'] != 'http_success':
+        raise Pending('pin_auth_unavailable')
+    document = json.loads(raw)
+    verdict = login_protocol.pin_verdict(document)
+    step.update(verdict)
+    step['processing_status'] = verdict.get('processing_status', 'complete')
+    if verdict['increment_failure_count']:
+        count = (state.get('login_failed_count') or 0)+1
+        state['login_failed_count'] = (count+2**31) % 2**32-2**31
+    if verdict['clear_local']:
+        # Make the app connection unusable without deleting shared credential archives.
+        state['disabled_credentials'] = [row['name'] for row in Registry().list()]
+        state['authenticated'] = False
+        step['local_cleanup'] = 'disabled'
+    exchange.save()
+    if verdict['result'] != 'success':
+        report['pin_authentication'] = verdict['result']
+        raise Pending('pin_auth_rejected')
+    report['pin_authentication'] = 'success'
+    return unique

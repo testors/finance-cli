@@ -205,6 +205,45 @@ class LoginTests(PrivateHome):
         self.assertEqual(state['login'], {})
         self.assertEqual(Registry().load('synthetic', self.password)['private_key'], encode(self.private))
 
+    def test_new_bank_login_invalidates_prepared_transfer_even_if_body_unavailable(self):
+        for body in ({}, None):
+            state = storage.read_json(setup.root()/'session.json')
+            state['transfer_pending'] = {'attempt': 'SYN-OLD-PREPARE'}
+            storage.atomic_json(setup.root()/'session.json', state)
+            self.login_body = body
+            result = self.run_login()
+            self.assertEqual(result['bank_result'], 'success')
+            self.assertNotIn('transfer_pending', storage.read_json(setup.root()/'session.json'))
+
+    def test_pisp_reuses_pin_and_nonce_without_relogging_in(self):
+        from finance_cli.services.shinhan import transfer
+        from finance_cli.services.shinhan.exchange import Exchange
+        state = storage.read_json(setup.root()/'session.json')
+        exchange = Exchange(settings(), state, 'synthetic_pisp')
+        sent = []
+        def bank(payload, cookie='', *, path):
+            envelope = json.loads(payload)
+            transaction = envelope['dataHeader']['trxCd']
+            sent.append(transaction)
+            if transaction == 'RSMCM0800C12':
+                return transport.Reply(200, [], response(body={'randomUid': self.nonce}))
+            self.assertEqual(transaction, 'RSMDE0907A08')
+            key = bytes.fromhex(settings()['bank_key'])
+            body = json.loads(unpad(AES.new(key, AES.MODE_CBC, key[:16]).decrypt(base64.b64decode(envelope['dataBody'])), 16))
+            sign_data = body['inputSignData']
+            self.assertEqual(sign_data['crtcPtrnDataCon'], self.unique)
+            signed = cms.ContentInfo.load(bytes.fromhex(sign_data['tranElsgDataCon']))['content']
+            signer = signed['signer_infos'][0]
+            attrs = signer['signed_attrs'].dump()
+            x509.load_der_x509_certificate(self.cert).public_key().verify(signer['signature'].native, b'\x31'+attrs[1:], padding.PKCS1v15(), hashes.SHA256())
+            return transport.Reply(200, [], response(body={'authNoS64': 'SYN-PISP-TOKEN'}))
+        with patch.object(transport, 'post_certificate', side_effect=self.ca), patch.object(transport, 'post', side_effect=bank):
+            transfer.pisp(exchange, {'credential': 'synthetic'},
+                          lambda stage, _: self.password if stage == 'storage_password' else self.pin)
+        self.assertEqual(sent, ['RSMCM0800C12', 'RSMDE0907A08'])
+        self.assertEqual(exchange.report['pisp_authentication'], 'success')
+        self.assertNotIn('SYN-PISP-TOKEN', json.dumps(exchange.report))
+
     def test_pin_rejection_does_not_request_nonce_or_sign(self):
         self.auth_code, self.count = 'RA3100', '4'
         result = self.run_login()

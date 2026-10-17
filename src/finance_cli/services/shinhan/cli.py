@@ -8,6 +8,7 @@ from finance_cli.core import storage
 from finance_cli.credentials.shinhan import Registry, SelectionRequired
 from . import accounts, device_phone, history, history_protocol, history_screen, issuance, issuance_input, loan_detail, loan_documents, loan_history, loan_history_protocol, login, session, setup
 from .enrollment import Pending
+from . import transfer, transfer_input
 
 
 class Parser(ArgumentParser):
@@ -46,8 +47,9 @@ def acknowledge_program_notice(content, path, blocking):
 
 
 def main(argv=None):
-    parser = Parser(prog='fin shinhan', description='신한은행 기동·인증서 로그인·계좌·대출·거래내역 (실서버 미검증)')
+    parser = Parser(prog='fin shinhan', description='신한은행 로그인·계좌·대출·거래내역·이체 (기능별 검증 범위는 fin capabilities)')
     commands = parser.add_subparsers(dest='command', required=True)
+    transfer_input.add_arguments(commands)
     install = commands.add_parser('setup', help='서비스 자료와 새 형식 기기 정보를 로컬에 설치')
     install.add_argument('--apk', required=True, help='버전 20.0.40 기본 설치 패키지')
     install.add_argument('--device-input', help='선택 사항: 소유자만 읽을 수 있는 기기 JSON; 기본은 자동 생성')
@@ -112,13 +114,27 @@ def main(argv=None):
             item.add_argument('--device-input', help='선택 사항: 최초 설정용 기기 JSON; 기본은 자동 생성')
     args = parser.parse_args(argv)
     issue_requested = args.command == 'certificate' and args.action == 'issue'
-    if (issue_requested or args.command in ('login', 'accounts', 'loans', 'transactions', 'phone', 'loan-documents', 'loan-detail', 'loan-transactions') or args.command == 'session' and args.action != 'status') and not args.send:
+    if (issue_requested or args.command in ('login', 'accounts', 'loans', 'transactions', 'phone', 'loan-documents', 'loan-detail', 'loan-transactions') or args.command == 'session' and args.action != 'status' or args.command == 'transfer' and args.action != 'show') and not args.send:
         emit({'error': 'send_required', 'network_used': False,
               'message': '기관 연결에는 --send가 필요합니다.'}, 2)
         return 2
     network_used = False
     try:
-        if args.command == 'setup':
+        if args.command == 'transfer':
+            options = {}
+            if args.action == 'prepare':
+                if not 0 < args.amount < 2**63 or not transfer.protocol.digits(args.to_account):
+                    parser.error('invalid_transfer_input')
+                if args.from_account is not None and not transfer.protocol.digits(args.from_account):
+                    parser.error('invalid_withdrawal_account')
+                options = {'bank': transfer.protocol.bank_code(args.to_bank), 'account': args.to_account, 'amount': args.amount,
+                           'source': args.from_account, 'withdrawal_memo': args.withdrawal_memo,
+                           'receiver_memo': args.receiver_memo}
+            elif args.action == 'execute':
+                options['input_provider'] = transfer_input.factory(args)
+            network_used = False if args.action == 'show' else None
+            result = transfer.run(args.action, **options)
+        elif args.command == 'setup':
             if args.refresh and args.device_input:
                 parser.error('conflicting_device_input')
             result = setup.refresh(args.apk) if args.refresh else setup.install(args.apk, device_input(args.device_input))

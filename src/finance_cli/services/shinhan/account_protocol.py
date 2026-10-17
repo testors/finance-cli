@@ -68,7 +68,7 @@ class Reader:
                     if key in kind:
                         spec, default = kind[key]
                         value = self.value(spec)
-                        if value is not None or default is None:
+                        if value is not None or default is None or spec == 'nullable_string':
                             result[key] = value
                     else:
                         self.skip()
@@ -92,7 +92,7 @@ class Reader:
             self.take(']')
             return result
         value, _ = self.token()
-        if kind == 'string':
+        if kind in ('string', 'nullable_string'):
             return value
         if kind == 'int':
             if not re.fullmatch(r'-?[0-9]+(?:[eE][+-]?[0-9]+)?', value):
