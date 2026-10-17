@@ -91,8 +91,8 @@ def send_phone_sms(exchange, destination, message, *, confirm=None):
         exchange.warning('phone_sms_instructions_save_error')
     prompt = ('본인 휴대폰의 문자메시지 앱에서 아래 문자를 보내세요.\n'
               f'받는 번호: {destination}\n'
-              '문자 본문 (다음 한 줄만 그대로 보내세요):\n'
-              f'{message}\n'
+              '문자 본문 (줄바꿈을 포함한 아래 본문 전체를 보내세요):\n'
+              f'{message}\n\n'
               '문자 발송을 완료한 뒤 Enter를 누르세요. 취소: Ctrl+C ')
     if confirm is not None:
         return confirm(prompt)

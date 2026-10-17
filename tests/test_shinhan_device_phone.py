@@ -54,8 +54,8 @@ class PhoneTests(PrivateHome):
             return self.replies.pop(0)
         self.enterContext(patch.object(transport, 'post_web', side_effect=send))
 
-    def prepare(self, events='N', result='SUCCESS'):
-        self.replies = [reply({'respTelnoS20': 'SYN-DESTINATION', 'authCS100': 'A9b2-Cd'}, result),
+    def prepare(self, events='N', result='SUCCESS', message='A9b2-Cd'):
+        self.replies = [reply({'respTelnoS20': 'SYN-DESTINATION', 'authCS100': message}, result),
                         reply({'cvalS30': events})]
 
     def test_sms_request_configuration_then_seven_second_fallback_and_private_phone(self):
@@ -186,7 +186,8 @@ class PhoneTests(PrivateHome):
 
     def test_interactive_cli_displays_sms_values_on_prompt_and_keeps_json_private(self):
         storage.atomic_json(setup.root()/'session.json', self.state)
-        self.prepare()
+        message = '[합성 인증 안내]\nA9b2-Cd'
+        self.prepare(message=message)
         self.replies.append(reply({'rstCS5': '000', 'respTelnoS20': 'SYN-PHONE'}))
         original = phone.verify
         with patch('sys.stdin.isatty', return_value=True), patch('builtins.input', return_value='') as prompt, \
@@ -197,25 +198,26 @@ class PhoneTests(PrivateHome):
         files = list((setup.root()/'runs').glob('*/sms-instructions.json'))
         self.assertEqual(len(files), 1)
         self.assertEqual(files[0].stat().st_mode & 0o777, 0o600)
-        self.assertEqual(storage.read_json(files[0]), {'destination': 'SYN-DESTINATION', 'message': 'A9b2-Cd'})
+        self.assertEqual(storage.read_json(files[0]), {'destination': 'SYN-DESTINATION', 'message': message})
         prompt.assert_called_once()
         displayed = error
         self.assertIn('받는 번호: SYN-DESTINATION\n', displayed)
-        self.assertIn('다음 한 줄만 그대로 보내세요):\nA9b2-Cd\n', displayed)
+        self.assertIn('아래 본문 전체를 보내세요):\n'+message+'\n\n문자 발송', displayed)
         self.assertNotIn('파일', displayed)
         self.assertNotIn('SYN-PHONE', output+error)
         for secret in ('SYN-DESTINATION', 'A9b2-Cd'):
             self.assertNotIn(secret, output)
 
     def test_issuance_prompt_uses_same_sms_display_without_file_dependency(self):
+        message = 'SYN-HEADER\r\nSYN-MESSAGE'
         with patch.object(storage, 'write_new', side_effect=OSError('Synthetic write failure')), \
              patch('builtins.input', return_value='') as prompt, patch('sys.stderr', new_callable=io.StringIO) as stderr:
             answer = issuance_input.factory(self.exchange)('send_phone_sms',
-                {'destination': 'SYN-DESTINATION', 'message': 'SYN-MESSAGE'})
+                {'destination': 'SYN-DESTINATION', 'message': message})
         self.assertTrue(answer)
         displayed = stderr.getvalue()
         self.assertIn('받는 번호: SYN-DESTINATION\n', displayed)
-        self.assertIn('\nSYN-MESSAGE\n', displayed)
+        self.assertIn('\n'+message+'\n\n', displayed)
         self.assertIn('phone_sms_instructions_save_error', self.exchange.report['warnings'])
         self.assertNotIn('SYN-MESSAGE', json.dumps(self.exchange.report))
 
