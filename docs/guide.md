@@ -199,10 +199,14 @@ fin idcard remove card-2020
 
 ### 대출과 기존 증명서 조회
 
-기존 개인 로그인 세션을 사용합니다. 하나인증서는 `--name`으로 저장소를 고르며, 그 저장소의 서명 로그인 세션이 하나면 자동 선택합니다. 공동인증서는 `--session`으로 고르거나 저장된 로그인 세션이 하나면 생략할 수 있습니다. 대출 계좌는 그 로그인에서 미리 조회한 계좌 목록에 있어야 합니다. 세션이 여러 개면 `--session`으로 선택합니다.
+기존 개인 로그인 세션을 사용합니다. 하나인증서는 `--name`으로 저장소를 고르며, 그 저장소의 서명 로그인 세션이 하나면 자동 선택합니다. 공동인증서는 `--session`으로 고르거나 저장된 로그인 세션이 하나면 생략할 수 있습니다. 세션이 여러 개면 `--session`으로 선택합니다. 먼저 대출 목록을 조회하고, 반환된 `receipt`와 `loans[].row`로 대출을 선택합니다. 일반 계좌 조회는 선행할 필요가 없습니다.
 
 ```sh
 # --send를 빼면 입력만 확인하며 저장소 암호를 요청하지 않습니다.
+fin hana loans --name main --send
+fin hana loans --name main --previous LOAN_LIST_RECEIPT --row 1 --send
+fin hana loans executions --name main --previous LOAN_LIST_RECEIPT --row 1 --send
+# 계좌번호를 지정하면 대출 목록을 조회한 뒤 그 목록의 해당 대출을 선택합니다.
 fin hana loans --name main --account ACCOUNT --send
 fin hana loans --session main --account ACCOUNT --start 2026-01-01 --end 2026-09-30 --send
 fin hana loans executions --name main --account ACCOUNT --send
@@ -216,13 +220,15 @@ fin hana certificates link --name main --previous LIST_RECEIPT --row 1 --send
 
 `--password-stdin`은 하나인증서 **저장소 암호 한 줄**을 받습니다. 계좌 비밀번호나 PIN은 입력받지 않습니다. 공동인증서 세션 조회에는 인증서를 다시 열지 않습니다. 자동 로그인·세션 갱신·재시도는 하지 않습니다.
 
+인자 없는 `loans`와 `loans list`는 선택 가능한 대출 목록을 반환합니다. 대출이 없으면 `loans: []`이며 일반 계좌를 대신 선택하지 않습니다. 목록의 행을 선택하면 같은 로그인에 저장된 목록을 사용하고 목록을 다시 요청하지 않습니다. 같은 계좌번호의 대출이 여러 행이면 `--account`로 임의 선택하지 않으며, 목록의 행을 지정해야 합니다.
+
 대출의 기본 조회기간은 서버 오늘 기준 6개월 전 다음 날부터 오늘까지입니다. `--start`·`--end`로 다른 기간을 지정할 수 있습니다. `loan`의 `principal`·`balance`·`rate`·`account_rate`는 응답 값을 보존하며, `display_rate`는 화면 표시용 금리입니다. `execution_date`·`expiry_date`는 실행일·만기일입니다. `contract_period`는 확인된 약정기간이 없어 `null`로 남습니다. `transactions`의 상환금액·이자·수수료는 원래 부호를 보존합니다. 조회 JSON은 은행 공식 증명서가 아닙니다.
 
 대출 거래내역은 다음 커서가 있을 때 자동 수집하며 `complete`로 수집 완료 여부를 표시합니다. 이미 수락된 페이지와 거래는 후속 거절·통신·저장 오류가 생겨도 보존합니다. `accepted`와 `processing_status`, 각 `stages`를 함께 확인하세요. `executions[].execution`이 선택에 쓸 실행번호이며 `reported_sequence`와 다를 수 있습니다. 이자 상세는 거래 결과의 `receipt`와 `row`를 사용합니다. 해당하지 않는 거래는 통신 없이 `detail_status: not_applicable`, 계산기간은 `null`입니다. 이자 상세에 다음 페이지를 추가 요청하지 않습니다.
 
 증명서의 `--type financial`은 금융거래확인서, `debt`는 부채증명원입니다. 기본 조회기간은 3개월이며 지정 기간도 최대 3개월입니다. 목록 응답의 `receipt`와 `certificates[].row`로 문서 링크를 조회합니다. 링크가 있으면 `document_url`과 `document_status: link_available`, 아직 없으면 `not_ready`를 반환합니다. 링크 조회 수락과 문서 준비 여부는 별개입니다. 링크를 자동으로 열거나 PDF를 저장하지 않으므로 `download_status`는 `not_attempted`입니다. 새 발급·재전달은 지원하지 않습니다.
 
-응답 기록은 하나인증서 저장소에서는 암호화되고 공동인증서 세션에서는 접근 권한을 제한해 저장됩니다. 출력에 계좌·금융정보·문서 링크가 있으므로 일반 로그에 보관하지 마세요. 두 명령은 CLI에서 제공하며 합성 검증 상태입니다. 실서버 수락과 실제 증명서 내용은 검증 전입니다.
+응답 기록은 하나인증서 저장소에서는 암호화되고 공동인증서 세션에서는 접근 권한을 제한해 저장됩니다. 출력에 계좌·금융정보·문서 링크가 있으므로 일반 로그에 보관하지 마세요. 두 명령은 CLI에서 제공합니다. 하나인증서의 대출 목록 요청 수락·0건 정상 완료와 원본 앱의 대출 없음은 확인했습니다. 대출이 있는 목록·선택·상세·이자와 증명서 신청내역·문서 링크는 아직 실서버 미검증입니다.
 
 ### 준비물
 

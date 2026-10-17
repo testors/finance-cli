@@ -8,7 +8,8 @@ from .hana_protocol import API, decode_header, encode_header
 
 def add_parsers(sub):
     loans = sub.add_parser('loans', help='대출 금액·기간·금리·거래내역 및 이자 상세 조회')
-    loans.add_argument('action', nargs='?', default='history', choices=('history', 'executions', 'interest'))
+    loans.add_argument('action', nargs='?', choices=('list', 'history', 'executions', 'interest'),
+                       help='생략하면 대출 목록; 계좌 또는 목록 행을 지정하면 거래내역')
     loans.add_argument('--account', help='대출 계좌번호')
     loans.add_argument('--execution', type=int, help='실행번호; 생략하면 계좌의 기본 실행번호')
     certificates = sub.add_parser('certificates', help='금융거래확인서·부채증명원 신청내역 및 문서 링크 조회')
@@ -21,26 +22,35 @@ def add_parsers(sub):
         item.add_argument('--password-stdin', action='store_true', help='하나인증서 저장소 암호 한 줄')
         item.add_argument('--start', help='조회 시작일 YYYY-MM-DD 또는 YYYYMMDD')
         item.add_argument('--end', help='조회 종료일; 기본 서버 오늘')
-        item.add_argument('--previous', help='interest/link: 선택할 행이 저장된 조회 receipt')
-        item.add_argument('--row', type=int, help='interest/link: 저장된 조회 결과의 1부터 시작하는 행')
+        item.add_argument('--previous', help='선택할 대출·거래·증명서 목록이 저장된 조회 receipt')
+        item.add_argument('--row', type=int, help='저장된 조회 결과의 1부터 시작하는 행')
         item.add_argument('--send', action='store_true', help='은행 조회 허용; 자동 로그인·재시도 없음')
 
 
 def controls(args):
+    if args.operation == 'loans' and args.action is None:
+        args.action = 'history' if args.account or args.previous or args.row is not None else 'list'
     detail = args.action in ('interest', 'link')
-    if detail:
+    loan_selection = args.operation == 'loans' and args.action in ('history', 'executions')
+    if detail or loan_selection and (args.previous or args.row is not None):
         if not args.previous or args.row is None or args.row < 1:
             raise ValueError('saved_receipt_and_positive_row_required')
         store.name(args.previous)
-        if args.start or args.end or getattr(args, 'account', None) or getattr(args, 'execution', None) is not None or getattr(args, 'type', None):
+        if loan_selection and args.account:
+            raise ValueError('select_loan_by_account_or_saved_row')
+        if detail and (args.start or args.end or getattr(args, 'account', None) or getattr(args, 'execution', None) is not None or getattr(args, 'type', None)):
             raise ValueError('detail_uses_saved_query_selection')
     elif args.previous or args.row is not None:
-        raise ValueError('row_selection_is_only_for_interest_or_link')
-    if args.operation == 'loans' and not detail:
+        raise ValueError('saved_row_is_not_available_for_this_action')
+    if args.operation == 'loans' and args.action == 'list':
+        if args.account or args.execution is not None or args.start or args.end:
+            raise ValueError('loan_list_does_not_take_account_execution_or_dates')
+    if loan_selection:
         from .evidence import account
-        if account(args.account) is None:
+        if not args.previous and account(args.account) is None:
             raise ValueError('loan_account_required')
-        args.account = account(args.account)
+        if args.account:
+            args.account = account(args.account)
         if args.execution is not None and args.execution < 1:
             raise ValueError('positive_execution_number_required')
         if args.action == 'executions' and (args.start or args.end or args.execution is not None):
@@ -64,7 +74,8 @@ def prepare(headers, kind, body, observation, **context):
         headers[key] = headers[key].strip()
     if kind != 'clock':
         common = decode_header(headers['hana-com-header'])
-        common['CNL_HDPT']['SCRN_ID'] = ('INQB0806002001' if kind == 'link' else
+        common['CNL_HDPT']['SCRN_ID'] = ('INQB0101001001' if kind == 'loan-list' else
+            'INQB0806002001' if kind == 'link' else
             'INQB0806001001' if kind == 'certificates' else 'INQB0201001001')
         headers['hana-com-header'] = encode_header(common)
     headers['content-type'] = 'application/json;charset=utf-8'
@@ -72,6 +83,9 @@ def prepare(headers, kind, body, observation, **context):
     request = {'method': 'POST', 'url': API + protocol.PATHS[kind], 'headers': headers,
                'body': body, 'loan_evidence': meta, 'live_verified': False,
                'mode': 'prepared read-only loan or certificate query; no request sent'}
+    if kind == 'loan-list':
+        request.update(body=None, omit_body=True)
+        headers.pop('content-type', None)
     return request, 'loan-query-' + kind + '-' + store.digest([body, meta])[:20]
 
 
@@ -98,7 +112,8 @@ def joint_perform(session):
 
 
 class Stopped(Exception):
-    pass
+    def __init__(self, reason='loan_evidence_processing_stopped'):
+        self.reason = reason
 
 
 class Reader:
@@ -157,38 +172,54 @@ class Reader:
         return self.result
 
 
-def selected_account(source, headers, number):
-    if hasattr(source, 'accounts'):
-        rows = source.accounts()
-    else:
-        _, value = inquiry.saved(source, 'accounts', 'accounts', headers)
-        rows = value['mainAcctList']
-    matches = [row for row in rows if isinstance(row, dict) and str(row.get('acctNo')) == number]
+def loan_list(reader, *, primary=False):
+    value, receipt = reader.query('loan-list', None, primary=primary)
+    return protocol.listed_loans(value), receipt
+
+
+def selected_loan(reader, args):
+    if args.previous:
+        _, value = reader.saved(args.previous, 'loan-list')
+        rows, receipt = protocol.listed_loans(value), args.previous
+        if args.row > len(rows):
+            raise Stopped('saved_loan_row_out_of_range')
+        selected = rows[args.row - 1]
+        reader.result.update(source_receipt=receipt, row=args.row)
+        return selected
+    rows, receipt = loan_list(reader)
+    matches = [(i, row) for i, row in enumerate(rows, 1) if str(row.get('acctNo')) == args.account]
     if len(matches) != 1:
-        raise ValueError('account_not_unique_in_saved_accounts')
-    return matches[0]
+        raise Stopped('loan_not_in_loan_list' if not matches else 'loan_selection_ambiguous_use_saved_row')
+    index, selected = matches[0]
+    reader.result.update(source_receipt=receipt, row=index)
+    return selected
 
 
 def loans(reader, args, start, end):
-    selected = selected_account(reader.source, reader.headers, args.account)
+    if args.action == 'list':
+        rows, receipt = loan_list(reader, primary=True)
+        reader.result.update(loans=[dict(protocol.listed_loan(row), row=i) for i, row in enumerate(rows, 1)],
+                             receipt=receipt)
+        return reader.finish()
+    info = selected_loan(reader, args)
+    # Selecting an all-accounts loan card passes the row directly as router state.
+    # It does not request retrieveSessAcctInfo for a main/deposit account.
+    if ledger_protocol.account_screen(info) != 'loan':
+        raise Stopped('selected_loan_does_not_use_loan_history')
+    number = info['acctNo']
     if args.action == 'executions':
-        value, receipt = reader.query('executions', {'sefAcmlAmtAcctNo': args.account,
+        value, receipt = reader.query('executions', {'sefAcmlAmtAcctNo': number,
             'inqRqreNcnt': '15', 'actDvCd': '2'}, primary=True)
         reader.result.update(executions=[{'execution': i, 'reported_sequence': row.get('acctSeqNo')}
                             for i, row in enumerate(protocol.rows(value, 'grid'), 1)], receipt=receipt)
         return reader.finish()
-    kind, body = protocol.account_request(selected)
-    value, _ = reader.query(kind, body)
-    info = value['acctInfo']
-    if ledger_protocol.account_screen(info) != 'loan':
-        raise ValueError('selected_account_does_not_use_loan_history')
     clock, _ = reader.query('clock', {'bussDt': '', 'tgtDt': ''})
     query_period = protocol.period(clock['dt'], start, end)
     execution = args.execution if args.execution is not None else protocol.execution_number(info)
     # These independent screen queries do not gate the transaction query in the app.
     for kind, body, field in (
-        ('loan-accounts', {'acctNo': args.account}, 'lonAccountList'),
-        ('executions', {'sefAcmlAmtAcctNo': args.account, 'inqRqreNcnt': '15', 'actDvCd': '2'}, 'grid')):
+        ('loan-accounts', {'acctNo': number}, 'lonAccountList'),
+        ('executions', {'sefAcmlAmtAcctNo': number, 'inqRqreNcnt': '15', 'actDvCd': '2'}, 'grid')):
         try:
             value, _ = reader.query(kind, body)
             rows = protocol.rows(value, field)
@@ -203,7 +234,7 @@ def loans(reader, args, start, end):
                                               for i, row in enumerate(rows, 1)]
         except (Stopped, ValueError, KeyError, TypeError, AttributeError):
             reader.result['warnings'].append(kind + '_unavailable')
-    first = protocol.page_body(args.account, execution, query_period)
+    first = protocol.page_body(number, execution, query_period)
     body, seen = first, set()
     reader.result.update(transactions=[], pages=[], query_period=query_period, execution=execution,
                          atomic_snapshot_verified=False)
@@ -273,7 +304,10 @@ def collect(reader, args, start, end):
         if args.action in ('interest', 'link'):
             return detail(reader, args)
         return (loans if args.operation == 'loans' else certificates)(reader, args, start, end)
-    except (Stopped, ValueError, OSError, KeyError, TypeError, AttributeError, OverflowError):
+    except Stopped as error:
+        reader.result.update(processing_status='stopped', error=error.reason)
+        return reader.result
+    except (ValueError, OSError, KeyError, TypeError, AttributeError, OverflowError):
         reader.result.update(processing_status='stopped', error='loan_evidence_processing_stopped')
         return reader.result
 

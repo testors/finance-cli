@@ -12,7 +12,9 @@ from finance_cli.services.hana.onesign_state import State
 
 ACCOUNT = fixture.ACCOUNT
 INFO = {'acctNo': ACCOUNT, 'acctSeqNo': '2', 'accountSequentialNo': 2, 'tailNo': '41',
-        'curCd': 'KRW', 'acctBal': '90000', 'irrt': '4.5', 'lonExecDt': '20200101', 'expiDt': '20300101'}
+        'acctNm': '합성 대출', 'curCd': 'KRW', 'acctBal': '90000', 'irrt': '4.5',
+        'lonExecDt': '20200101', 'expiDt': '20300101'}
+LOANS = {'lonAcctList': [INFO], 'butnList': [{'acctNo': ACCOUNT, 'butnDv': 'B0040'}]}
 ROW = {'trscDt': '20261001', 'trscSeqNo': '7', 'lnDpsTrscKindCd': '211', 'lnDpsTrscKindNm': '상환',
        'rpayAmt': '-10000', 'orgnInt': '-125', 'commAmt': 0, 'trscAfBal': '90000'}
 DOCUMENT = {'vcertDvCd': '03', 'issuRqstNo': 'SYNTHETIC-DOCUMENT',
@@ -68,7 +70,9 @@ class QueryTests(unittest.TestCase):
     def setUp(self):
         fixture.HanaSessions.setUp(self)
         self.bank.overrides.update({
-            '/retrieveMainAcctInfo': fixture.business({'mainAcctList': [INFO], 'lginYn': 'Y'}),
+            '/retrieveMainAcctInfo': fixture.business({'mainAcctList': [
+                {'acctNo': ACCOUNT, 'curCd': 'KRW', 'tailNo': '01'}], 'lginYn': 'Y'}),
+            '/retrieveOurFundExcnAcct': fixture.business(LOANS),
             '/retrieveLoanSessAcctInfo': fixture.business({'acctInfo': INFO}),
             '/retrieveLonIntList': fixture.business({'lonAccountList': [INFO]}),
             '/retrieveLonExecNo': fixture.business({'grid': [{'acctSeqNo': 88}, {'acctSeqNo': 99}]}),
@@ -95,7 +99,7 @@ class QueryTests(unittest.TestCase):
         code, result = self.run_cli('loans', '--account', ACCOUNT[:6] + '-' + ACCOUNT[6:], '--send')
         self.assertEqual((code, result['accepted'], result['complete']), (0, True, True), result)
         self.assertEqual([url.rsplit('/', 1)[1] for _, url, _, _ in self.bank.requests], [
-            'retrieveLoanSessAcctInfo', 'retrieveCurrDtm', 'retrieveLonIntList', 'retrieveLonExecNo', 'retrievetxnLon'])
+            'retrieveOurFundExcnAcct', 'retrieveCurrDtm', 'retrieveLonIntList', 'retrieveLonExecNo', 'retrievetxnLon'])
         self.assertEqual(result['loan']['principal'], '100000')
         self.assertEqual(result['loan']['balance'], '90000')
         self.assertEqual(result['loan']['display_rate'], '4.5')
@@ -107,6 +111,76 @@ class QueryTests(unittest.TestCase):
         self.assertEqual(json.loads(request[3])['acctSeqNo'], 2)
         for path in store.session_path('s1').glob('loan-query-*/body.bin'):
             self.assertEqual(path.stat().st_mode & 0o777, 0o600)
+
+    def test_default_lists_loans_without_a_main_accounts_query(self):
+        self.logged_in()
+        self.bank.requests.clear()
+        code, result = self.run_cli('loans', '--send')
+        self.assertEqual((code, result['accepted'], result['complete']), (0, True, True), result)
+        self.assertEqual(len(self.bank.requests), 1)
+        _, url, headers, body = self.bank.requests[0]
+        self.assertTrue(url.endswith('/retrieveOurFundExcnAcct'))
+        self.assertIsNone(body)
+        self.assertNotIn('content-type', headers)
+        self.assertEqual(decode_header(headers['hana-com-header'])['CNL_HDPT']['SCRN_ID'], 'INQB0101001001')
+        self.assertEqual([(r['account'], r['name'], r['row']) for r in result['loans']], [(ACCOUNT, '합성 대출', 1)])
+
+    def test_no_deposit_fallback_for_empty_missing_or_unselectable_loan_list(self):
+        self.ready()
+        for data in ({'lonAcctList': [], 'butnList': LOANS['butnList']},
+                     {'dmpyAcctList': [INFO], 'butnList': LOANS['butnList']},
+                     {'lonAcctList': [INFO]}):
+            self.bank.overrides['/retrieveOurFundExcnAcct'] = fixture.business(data)
+            self.bank.requests.clear()
+            code, result = self.run_cli('loans', '--send')
+            self.assertEqual((code, result['accepted'], result['loans']), (0, True, []))
+            self.bank.requests.clear()
+            code, result = self.history()
+            self.assertEqual((code, result['error']), (2, 'loan_not_in_loan_list'))
+            self.assertEqual(len(self.bank.requests), 1)
+            self.assertTrue(result['stages'][0]['accepted'])
+            self.assertNotIn('transactions', result)
+
+    def test_saved_list_row_selects_duplicate_account_without_requery(self):
+        self.ready()
+        self.bank.overrides['/retrieveOurFundExcnAcct'] = fixture.business({**LOANS,
+            'lonAcctList': [INFO, {**INFO, 'acctSeqNo': '3', 'accountSequentialNo': 3}]})
+        code, result = self.history()
+        self.assertEqual((code, result['error']), (2, 'loan_selection_ambiguous_use_saved_row'))
+        _, listed = self.run_cli('loans', 'list', '--send')
+        self.bank.requests.clear()
+        code, result = self.run_cli('loans', '--previous', listed['receipt'], '--row', '2', '--send')
+        self.assertEqual((code, result['execution']), (0, 3), result)
+        self.assertEqual(result['source_receipt'], listed['receipt'])
+        self.assertTrue(all(not url.endswith(('/retrieveOurFundExcnAcct', '/retrieveSessAcctInfo',
+                                              '/retrieveLoanSessAcctInfo')) for _, url, _, _ in self.bank.requests))
+        self.bank.requests.clear()
+        code, result = self.run_cli('loans', 'executions', '--previous', listed['receipt'], '--row', '1', '--send')
+        self.assertEqual((code, len(self.bank.requests)), (0, 1))
+        self.assertTrue(self.bank.requests[0][1].endswith('/retrieveLonExecNo'))
+
+    def test_saved_loan_selection_validation_and_list_storage_failure(self):
+        self.ready()
+        _, listed = self.run_cli('loans', 'list', '--send')
+        self.bank.requests.clear()
+        code, result = self.run_cli('loans', '--previous', listed['receipt'], '--row', '2', '--send')
+        self.assertEqual((code, result['error'], self.bank.requests), (2, 'saved_loan_row_out_of_range', []))
+        self.bank.overrides['/retrieveOurFundExcnAcct'] = fixture.business({**LOANS,
+            'lonAcctList': [{**INFO, 'tailNo': '01'}]})
+        code, result = self.history()
+        self.assertEqual((code, result['error'], len(self.bank.requests)),
+                         (2, 'selected_loan_does_not_use_loan_history', 1))
+        original = store.write_new
+
+        def write(path, value):
+            if path.name == 'body.bin' and 'loan-query-loan-list-' in str(path):
+                raise OSError('SYNTHETIC-PRIVATE-ERROR')
+            return original(path, value)
+
+        with patch.object(store, 'write_new', write):
+            code, result = self.run_cli('loans', '--send')
+        self.assertEqual((code, result['accepted'], result['service_status']), (2, True, 'accepted'))
+        self.assertNotIn('SYNTHETIC-PRIVATE', json.dumps(result))
 
     def test_pagination_keeps_duplicates_and_does_not_increase_page_number(self):
         self.ready()
@@ -245,7 +319,9 @@ class QueryTests(unittest.TestCase):
         from finance_cli.services.hana import onesign_cli
         with patch.object(onesign_cli, 'password', side_effect=AssertionError('Must not ask')), \
                 patch.object(State, '__enter__', side_effect=AssertionError('Must not open')):
-            for command in (['loans', '--name', 'missing', '--account', ACCOUNT],
+            for command in (['loans', '--name', 'missing'],
+                            ['loans', '--name', 'missing', '--account', ACCOUNT],
+                            ['loans', '--name', 'missing', '--previous', 'saved', '--row', '1'],
                             ['certificates', '--name', 'missing', '--type', 'debt'],
                             ['certificates', 'link', '--name', 'missing', '--previous', 'saved', '--row', '1']):
                 for versioned in (False, True):
@@ -258,6 +334,15 @@ class QueryTests(unittest.TestCase):
             self.assertNotIn('SYNTHETIC-PRIVATE', json.dumps(result))
         self.assertEqual(self.bank.requests, [])
 
+    def test_loan_list_and_selection_conflicts_are_rejected_before_io(self):
+        for options in (['list', '--account', ACCOUNT], ['list', '--previous', 'saved', '--row', '1'],
+                        ['history'], ['--previous', 'saved'], ['--row', '1'],
+                        ['--previous', 'saved', '--row', '1', '--account', ACCOUNT],
+                        ['--execution', '2']):
+            code, result = self.run_cli('loans', *options, '--send', versioned=True)
+            self.assertEqual(code, 2, options)
+        self.assertEqual(self.bank.requests, [])
+
     def test_onesign_query_uses_sealed_receipts_and_preserves_storage_failure(self):
         from finance_cli.services.hana import onesign_cli
         self.ready()
@@ -265,7 +350,7 @@ class QueryTests(unittest.TestCase):
         identity = {'profile': {'device_id': 'SYNTHETIC-DEVICE', 'customer_number': 'SYNTHETIC-CUSTOMER'},
                     'runs': {}, 'sessions': {'s': {'signed_login': True, 'headers': headers, 'cookies': [],
                         'device_id': 'SYNTHETIC-DEVICE', 'customer_number': 'SYNTHETIC-CUSTOMER',
-                        'certificate_sha256': 'SYNTHETIC-FINGERPRINT', 'accounts': {'mainAcctList': [INFO]}}}}
+                        'certificate_sha256': 'SYNTHETIC-FINGERPRINT', 'accounts': {'mainAcctList': []}}}}
         with State('synthetic', 'vault-password', identity):
             pass
 
@@ -278,6 +363,11 @@ class QueryTests(unittest.TestCase):
                 patch.object(onesign_transfer, 'record', return_value=('synthetic', {'fingerprint': 'SYNTHETIC-FINGERPRINT'})):
             code, history = self.history('--name', 'synthetic')
             self.assertEqual((code, history['accepted'], history['complete']), (0, True, True), history)
+            code, loans = self.run_cli('loans', '--name', 'synthetic', '--send')
+            self.assertEqual((code, len(loans['loans'])), (0, 1))
+            before = len(self.bank.requests)
+            code, selected = self.run_cli('loans', '--name', 'synthetic', '--previous', loans['receipt'], '--row', '1', '--send')
+            self.assertEqual((code, selected['execution'], len(self.bank.requests) - before), (0, 2, 4))
             code, listed = self.run_cli('certificates', '--name', 'synthetic', '--type', 'debt', '--send')
             self.assertEqual(code, 0)
             code, linked = self.run_cli('certificates', 'link', '--name', 'synthetic',

@@ -8,6 +8,7 @@ from .compat import truthy
 BASE = '/api/pcm/slct01/capi/'
 PATHS = {
     **{k: dates.PATHS[k] for k in ('clock', 'account', 'loan-account')},
+    'loan-list': BASE + 'allAcctInq/retrieveOurFundExcnAcct',
     'loan-accounts': BASE + 'lonTrscPtclInq/retrieveLonIntList',
     'executions': BASE + 'lonTrscPtclInq/retrieveLonExecNo',
     'page': BASE + 'lonTrscPtclInq/retrievetxnLon',
@@ -35,6 +36,19 @@ def account_request(selected):
     if truthy(selected.get('acctSeqNo')):
         return 'loan-account', {**body, 'acctSeqNo': selected['acctSeqNo']}
     return 'account', body
+
+
+def listed_loans(value):
+    # The all-accounts screen renders lonAcctList, with its button metadata.
+    # mainAcctList and deposit lists are not substitutes for this list.
+    loans = rows(value, 'lonAcctList')
+    buttons = value.get('butnList')
+    return loans if truthy(buttons) and buttons != [] else []
+
+
+def listed_loan(row):
+    return {'account': row.get('acctNo'), 'name': row.get('acctNm'),
+            'account_sequence': row.get('acctSeqNo'), **loan_summary(row, {})}
 
 
 def execution_number(info):
