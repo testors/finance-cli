@@ -17,7 +17,7 @@ def capabilities():
     from finance_cli.core.live_verification import HANA_LEVEL, REVIEWED_ON, hana_report, giro_report, corporate_report, hometax_report
     return {'schema_version': 1, 'services': {
         'shinhan': {'offline': ['user-package-settings-extraction', 'local-session-status'],
-                    'live': ['startup-request', 'explicit-session-extension', 'device-phone-sms-verification', 'certificate-issuance-account-security', 'shinhan-account-list', 'shinhan-loan-list', 'loan-document-list', 'loan-rate-statement-pdf'],
+                    'live': ['startup-request', 'explicit-session-extension', 'device-phone-sms-verification', 'certificate-issuance-account-security', 'shinhan-account-list', 'shinhan-loan-list', 'selected-loan-detail', 'loan-document-list', 'loan-rate-statement-pdf'],
                     'issuance': {'command': 'fin shinhan certificate issue', 'verification': 'synthetic_only',
                                  'requires': 'interactive terminal, matching registered phone, eligible Shinhan account and security card or physical OTP',
                                  'scope': 'first issuance in a logged-out session; no automatic login'},
@@ -29,6 +29,10 @@ def capabilities():
                     'loan_documents': {'commands': ['fin shinhan loan-documents list', 'fin shinhan loan-documents download'],
                                        'verification': 'synthetic_only', 'requires': 'authenticated session',
                                        'scope': 'existing rate statements and credit-certificate applications; selected rate statement PDF'},
+                    'loan_detail': {'command': 'fin shinhan loan-detail', 'verification': 'synthetic_only',
+                                    'requires': 'authenticated session, recent loan list and installed program menu',
+                                    'scope': 'three supported account-management destinations; raw amounts, rates and dates',
+                                    'pending': ['menu download', 'unknown destination lookup', 'native program notice', 'account guard', 'extended parameter syntax']},
                     'login': {'command': 'fin shinhan login', 'verification': 'synthetic_only',
                               'implemented': ['pin-e2e', 'pin-authentication', 'nonce-rsa-pkcs7-login',
                                               'shared-encrypted-certificate-storage'],
@@ -38,7 +42,7 @@ def capabilities():
                     'requirements': ['user-supplied settings for version 20.0.40',
                                      'automatically prepared persistent device identity', 'explicit --send'],
                     'not_included': ['mobile OTP issuance authentication', 'no-face authentication', 'cloud certificate download',
-                                     'loan account details', 'new loan certificate applications and delivery', 'credit certificate PDF', 'transactions', 'transfers']},
+                                     'other loan destinations', 'new loan certificate applications and delivery', 'credit certificate PDF', 'transactions', 'transfers']},
         'hana': {'offline': ['protocol', 'shared-certificate-login-signature', 'onesign-vault-bundle',
                             'user-package-settings-extraction', 'onesign-identity-initialization', 'onesign-identity-removal', 'onesign-identity-rename', 'personal-transfer-csv-check'],
                  'live': ['app-authentication', 'joint-certificate-login', 'accounts', 'transfer-history-query',

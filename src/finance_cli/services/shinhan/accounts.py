@@ -23,6 +23,7 @@ def run(*, loans=False, refresh=False):
             raise LoginRequired()
         exchange = Exchange(settings, state, 'loans' if loans else 'accounts')
         report = exchange.report
+        state.pop('accounts', None)
         try:
             step, document = exchange.bank('account_list', 'RSMDE0101A20',
                 {'inqrGN2': 9, 'refreshYn': int(refresh)}, path='/serviceEndpoint/httpDigital/',
@@ -35,8 +36,16 @@ def run(*, loans=False, refresh=False):
                 body = document['dataBody']
                 categories = protocol.categories(body)
                 selected = protocol.visible(categories, loans=loans)
-                state['accounts'] = {'attempt': exchange.attempt, 'categories': categories, 'summary': protocol.summary(body['totalSummary'])}
+                state['accounts'] = {'attempt': exchange.attempt, 'credential': state.get('credential'),
+                                     'categories': categories, 'summary': protocol.summary(body['totalSummary'])}
                 count = sum(len(category['assetList']) for category in selected)
+                if loans:
+                    index = 0
+                    selected = [{**category, 'assetList': [dict(row) for row in category['assetList']]} for category in selected]
+                    for category in selected:
+                        for row in category['assetList']:
+                            index += 1
+                            row['index'] = index
                 report.update(processing_status='complete', selection_scope='visible_shinhan_loans' if loans else 'visible_shinhan_accounts', count=count)
                 # Product data stays separate from the shareable diagnostic report.
                 output = exchange.run / 'accounts.json'

@@ -111,10 +111,10 @@ class SetupTests(PrivateHome):
              patch.object(setup, 'decode_pin_check_key', return_value=bytes(range(16)).hex()):
             result = setup.install(target, {'android_id': 'SYN-ANDROID', 'model': 'SYN-MODEL', 'os_version': 'SYN-OS'})
             self.assertFalse(result['network_used'])
-            self.assertEqual(setup.load(), settings())
+            self.assertEqual(setup.load(), settings() | {'menu': {'G1': 'SYN-MENU'}})
             with self.assertRaises(FileExistsError):
                 setup.install(target, {'android_id': 'DIFFERENT', 'model': '', 'os_version': ''})
-            self.assertEqual(setup.load(), settings())
+            self.assertEqual(setup.load(), settings() | {'menu': {'G1': 'SYN-MENU'}})
         self.assertEqual((setup.root() / 'settings.json').stat().st_mode & 0o777, 0o600)
         self.assertEqual(setup.root().stat().st_mode & 0o777, 0o700)
 

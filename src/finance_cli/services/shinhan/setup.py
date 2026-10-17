@@ -79,7 +79,8 @@ def extract(package):
         menu = archive.read('assets/menu_program_nss_default.json')
     if hashlib.sha256(menu).hexdigest() != MENU_SHA256:
         raise ValueError('unsupported_menu_data')
-    return {'version': VERSION, 'bank_key': key, 'menu_version': json.loads(menu)['G1'],
+    menu = json.loads(menu)
+    return {'version': VERSION, 'bank_key': key, 'menu_version': menu['G1'], 'menu': menu,
             'e2e_key': e2e_key, 'keypad_alphabet': keypad_alphabet, 'pin_check_key': pin_check_key}
 
 
