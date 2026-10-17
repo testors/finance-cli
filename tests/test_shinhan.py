@@ -25,7 +25,7 @@ from finance_cli.services.shinhan import session, setup, transport
 
 def settings():
     return {'version': setup.VERSION, 'bank_key': bytes(range(32)).hex(), 'menu_version': 'SYN-MENU', 'e2e_key': 'SYN-E2E',
-            'keypad_alphabet': b'0123456789'.hex(),
+            'keypad_alphabet': b'0123456789'.hex(), 'pin_check_key': bytes(range(16)).hex(),
             'device': setup.device('SYN-ANDROID', 'SYN-MODEL', 'SYN-OS')}
 
 
@@ -68,12 +68,14 @@ class SetupTests(PrivateHome):
         with zipfile.ZipFile(target, 'w') as archive:
             archive.writestr('classes9.dex', b'SYNTHETIC-DATA')
             archive.writestr('classes5.dex', b'SYNTHETIC-E2E')
+            archive.writestr('classes7.dex', b'SYNTHETIC-PIN-CHECK')
             archive.writestr('assets/menu_program_nss_default.json', menu)
         with patch.object(setup, 'PACKAGE_SHA256', hashlib.sha256(target.read_bytes()).hexdigest()), \
              patch.object(setup, 'MENU_SHA256', hashlib.sha256(menu).hexdigest()), \
              patch.object(setup, 'decode_key', return_value=bytes(range(32)).hex()), \
              patch.object(setup, 'decode_e2e_key', return_value='SYN-E2E'), \
-             patch.object(setup, 'decode_keypad_alphabet', return_value=b'0123456789'.hex()):
+             patch.object(setup, 'decode_keypad_alphabet', return_value=b'0123456789'.hex()), \
+             patch.object(setup, 'decode_pin_check_key', return_value=bytes(range(16)).hex()):
             result = setup.install(target, {'android_id': 'SYN-ANDROID', 'model': 'SYN-MODEL', 'os_version': 'SYN-OS'})
             self.assertFalse(result['network_used'])
             self.assertEqual(setup.load(), settings())

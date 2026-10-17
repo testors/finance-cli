@@ -6,7 +6,7 @@ import sys
 from finance_cli.cli.output import ArgumentParser, emit
 from finance_cli.core import storage
 from finance_cli.credentials.shinhan import Registry, SelectionRequired
-from . import accounts, device_phone, login, session, setup
+from . import accounts, device_phone, issuance, issuance_input, login, session, setup
 
 
 class DeviceInputRequired(ValueError):
@@ -43,6 +43,10 @@ def main(argv=None):
     install.add_argument('--refresh', action='store_true', help='기존 기기 정보를 유지하고 공통 설정만 갱신')
     certificates = commands.add_parser('certificate').add_subparsers(dest='action', required=True)
     certificates.add_parser('list', help='공통 저장소의 신한인증서 참조 목록')
+    issuing = certificates.add_parser('issue', help='계좌·보안카드/실물 OTP로 최초 신한인증서 발급')
+    issuing.add_argument('--send', action='store_true')
+    issuing.add_argument('--apk', help='첫 설정 또는 발급 설정 갱신에 사용할 기본 설치 패키지')
+    issuing.add_argument('--device-input', help='최초 설정용 기기 JSON; 생략하면 숨김 입력')
     auth = commands.add_parser('login', help='공통 저장소의 발급된 신한인증서로 PIN 로그인')
     auth.add_argument('--credential', help='인증서 참조; 하나만 있으면 자동 선택')
     auth.add_argument('--password-stdin', action='store_true', help='보관 암호 한 줄만 stdin으로 입력')
@@ -63,7 +67,8 @@ def main(argv=None):
             item.add_argument('--apk', help='설정이 없을 때 사용할 버전 20.0.40 기본 설치 패키지')
             item.add_argument('--device-input', help='기기 JSON; 최초 설정 시 생략하면 숨김 입력')
     args = parser.parse_args(argv)
-    if (args.command in ('login', 'accounts', 'loans', 'phone') or args.command == 'session' and args.action != 'status') and not args.send:
+    issue_requested = args.command == 'certificate' and args.action == 'issue'
+    if (issue_requested or args.command in ('login', 'accounts', 'loans', 'phone') or args.command == 'session' and args.action != 'status') and not args.send:
         emit({'error': 'send_required', 'network_used': False,
               'message': '기관 연결에는 --send가 필요합니다.'}, 2)
         return 2
@@ -74,7 +79,24 @@ def main(argv=None):
                 parser.error('conflicting_device_input')
             result = setup.refresh(args.apk) if args.refresh else setup.install(args.apk, device_input(args.device_input))
         elif args.command == 'certificate':
-            result = {'certificates': Registry().list(), 'network_used': False}
+            if args.action == 'list':
+                result = {'certificates': Registry().list(), 'network_used': False}
+            elif not sys.stdin.isatty():
+                result = {'error': 'interactive_input_required', 'network_used': False,
+                          'processing_status': 'incomplete', 'message': '최초 발급은 터미널에서 실행하세요.'}
+            else:
+                configured = (setup.root()/'settings.json').exists()
+                if args.apk:
+                    if configured:
+                        setup.refresh(args.apk)
+                    else:
+                        setup.install(args.apk, device_input(args.device_input))
+                elif not configured:
+                    emit({'error': 'settings_required', 'network_used': False,
+                          'message': '첫 실행에는 --apk로 기본 설치 패키지를 지정하세요.'}, 2)
+                    return 2
+                network_used = None
+                result = issuance.run(issuance_input.factory)
         elif args.command == 'login':
             reference = login.select(args.credential)
             password = sys.stdin.buffer.readline().removesuffix(b'\n').removesuffix(b'\r') if args.password_stdin else getpass.getpass('신한인증서 보관 암호: ').encode()
@@ -112,11 +134,14 @@ def main(argv=None):
             network_used = None  # An unexpected exception cannot prove no request was sent.
             result = session.execute(args.action)
         code = 0 if result.get('bank_result', 'success') == 'success' and result.get('processing_status', 'complete') == 'complete' and result.get('local_status', 'complete') == 'complete' else 2
+        if issue_requested:
+            code = 0 if (result.get('certificate_issuance') == 'success' and result.get('certificate_registration') == 'success'
+                         and result.get('processing_status') == 'complete' and result.get('local_status', 'complete') == 'complete') else 2
         if result.get('error') == 'interrupted':
             code = 130
     except SelectionRequired as exc:
         result, code = {'error': 'credential_selection_required', 'network_used': False,
-                        'message': ('보관된 신한인증서가 필요합니다. 신규 발급 경로는 아직 연결 중입니다.' if exc.count == 0 else
+                        'message': ('보관된 신한인증서가 필요합니다. certificate issue --send로 최초 발급을 진행하세요.' if exc.count == 0 else
                                     '인증서가 여러 개입니다. certificate list에서 확인하고 --credential로 선택하세요.')}, 2
     except DeviceInputRequired:
         result, code = {'error': 'device_input_required', 'network_used': False,

@@ -21,6 +21,9 @@ PARAMETER_OFFSETS = (16388846, 16388852, 16388858, 16388840)
 E2E_DATA_SHA256 = 'afed8b2a314d3e4f8672c27bafafb893b0727269003ab2bb468a07a7cccb0d9c'
 E2E_ARRAY_OFFSETS = (7021452, 7022484, 7023516)
 E2E_CIPHER_OFFSET, E2E_CIPHER_LENGTH = 2729082, 20192
+PIN_DATA_SHA256 = '74130cbd7c46195a85228f93a14db47b255c76bed1e683f89512fd2b5c29414f'
+PIN_PARAMETER_OFFSETS = (3138544, 3138550, 3138556, 3138534)
+PIN_CIPHER_OFFSET, PIN_CIPHER_LENGTH = 3139108, 16
 
 
 def root():
@@ -64,18 +67,33 @@ def extract(package):
     if len(data) > 512*1024*1024 or hashlib.sha256(data).hexdigest() != PACKAGE_SHA256:
         raise ValueError('unsupported_package')
     with zipfile.ZipFile(io.BytesIO(data)) as archive:
-        for name in ('classes9.dex', 'classes5.dex', 'assets/menu_program_nss_default.json'):
+        for name in ('classes9.dex', 'classes5.dex', 'classes7.dex', 'assets/menu_program_nss_default.json'):
             if archive.getinfo(name).file_size > 64*1024*1024:
                 raise ValueError('service_data_too_large')
         key = decode_key(archive.read('classes9.dex'))
         keypad_data = archive.read('classes5.dex')
         e2e_key = decode_e2e_key(keypad_data)
         keypad_alphabet = decode_keypad_alphabet(keypad_data)
+        pin_check_key = decode_pin_check_key(archive.read('classes7.dex'))
         menu = archive.read('assets/menu_program_nss_default.json')
     if hashlib.sha256(menu).hexdigest() != MENU_SHA256:
         raise ValueError('unsupported_menu_data')
     return {'version': VERSION, 'bank_key': key, 'menu_version': json.loads(menu)['G1'],
-            'e2e_key': e2e_key, 'keypad_alphabet': keypad_alphabet}
+            'e2e_key': e2e_key, 'keypad_alphabet': keypad_alphabet, 'pin_check_key': pin_check_key}
+
+
+def decode_pin_check_key(data):
+    if hashlib.sha256(data).hexdigest() != PIN_DATA_SHA256:
+        raise ValueError('unsupported_pin_check_data')
+    a, b, c, d = (struct.unpack_from('<i', data, offset)[0] for offset in PIN_PARAMETER_OFFSETS)
+    value = (((rotate(-2019316365+c, 23)-a) ^ b) ^ b)+a
+    value = rotate(value, 30)-2*d
+    value = rotate(rotate(value, 8), 9)
+    value = ((d ^ value)-c) ^ a
+    value = rotate(rotate(value, 29), 12)-2*c+a-b
+    mask = rotate(value, 23).to_bytes(4, 'little')
+    encoded = data[PIN_CIPHER_OFFSET:PIN_CIPHER_OFFSET+PIN_CIPHER_LENGTH]
+    return hashlib.md5(bytes(value ^ mask[index % 4] for index, value in enumerate(encoded))).hexdigest()
 
 
 def _e2e_profile(data):

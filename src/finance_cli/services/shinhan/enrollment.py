@@ -159,6 +159,31 @@ def number_is(value, expected):
     return type(value) in (int, float) and value == expected
 
 
+def age(exchange, birth, gender):
+    """The screen uses the bank date and an unfloored YYYYMMDD difference."""
+    if len(birth) != 6 or len(gender) != 1:
+        return 0
+    century = {'0': '18', '9': '18', '1': '19', '2': '19', '3': '20', '4': '20',
+               '5': '19', '6': '19', '7': '20', '8': '20'}.get(gender)
+    if century is None:
+        return 0
+    verdict, body, _ = request(exchange, 'enrollment_age_date', 'RSMCM9000A03',
+        {'bdtInqrGS20': 'getCurrentDateFmt', 'dtFrmtS20': 'yyyy.MM.dd'})
+    value = None
+    if verdict['bridge_success']:
+        name = body.get('bdtInqrGS20')
+        value = '' if name is None else body[name].get('valueS20', '')
+    if value is None:
+        # sbGetOnlyNumber(null) throws at toString(); only missing/empty values
+        # become NaN. Keep this local stop separate from the bank's verdict.
+        raise ValueError('age_date_value_unavailable')
+    try:
+        return (int(digits(value))-int(century+birth))/10000
+    except ValueError:
+        # parseInt(empty) is NaN; the original age < 14 branch is false.
+        return float('nan')
+
+
 def authentication_accounts(exchange):
     """The issue screen's eligible account candidates, not the loan list."""
     verdict, body, _ = request(exchange, 'enrollment_accounts', 'RSMDE0106A03', {'loginTrxGN1': '5'})
