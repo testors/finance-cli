@@ -166,7 +166,7 @@ class LoanDetailTests(PrivateHome):
         variants=[({'emergency':True},'loan_banking_login_required'),
                   ({'login':{'user':{'membGdS2':'01'}}},'loan_banking_grade_required'),
                   ({'login':{'user':{'loginLevS2':'2'}}},'loan_other_login_required'),
-                  ({'intro':{'programNotiList':[{'prId':'BM0302S0404F01'}]}},'loan_program_notice_required')]
+                  ({'intro':{'programNotiList':[{'prId':'BM0302S0404F01','popType':'99'}]}},'loan_netfunnel_required')]
         baseline=copy.deepcopy(self.state)
         for changes,action in variants:
             self.state=baseline|changes;self.save()

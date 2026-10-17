@@ -4,7 +4,7 @@ import json
 import re
 
 from finance_cli.core import storage
-from . import account_protocol, legacy_web, menu as navigation, menu_protocol, setup
+from . import account_protocol, legacy_web, menu as navigation, menu_protocol, navigation_guard, setup
 from .accounts import LoginRequired
 from .enrollment import Pending
 from .exchange import Exchange
@@ -25,7 +25,7 @@ def select(state, index):
     return rows[index-1], saved['attempt']
 
 
-def program(settings, state, row, exchange=None):
+def program(settings, state, row, exchange=None, acknowledge=None):
     # Only the selected row supplies navigation. Buttons and account prefixes
     # do not substitute for a row's destination.
     identity = row.get('programId', '').strip().upper().replace(' ', '')
@@ -52,12 +52,29 @@ def program(settings, state, row, exchange=None):
         raise Pending('loan_destination_not_implemented')
     if found.get('MOVE_URL') != f'/web/pages/BM/BM03/{name[:6]}/{name}.html':
         raise Pending('loan_destination_path_not_implemented')
+    done = False
+    while True:
+        prechecks(settings, state, found, exchange)
+        if navigation_guard.notice(exchange, intro, name, done, acknowledge):
+            done = True
+            continue
+        user = (state.get('login') or {}).get('user') or {}
+        if found.get('GRP_AGREE_YN') == '1' and user.get('superAgreeYn') != 'Y':
+            raise Pending('loan_group_agreement_required')
+        return name
+
+
+def prechecks(settings, state, found, exchange):
     minimum = found.get('AND_MIN_APP_VER', '')
     if minimum:
         versions = [value.replace('.', '') for value in (settings['version'], minimum)]
         if any(not re.fullmatch(r'[+-]?[0-9]+', value) or not -2**31 <= int(value) < 2**31 for value in versions) or int(versions[0]) < int(versions[1]):
             raise Pending('loan_program_version_required')
-    user = (state.get('login') or {}).get('user') or {}
+    user = (state.get('login') or {}).get('user')
+    if user is None:
+        user = {}
+    if not isinstance(user, dict):
+        raise Pending('loan_login_state_unverified')
     if state.get('emergency'):
         raise Pending('loan_banking_login_required')
     grade = found.get('LOGIN_LEVEL', '')
@@ -68,14 +85,7 @@ def program(settings, state, row, exchange=None):
             raise Pending('loan_other_login_required')
     if found.get('LONGTERM_TRANSFER_CHK_YN') == 'Y' and user.get('cusSangtaeS2') == '05':
         raise Pending('loan_long_term_transfer_notice')
-    if found.get('ACCOUNT_CHECK_YN') == 'Y':
-        raise Pending('loan_account_guard_required')
-    notices = {item.get('prId'): item for item in intro.get('programNotiList', [])}
-    if name in notices:
-        raise Pending('loan_program_notice_required')
-    if found.get('GRP_AGREE_YN') == '1' and user.get('superAgreeYn') != 'Y':
-        raise Pending('loan_group_agreement_required')
-    return name
+    navigation_guard.account(found, user, exchange)
 
 
 def parameters(value, kind):
@@ -204,7 +214,7 @@ def save(exchange, data):
         exchange.warning('loan_detail_data_save_error')
 
 
-def run(index=None):
+def run(index=None, *, acknowledge=None):
     settings = setup.load()
     folder = setup.prepare_directory()
     with storage.lock(folder/'.lock'):
@@ -218,7 +228,7 @@ def run(index=None):
         try:
             row, attempt = select(state, index)
             exchange.report['list_attempt'] = attempt
-            name = program(settings, state, row, exchange)
+            name = program(settings, state, row, exchange, acknowledge)
             params = parameters(row.get('programParam'), PROGRAMS[name])
             inquiry(exchange, name, params)
         except Pending as error:

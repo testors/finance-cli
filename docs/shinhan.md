@@ -114,7 +114,11 @@ fin --format json-v1 shinhan loan-detail --loan 1 --send
 
 이전 설정에 메뉴가 없으면 `loan_menu_settings_refresh_required`가 나옵니다. 최초 설정에 썼던 설치 패키지로 `fin shinhan setup --apk /path/to/base.apk --refresh`를 한 번 실행하세요. 기기 식별자는 유지합니다. 신규 설치·발급 설정에서는 메뉴를 함께 준비합니다.
 
-선택한 행의 화면 정보가 메뉴에 없으면 서버에서 확인합니다. 서버가 반환한 화면 권한과 주소를 적용하며, 화면 확인 결과는 `program_lookup_result`로 따로 표시합니다. 프로그램 공지, 별도 계좌 확인, 지원하지 않는 화면 주소 또는 파라미터 문법이 필요하면 현재 명령은 `processing_status=incomplete`와 `required_action`을 반환합니다. 이 후속 단계들은 연결 중이며 대출 부재나 은행 실패를 뜻하지 않습니다. 대출 상환·연기·한도 변경 등 관리 작업은 실행하지 않습니다.
+선택한 행의 화면 정보가 메뉴에 없으면 서버에서 확인합니다. 서버가 반환한 화면 권한과 주소를 적용하며, 화면 확인 결과는 `program_lookup_result`로 따로 표시합니다. 계좌 보유 확인이 필요한 화면은 로그인에서 받은 입출금·오픈뱅킹 계좌 수로 판단합니다. 이 조건을 충족하지 못하면 `loan_account_required`로 중단하며, 대출이 없다는 뜻은 아닙니다.
+
+일반 프로그램 공지는 `notice_file`에 저장하며 터미널에서 확인 후 계속할 수 있습니다. 확인 뒤에는 진입 조건과 공지를 다시 조회합니다. 차단 공지나 사용자 취소 때는 상세 조회를 보내지 않습니다. 비대화형 실행에서 확인이 필요하면 `loan_program_notice_confirmation_required`를 반환합니다. 공지 조회의 은행 판정은 `notice_lookup_result`, 응답 처리 결과는 `notice_result`로 구별합니다. 공지 조회의 통신·응답 해석 오류는 서비스 규칙에 따라 진행을 허용하지만, 성공 응답의 본문이 비어 있으면 미확인으로 중단합니다.
+
+접속 대기(NetFunnel), 장기 미이체 안내, 그룹 동의, 지원하지 않는 화면 주소 또는 파라미터 문법이 필요하면 `processing_status=incomplete`와 `required_action`을 반환합니다. 이 후속 단계들은 연결 중이며 대출 부재나 은행 실패를 뜻하지 않습니다. 대출 상환·연기·한도 변경 등 관리 작업은 실행하지 않습니다.
 
 ## 기존 대출 증빙 조회
 

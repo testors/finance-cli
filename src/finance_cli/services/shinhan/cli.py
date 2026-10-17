@@ -117,7 +117,18 @@ def main(argv=None):
             if args.loan is not None and args.loan < 1:
                 parser.error('invalid_loan_index')
             network_used = None
-            result = loan_detail.run(args.loan)
+            def acknowledge_program_notice(content, path, blocking):
+                if not sys.stdin.isatty():
+                    return None
+                if path is not None:
+                    print(f'은행 안내를 확인하세요: {path}', file=sys.stderr)
+                else:
+                    print(content, file=sys.stderr)
+                if blocking:
+                    getpass.getpass('은행 안내로 조회가 중단됩니다. 확인 후 Enter를 누르세요. ')
+                    return False
+                return getpass.getpass('안내를 확인하고 조회를 계속할까요? [y/n]: ').strip().lower() == 'y'
+            result = loan_detail.run(args.loan, acknowledge=acknowledge_program_notice)
         elif args.command == 'loan-documents':
             def acknowledge(path):
                 if not sys.stdin.isatty():
