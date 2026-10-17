@@ -9,7 +9,7 @@ from Crypto.Cipher import AES
 from Crypto.Util.Padding import unpad
 
 from finance_cli.core import storage
-from finance_cli.services.shinhan import device_phone as phone, setup, transport
+from finance_cli.services.shinhan import device_phone as phone, issuance_input, setup, transport
 from finance_cli.services.shinhan.enrollment import Pending
 from finance_cli.services.shinhan.exchange import Exchange
 from test_shinhan import PrivateHome, response, settings
@@ -186,12 +186,12 @@ class PhoneTests(PrivateHome):
                 self.assertEqual(json.loads(self.call(['phone', 'verify', '--send'])[1])['result']['error'], 'interactive_input_required')
         self.assertEqual(self.call(['phone', 'verify', '--help'])[0], 0)
 
-    def test_interactive_cli_writes_private_sms_instructions_without_echoing_secrets(self):
+    def test_interactive_cli_displays_sms_values_on_prompt_and_keeps_json_private(self):
         storage.atomic_json(setup.root()/'session.json', self.state)
         self.prepare()
         self.replies.append(reply({'rstCS5': '000', 'respTelnoS20': 'SYN-PHONE'}))
         original = phone.verify
-        with patch('sys.stdin.isatty', return_value=True), patch('getpass.getpass', return_value=''), \
+        with patch('sys.stdin.isatty', return_value=True), patch('getpass.getpass', return_value='') as prompt, \
              patch.object(phone, 'verify', side_effect=lambda exchange, send: original(exchange, send, fallback_seconds=0)):
             code, output, error = self.call(['phone', 'verify', '--send'])
         self.assertEqual(code, 0)
@@ -200,8 +200,41 @@ class PhoneTests(PrivateHome):
         self.assertEqual(len(files), 1)
         self.assertEqual(files[0].stat().st_mode & 0o777, 0o600)
         self.assertEqual(storage.read_json(files[0]), {'destination': 'SYN-DESTINATION', 'message': 'A9b2-Cd'})
+        prompt.assert_called_once()
+        displayed = prompt.call_args.args[0]
+        self.assertIn('받는 번호: SYN-DESTINATION\n', displayed)
+        self.assertIn('다음 한 줄만 그대로 보내세요):\nA9b2-Cd\n', displayed)
+        self.assertNotIn('파일', displayed)
         for secret in ('SYN-PHONE', 'SYN-DESTINATION', 'A9b2-Cd'):
             self.assertNotIn(secret, output+error)
+
+    def test_issuance_prompt_uses_same_sms_display_without_file_dependency(self):
+        with patch.object(storage, 'write_new', side_effect=OSError('Synthetic write failure')), \
+             patch('getpass.getpass', return_value='') as prompt:
+            answer = issuance_input.factory(self.exchange)('send_phone_sms',
+                {'destination': 'SYN-DESTINATION', 'message': 'SYN-MESSAGE'})
+        self.assertTrue(answer)
+        displayed = prompt.call_args.args[0]
+        self.assertIn('받는 번호: SYN-DESTINATION\n', displayed)
+        self.assertIn('\nSYN-MESSAGE\n', displayed)
+        self.assertIn('phone_sms_instructions_save_error', self.exchange.report['warnings'])
+        self.assertNotIn('SYN-MESSAGE', json.dumps(self.exchange.report))
+
+    def test_sms_instruction_save_failure_does_not_change_bank_verification_success(self):
+        self.prepare()
+        self.replies.append(reply({'rstCS5': '000', 'respTelnoS20': 'SYN-PHONE'}))
+        write = storage.write_new
+        def save(path, *args, **kwargs):
+            if path.name == 'sms-instructions.json':
+                raise OSError('Synthetic write failure')
+            return write(path, *args, **kwargs)
+        with patch.object(storage, 'write_new', side_effect=save), patch('getpass.getpass', return_value=''):
+            number = phone.verify(self.exchange, lambda destination, message:
+                issuance_input.send_phone_sms(self.exchange, destination, message), fallback_seconds=0)
+        self.assertEqual(number, 'SYN-PHONE')
+        self.assertEqual(self.exchange.report['device_phone_verification'], 'success')
+        self.assertEqual(self.exchange.report['bank_result'], 'success')
+        self.assertEqual(len(self.calls), 3)
 
 
 class StreamTests(PrivateHome):

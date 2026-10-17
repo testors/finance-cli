@@ -15,6 +15,22 @@ def yes(prompt):
     return value == 'y'
 
 
+def send_phone_sms(exchange, destination, message):
+    # Keep the machine-readable copy private, but show the two actionable
+    # values on the controlling terminal through getpass, never JSON stdout.
+    try:
+        path = exchange.run/'sms-instructions.json'
+        storage.write_new(path, (json.dumps({'destination': destination, 'message': message}, ensure_ascii=False)+'\n').encode())
+    except Exception:
+        exchange.warning('phone_sms_instructions_save_error')
+    getpass.getpass('본인 휴대폰의 문자메시지 앱에서 아래 문자를 보내세요.\n'
+                    f'받는 번호: {destination}\n'
+                    '문자 본문 (다음 한 줄만 그대로 보내세요):\n'
+                    f'{message}\n'
+                    '문자 발송을 완료한 뒤 Enter를 누르세요. 취소: Ctrl+C ')
+    return True
+
+
 def factory(exchange):
     sequence = 0
     def review(label, value):
@@ -26,9 +42,7 @@ def factory(exchange):
 
     def ask(kind, value):
         if kind == 'send_phone_sms':
-            review('sms', value)
-            getpass.getpass('파일의 번호로 내용을 그대로 본인 휴대폰에서 전송한 뒤 Enter를 누르세요. 취소: Ctrl+C ')
-            return True
+            return send_phone_sms(exchange, value['destination'], value['message'])
         if kind == 'terms':
             review('terms', value)
             return yes('파일에 안내된 약관 문서를 확인하고 동의하나요?')

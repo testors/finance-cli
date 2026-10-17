@@ -195,14 +195,8 @@ def main(argv=None):
                 emit({'error': 'interactive_input_required', 'network_used': False,
                       'message': '문자 발신 확인을 위해 터미널에서 실행하세요.'}, 2)
                 return 2
-            def sms_input(exchange, destination, message):
-                path = exchange.run/'sms-instructions.json'
-                storage.write_new(path, (json.dumps({'destination': destination, 'message': message}, ensure_ascii=False)+'\n').encode())
-                print(f'문자 수신번호와 내용은 {path} 에 저장했습니다. 이 파일은 공유하지 마세요.', file=sys.stderr)
-                getpass.getpass('파일의 내용 그대로 본인 휴대폰에서 문자를 전송한 뒤 Enter를 누르세요. 취소: Ctrl+C ')
-                return True
             network_used = None
-            result = device_phone.run(sms_input)
+            result = device_phone.run(issuance_input.send_phone_sms)
         elif args.action == 'status':
             result = session.status()
         else:
