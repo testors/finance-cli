@@ -165,6 +165,11 @@ def load():
     for field in ('device_id', 'uuid1', 'uuid2', 'model', 'os_version'):
         if not isinstance(settings['device'][field], str):
             raise ValueError('invalid_settings')
+    # Older installations allowed empty metadata. Supply the same defaults as
+    # automatic setup without regenerating the persisted device identity.
+    for field, default in (('model', 'SM-S921N'), ('os_version', '14')):
+        if not settings['device'][field]:
+            settings['device'][field] = default
     if not isinstance(settings.get('menu_version'), str):
         raise ValueError('invalid_settings')
     return settings

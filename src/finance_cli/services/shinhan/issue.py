@@ -6,6 +6,7 @@ This internal workflow is not an alternative to that preceding verification.
 import hashlib
 import hmac
 import json
+import re
 import uuid
 
 from finance_cli.credentials.registry import encode, decode
@@ -94,9 +95,18 @@ def complete(exchange, enrollment, password, unique, salt, *, registry=None):
             state.update(authentication_method='pin', pattern_enabled=False, biometric_enabled=False)
         if step['result'] != 'http_success':
             return stop(exchange, reference, 'registration_unavailable')
-        result, info = registration_result(json.loads(raw))
+        document = json.loads(raw)
+        result, info = registration_result(document)
         report['certificate_registration'] = result
         step.update(result=result, processing_status='complete' if result != 'unknown' else 'incomplete')
+        # Diagnostic codes do not change the registration verdict. Response
+        # messages and other fields remain in the private response artifact.
+        if isinstance(document, dict):
+            ca = document.get('ca')
+            for name, code in (('bank_code', document.get('ERR_CD')),
+                               ('ca_code', ca.get('CA_ERR_CD') if isinstance(ca, dict) else None)):
+                if isinstance(code, str) and re.fullmatch('[A-Z]{2}[0-9]{4}', code):
+                    step[name] = code
         if result != 'success':
             return stop(exchange, reference, 'registration_not_accepted')
         registered = True

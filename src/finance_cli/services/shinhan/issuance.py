@@ -10,13 +10,10 @@ def perform(exchange, ask):
     if state.get('authenticated'):
         raise Pending('first_issuance_logged_out_session_required')
     context = state['enrollment'] = {}
-    phone_state = state.get('device_phone', {})
-    if phone_state.get('verified') is True:
-        phone = phone_state.get('phone_number')
-        report['device_phone_verification'] = 'previously_verified'
-    else:
-        phone = device_phone.verify(exchange, lambda destination, message:
-                                    ask('send_phone_sms', {'destination': destination, 'message': message}))
+    # This runtime cannot read a current SIM number. Complete phone verification
+    # on each enrollment entry; saved results describe earlier attempts only.
+    phone = device_phone.verify(exchange, lambda destination, message:
+                                ask('send_phone_sms', {'destination': destination, 'message': message}))
     documents = enrollment.terms(exchange)
     if ask('terms', documents) is not True:
         raise Pending('terms_declined')

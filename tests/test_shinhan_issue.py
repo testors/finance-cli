@@ -150,6 +150,24 @@ class IssueTests(PrivateHome):
         self.assertEqual(self.state['authentication_method'], 'pin')
         self.assertEqual(len(self.calls), 4)
 
+    def test_registration_codes_are_reported_without_messages_and_preserve_issuance(self):
+        self.registration.update(ERR_CD='RA2010', ERR_MSG='SYN-PRIVATE-MESSAGE',
+                                 ca={'CA_ERR_CD': 'CA1000', 'CA_ERR_MSG': 'SYN-PRIVATE-CA-MESSAGE'})
+        result = self.run_issue()
+        self.assertEqual(result['certificate_issuance'], 'success')
+        self.assertEqual(result['cmp_confirm'], 'success')
+        self.assertEqual(result['certificate_registration'], 'failure')
+        self.assertEqual(result['stages'][-1]['bank_code'], 'RA2010')
+        self.assertEqual(result['stages'][-1]['ca_code'], 'CA1000')
+        self.assertNotIn('SYN-PRIVATE', json.dumps(result))
+        self.assertEqual(len(self.calls), 4)
+
+    def test_unexpected_diagnostic_code_shape_does_not_change_registration_success(self):
+        self.registration['ca'] = {'CA_ERR_CD': 'SYN-PRIVATE-VALUE'}
+        result = self.run_issue()
+        self.assertEqual(result['certificate_registration'], 'success')
+        self.assertNotIn('SYN-PRIVATE', json.dumps(result))
+
     def test_post_registration_business_error_does_not_erase_completion(self):
         self.bank_results = ['FAIL']
         result = self.run_issue()

@@ -139,6 +139,18 @@ class SetupTests(PrivateHome):
         self.assertEqual(setup.load()['e2e_key'], 'SYN-REFRESH')
         self.assertEqual(storage.read_json(setup.root() / 'session.json'), {'cookie': 'SYN-COOKIE'})
 
+    def test_legacy_empty_metadata_uses_defaults_without_changing_identity_or_files(self):
+        self.install()
+        path = setup.root()/'settings.json'
+        before = storage.read_json(path)
+        before['device'].update(model='', os_version='')
+        storage.atomic_json(path, before)
+        storage.atomic_json(setup.root()/'session.json', {'cookie': 'SYN-COOKIE'})
+        actual = setup.load()
+        self.assertEqual(actual['device'], before['device'] | {'model': 'SM-S921N', 'os_version': '14'})
+        self.assertEqual(storage.read_json(path), before)
+        self.assertEqual(storage.read_json(setup.root()/'session.json'), {'cookie': 'SYN-COOKIE'})
+
 
 class TransportTests(unittest.TestCase):
     def test_body_is_encrypted_header_defaults_and_unicode_preserved(self):

@@ -41,6 +41,8 @@ class FirstIssuanceTests(PrivateHome):
         self.overrides = {}
         storage.atomic_json(setup.root()/'session.json', {'cookie': 'JSESSIONID=SYN-BANK',
             'device_phone': {'verified': True, 'phone_number': '01000000000'}})
+        verify = device_phone.verify
+        self.enterContext(patch.object(device_phone, 'verify', side_effect=lambda exchange, send: verify(exchange, send, fallback_seconds=0)))
         self.enterContext(patch.object(transport, 'post', self.bank))
         self.enterContext(patch.object(transport, 'post_web', self.bank))
         self.enterContext(patch.object(transport, 'post_cmp', lambda payload, **kwargs: issue_fixtures.IssueTests.cmp_server(self, payload, **kwargs)))
@@ -144,13 +146,48 @@ class FirstIssuanceTests(PrivateHome):
 
     def test_first_command_prepares_session_and_verifies_phone_before_terms(self):
         (setup.root()/'session.json').unlink()
-        verify = device_phone.verify
-        with patch.object(device_phone, 'verify', side_effect=lambda exchange, send: verify(exchange, send, fallback_seconds=0)):
-            result = issuance.run(lambda _: self.ask)
+        result = issuance.run(lambda _: self.ask)
         self.assertEqual(result['certificate_registration'], 'success')
         self.assertEqual(result['startup']['bank_result'], 'success')
         self.assertEqual(self.calls[:5], ['RSMCM0100C01', 'RSMCM1200A02', 'RSMCM9009A06', 'RSMCM1200A02', 'RSMCM9000C10'])
         self.assertEqual(self.inputs[:2], ['send_phone_sms', 'terms'])
+
+    def test_each_entry_verifies_phone_even_after_a_saved_success(self):
+        self.consent = False
+        for _ in range(2):
+            result = issuance.run(lambda _: self.ask)
+            self.assertEqual(result['device_phone_verification'], 'success')
+            self.assertEqual(result['required_action'], 'terms_declined')
+        self.assertEqual(self.inputs, ['send_phone_sms', 'terms']*2)
+        self.assertEqual([body['procStepGS1'] for trx, body in self.requests if trx == 'RSMCM1200A02'],
+                         ['1', '2', '1', '2'])
+        self.assertEqual(Registry().list(), [])
+
+    def test_previous_phone_success_does_not_replace_current_completion_input(self):
+        code, output, _ = self.call(['certificate', 'issue', '--send', '--no-input'])
+        result = json.loads(output)['result']
+        self.assertEqual(code, 2)
+        self.assertEqual(result['required_action'], 'sms_sent_input_required')
+        self.assertEqual(result['device_phone_verification'], 'unknown')
+        self.assertEqual(self.calls, ['RSMCM1200A02', 'RSMCM9009A06'])
+        self.assertNotIn('RSMCM0801A07', self.calls)
+
+    def test_legacy_device_metadata_reaches_fds_and_registration_without_replacing_id(self):
+        settings_path = setup.root()/'settings.json'
+        old = storage.read_json(settings_path)
+        old['device'].update(model='', os_version='')
+        storage.atomic_json(settings_path, old)
+        requests = []
+        def ca(payload, *args, **kwargs):
+            requests.append(json.loads(payload))
+            return self.ca_server(payload, *args, **kwargs)
+        with patch.object(transport, 'post_certificate', ca):
+            result = issuance.run(lambda _: self.ask)
+        self.assertEqual(result['certificate_registration'], 'success')
+        fds = next(body for trx, body in self.requests if trx == 'RSMCM1005A02')
+        self.assertEqual((fds['phoneModel'], fds['osVersion']), ('SM-S921N', '14'))
+        self.assertEqual(requests[0]['CUST_CCTN_MCTL_OPSS_VRSN_VL'], '14')
+        self.assertEqual(requests[0]['CUST_CCTN_MCTL_ID'], old['device']['device_id'])
 
     def test_direct_account_entry_works_with_empty_remembered_account_list(self):
         self.overrides['RSMCM0800C01'] = {'accountList': []}
@@ -197,7 +234,7 @@ class FirstIssuanceTests(PrivateHome):
 
     def test_terminal_adapter_completes_short_command_and_keeps_choices_private(self):
         (setup.root()/'settings.json').unlink()
-        visible = ['Synthetic Customer', '900101', '1', '1', '1']
+        visible = ['', 'Synthetic Customer', '900101', '1', '1', '1']
         answers = ['246802', '1000000', '2468', '617', '24', '86', '246802', '246802',
                    self.password.decode(), self.password.decode()]
         with patch('sys.stdin.isatty', return_value=True), patch('getpass.getpass', side_effect=answers) as inputs, \
@@ -244,7 +281,7 @@ class FirstIssuanceTests(PrivateHome):
         self.consent = False
         result = issuance.run(lambda _: self.ask)
         self.assertEqual(result['required_action'], 'terms_declined')
-        self.assertEqual(self.calls, ['RSMCM9000C10'])
+        self.assertEqual(self.calls, ['RSMCM1200A02', 'RSMCM9009A06', 'RSMCM1200A02', 'RSMCM9000C10'])
 
     def test_no_send_never_reads_settings_or_prompts(self):
         with patch.object(setup, 'load', side_effect=AssertionError()), \
@@ -270,7 +307,7 @@ class FirstIssuanceTests(PrivateHome):
 
     def test_all_argument_inputs_issue_without_terminal_or_prompts(self):
         self.card = False
-        args = ['certificate', 'issue', '--send', '--no-input']
+        args = ['certificate', 'issue', '--send', '--no-input', '--sms-sent']
         for name, value in self.arguments().items():
             args.extend(['--'+name.replace('_', '-'), value])
         with patch('sys.stdin.isatty', return_value=False), \
@@ -279,8 +316,8 @@ class FirstIssuanceTests(PrivateHome):
             code, output, error = self.call(args)
         result = json.loads(output)['result']
         self.assertEqual((code, result['certificate_registration']), (0, 'success'))
-        self.assertEqual(result['device_phone_verification'], 'previously_verified')
-        self.assertNotIn('RSMCM1200A02', self.calls)
+        self.assertEqual(result['device_phone_verification'], 'success')
+        self.assertEqual(self.calls.count('RSMCM1200A02'), 2)
         self.assertEqual(self.calls.count('RSMCM0801A07'), 1)
         for secret in ('Synthetic Customer', '900101', '110000000', self.password.decode(), '246802'):
             self.assertNotIn(secret, output+error)
@@ -293,7 +330,7 @@ class FirstIssuanceTests(PrivateHome):
         with patch('sys.stdin.isatty', return_value=False), \
              patch('getpass.getpass', side_effect=AssertionError('Secret prompt')), \
              patch('builtins.input', side_effect=AssertionError('Ordinary prompt')):
-            code, output, _ = self.call(['certificate', 'issue', '--send', '--no-input',
+            code, output, _ = self.call(['certificate', 'issue', '--send', '--no-input', '--sms-sent',
                                         '--input-file', str(path), '--name', 'Synthetic Customer'])
         self.assertEqual(code, 0)
         self.assertEqual(json.loads(output)['result']['certificate_registration'], 'success')
@@ -302,7 +339,7 @@ class FirstIssuanceTests(PrivateHome):
         self.assertEqual(self.calls.count('RSMCM1100A09'), 1)
 
     def test_piped_inputs_complete_without_a_controlling_terminal(self):
-        answers = ['Synthetic Customer', '900101', '1', '1', '246802', '1000000', '1',
+        answers = ['', 'Synthetic Customer', '900101', '1', '1', '246802', '1000000', '1',
                    '2468', '617', '24', '86', '246802', '246802', self.password.decode(), self.password.decode()]
         with patch('sys.stdin', io.StringIO('\n'.join(answers)+'\n')), \
              patch('getpass.getpass', side_effect=AssertionError('Controlling terminal')):
@@ -315,14 +352,14 @@ class FirstIssuanceTests(PrivateHome):
 
     def test_missing_input_preserves_verified_phone_and_terms_success(self):
         with patch('builtins.input', side_effect=AssertionError('Prompt')):
-            code, output, _ = self.call(['certificate', 'issue', '--send', '--no-input'])
+            code, output, _ = self.call(['certificate', 'issue', '--send', '--no-input', '--sms-sent'])
         result = json.loads(output)['result']
         self.assertEqual(code, 2)
         self.assertNotEqual(result['bank_result'], 'failure')
         self.assertEqual(result['stages'][0]['bank_result'], 'success')
-        self.assertEqual(result['device_phone_verification'], 'previously_verified')
+        self.assertEqual(result['device_phone_verification'], 'success')
         self.assertEqual(result['required_action'], 'name_input_required')
-        self.assertEqual(self.calls, ['RSMCM9000C10'])
+        self.assertEqual(self.calls, ['RSMCM1200A02', 'RSMCM9009A06', 'RSMCM1200A02', 'RSMCM9000C10'])
 
     def test_invalid_argument_names_field_without_echo_or_network(self):
         code, output, error = self.call(['certificate', 'issue', '--send', '--birth', 'SYN-BAD-BIRTH'])
@@ -334,7 +371,7 @@ class FirstIssuanceTests(PrivateHome):
         self.assertEqual(self.calls, [])
 
     def test_invalid_terminal_field_is_reentered_without_repeating_bank_request(self):
-        answers = ['Synthetic Customer', '19900101', '900101', '1', 'SKT', '1', '246802', '1000000', '1',
+        answers = ['', 'Synthetic Customer', '19900101', '900101', '1', 'SKT', '1', '246802', '1000000', '1',
                    '2468', '617', '24', '86', '246802', '246802', self.password.decode(), self.password.decode()]
         with patch('sys.stdin', io.StringIO('\n'.join(answers)+'\n')):
             code, output, error = self.call(['certificate', 'issue', '--send'])
@@ -358,7 +395,7 @@ class FirstIssuanceTests(PrivateHome):
                 raise OSError('Synthetic terms save error')
             return write(path, *args, **kwargs)
         with patch.object(storage, 'write_new', side_effect=save), patch('sys.stderr'):
-            result = issuance.run(lambda exchange: issuance_input.factory(exchange, self.arguments(), no_input=True))
+            result = issuance.run(lambda exchange: issuance_input.factory(exchange, self.arguments() | {'sms_sent': True}, no_input=True))
         self.assertEqual(result['certificate_registration'], 'success')
         self.assertIn('issuance_input_details_save_error', result['warnings'])
 
