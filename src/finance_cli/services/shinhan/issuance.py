@@ -1,4 +1,4 @@
-"""Interactive first certificate enrollment through the account/security route."""
+"""First certificate enrollment through the account/security route."""
 from finance_cli.core import storage
 from . import device_phone, enrollment, issuance_auth, issue, keypad, pin_registration, security_media, session, setup
 from .enrollment import Pending

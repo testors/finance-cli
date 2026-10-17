@@ -1,5 +1,6 @@
 """First issue command through synthetic bank/ECDH/CMP and encrypted storage."""
 import base64
+import io
 import json
 import math
 from unittest.mock import Mock, patch
@@ -196,13 +197,16 @@ class FirstIssuanceTests(PrivateHome):
 
     def test_terminal_adapter_completes_short_command_and_keeps_choices_private(self):
         (setup.root()/'settings.json').unlink()
-        answers = ['y', 'Synthetic Customer', '900101', '1', '1', '246802', 'y', '1000000',
-                   '1', '2468', '617', '24', '86', '246802', '246802', self.password.decode(), self.password.decode()]
+        visible = ['Synthetic Customer', '900101', '1', '1', '1']
+        answers = ['246802', '1000000', '2468', '617', '24', '86', '246802', '246802',
+                   self.password.decode(), self.password.decode()]
         with patch('sys.stdin.isatty', return_value=True), patch('getpass.getpass', side_effect=answers) as inputs, \
+             patch('builtins.input', side_effect=visible) as ordinary, \
              patch.object(setup, 'extract', return_value={key: value for key, value in settings().items() if key != 'device'}):
             code, output, error = self.call(['certificate', 'issue', '--apk', 'synthetic.zip', '--send'])
         self.assertEqual(code, 0)
         self.assertEqual(inputs.call_count, len(answers))
+        self.assertEqual(ordinary.call_count, len(visible))
         device = setup.load()['device']
         fds = next(body for trx, body in self.requests if trx == 'RSMCM1005A02')
         self.assertEqual((fds['phoneModel'], fds['osVersion']), (device['model'], device['os_version']))
@@ -250,15 +254,113 @@ class FirstIssuanceTests(PrivateHome):
         self.assertEqual(code, 2)
         self.assertEqual(json.loads(out)['result']['error'], 'send_required')
 
-    def test_noninteractive_input_and_outdated_settings_stop_without_bank_calls(self):
-        with patch('sys.stdin.isatty', return_value=False), patch.object(setup, 'load', side_effect=AssertionError()):
-            self.assertEqual(json.loads(self.call(['certificate', 'issue', '--send'])[1])['result']['error'], 'interactive_input_required')
+    def test_outdated_settings_stop_without_bank_calls(self):
         old = setup.load(); old.pop('pin_check_key')
         storage.atomic_json(setup.root()/'settings.json', old)
         result = issuance.run(lambda _: self.ask)
         self.assertEqual(result['error'], 'issuance_settings_update_required')
         self.assertFalse(result['network_used'])
         self.assertEqual(self.calls, [])
+
+    def arguments(self):
+        return {'name': 'Synthetic Customer', 'birth': '900101', 'gender': '1', 'telecom': '1',
+                'identity_sms_code': '246802', 'resident_identity': '1000000', 'account_number': self.account,
+                'account_password': '2468', 'card_serial': '617', 'card_first': '24', 'card_second': '86',
+                'otp': '248602', 'pin': '246802', 'storage_password': self.password.decode()}
+
+    def test_all_argument_inputs_issue_without_terminal_or_prompts(self):
+        self.card = False
+        args = ['certificate', 'issue', '--send', '--no-input']
+        for name, value in self.arguments().items():
+            args.extend(['--'+name.replace('_', '-'), value])
+        with patch('sys.stdin.isatty', return_value=False), \
+             patch('getpass.getpass', side_effect=AssertionError('Secret prompt')), \
+             patch('builtins.input', side_effect=AssertionError('Ordinary prompt')):
+            code, output, error = self.call(args)
+        result = json.loads(output)['result']
+        self.assertEqual((code, result['certificate_registration']), (0, 'success'))
+        self.assertEqual(result['device_phone_verification'], 'previously_verified')
+        self.assertNotIn('RSMCM1200A02', self.calls)
+        self.assertEqual(self.calls.count('RSMCM0801A07'), 1)
+        for secret in ('Synthetic Customer', '900101', '110000000', self.password.decode(), '246802'):
+            self.assertNotIn(secret, output+error)
+
+    def test_input_file_and_cli_override_complete_security_card_route(self):
+        values = self.arguments()
+        values['name'] = 'SYN-OVERRIDDEN'
+        path = self.home/'issue-input.json'
+        storage.write_new(path, json.dumps(values).encode())
+        with patch('sys.stdin.isatty', return_value=False), \
+             patch('getpass.getpass', side_effect=AssertionError('Secret prompt')), \
+             patch('builtins.input', side_effect=AssertionError('Ordinary prompt')):
+            code, output, _ = self.call(['certificate', 'issue', '--send', '--no-input',
+                                        '--input-file', str(path), '--name', 'Synthetic Customer'])
+        self.assertEqual(code, 0)
+        self.assertEqual(json.loads(output)['result']['certificate_registration'], 'success')
+        body = next(body for trx, body in self.requests if trx == 'RSMCM0801A07')
+        self.assertEqual(body['cusnm'], 'Synthetic Customer')
+        self.assertEqual(self.calls.count('RSMCM1100A09'), 1)
+
+    def test_piped_inputs_complete_without_a_controlling_terminal(self):
+        answers = ['Synthetic Customer', '900101', '1', '1', '246802', '1000000', '1',
+                   '2468', '617', '24', '86', '246802', '246802', self.password.decode(), self.password.decode()]
+        with patch('sys.stdin', io.StringIO('\n'.join(answers)+'\n')), \
+             patch('getpass.getpass', side_effect=AssertionError('Controlling terminal')):
+            code, output, error = self.call(['certificate', 'issue', '--send'])
+        self.assertEqual(code, 0)
+        self.assertEqual(json.loads(output)['result']['certificate_registration'], 'success')
+        self.assertNotIn('[y/n]', error)
+        self.assertIn('성명: ', error)
+        self.assertNotIn('성명 (숨김)', error)
+
+    def test_missing_input_preserves_verified_phone_and_terms_success(self):
+        with patch('builtins.input', side_effect=AssertionError('Prompt')):
+            code, output, _ = self.call(['certificate', 'issue', '--send', '--no-input'])
+        result = json.loads(output)['result']
+        self.assertEqual(code, 2)
+        self.assertNotEqual(result['bank_result'], 'failure')
+        self.assertEqual(result['stages'][0]['bank_result'], 'success')
+        self.assertEqual(result['device_phone_verification'], 'previously_verified')
+        self.assertEqual(result['required_action'], 'name_input_required')
+        self.assertEqual(self.calls, ['RSMCM9000C10'])
+
+    def test_invalid_argument_names_field_without_echo_or_network(self):
+        code, output, error = self.call(['certificate', 'issue', '--send', '--birth', 'SYN-BAD-BIRTH'])
+        self.assertEqual(code, 2)
+        result = json.loads(output)['result']
+        self.assertEqual(result['required_action'], 'identity_birth_input_invalid')
+        self.assertFalse(result['network_used'])
+        self.assertNotIn('SYN-BAD-BIRTH', output+error)
+        self.assertEqual(self.calls, [])
+
+    def test_invalid_terminal_field_is_reentered_without_repeating_bank_request(self):
+        answers = ['Synthetic Customer', '19900101', '900101', '1', 'SKT', '1', '246802', '1000000', '1',
+                   '2468', '617', '24', '86', '246802', '246802', self.password.decode(), self.password.decode()]
+        with patch('sys.stdin', io.StringIO('\n'.join(answers)+'\n')):
+            code, output, error = self.call(['certificate', 'issue', '--send'])
+        self.assertEqual(code, 0)
+        self.assertEqual(error.count('성명: '), 1)
+        self.assertEqual(error.count('생년월일 6자리: '), 2)
+        self.assertEqual(self.calls.count('RSMCM9000C10'), 1)
+        self.assertEqual(self.calls.count('RSMCM0801A07'), 1)
+        self.assertEqual(json.loads(output)['result']['certificate_registration'], 'success')
+
+    def test_input_file_is_not_read_without_send_or_for_help(self):
+        with patch.object(storage, 'read_json', side_effect=AssertionError('Input read')):
+            code, output, _ = self.call(['certificate', 'issue', '--input-file', '/missing'])
+            self.assertEqual(json.loads(output)['result']['error'], 'send_required')
+            self.assertEqual(self.call(['certificate', 'issue', '--input-file', '/missing', '--help'])[0], 0)
+
+    def test_terms_file_save_error_does_not_block_success(self):
+        write = storage.write_new
+        def save(path, *args, **kwargs):
+            if path.name.endswith('-terms.json'):
+                raise OSError('Synthetic terms save error')
+            return write(path, *args, **kwargs)
+        with patch.object(storage, 'write_new', side_effect=save), patch('sys.stderr'):
+            result = issuance.run(lambda exchange: issuance_input.factory(exchange, self.arguments(), no_input=True))
+        self.assertEqual(result['certificate_registration'], 'success')
+        self.assertIn('issuance_input_details_save_error', result['warnings'])
 
 
 class PinPolicyTests(PrivateHome):
@@ -310,7 +412,7 @@ class PinPolicyTests(PrivateHome):
 
     def test_terminal_account_can_be_entered_with_or_without_candidates(self):
         ask = issuance_input.factory(self.exchange)
-        with patch('getpass.getpass', side_effect=['110111111']):
+        with patch('builtins.input', side_effect=['110111111']), patch('sys.stderr'):
             self.assertEqual(ask('account', []), '110111111')
-        with patch('getpass.getpass', side_effect=['0', '110222222']), patch('sys.stderr'):
+        with patch('builtins.input', side_effect=['0', '110222222']), patch('sys.stderr'):
             self.assertEqual(ask('account', [{'accountNumber': '110000000'}]), '110222222')

@@ -204,13 +204,14 @@ class NavigationTests(PrivateHome):
         self.save(); self.detail()
         self.assertEqual(loan_detail.run()['detail_result'], 'success')
 
-    def test_cli_notice_prompts_only_when_needed_and_keeps_stdout_redacted(self):
+    def test_cli_notice_auto_acknowledges_with_or_without_terminal_and_keeps_stdout_redacted(self):
         self.reply({'notiTitle': 'SYN-PRIVATE'}); self.reply({}); self.detail()
         with patch('sys.stdin.isatty', return_value=True), patch('getpass.getpass', return_value='y') as prompt:
             code, out, err = self.call(['loan-detail', '--send'])
-        self.assertEqual(code, 0); prompt.assert_called_once()
+        self.assertEqual(code, 0); prompt.assert_not_called()
         self.assertNotIn('SYN-PRIVATE', out+err)
-        self.reply({})
+        self.reply({}); self.reply({}); self.detail()
         with patch('sys.stdin.isatty', return_value=False), patch('getpass.getpass', side_effect=AssertionError('TTY prompt')):
             code, out, err = self.call(['loan-detail', '--send'])
-        self.assertEqual(json.loads(out)['result']['required_action'], 'loan_program_notice_confirmation_required')
+        self.assertEqual(code, 0)
+        self.assertEqual(json.loads(out)['result']['detail_result'], 'success')

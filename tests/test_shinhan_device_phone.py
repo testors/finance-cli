@@ -179,11 +179,9 @@ class PhoneTests(PrivateHome):
         self.assertEqual(result['bank_result'], 'success')
         self.assertFalse(result['callback_ready'])
 
-    def test_cli_send_and_interactive_gates_before_settings_or_network(self):
+    def test_cli_send_gate_before_settings_or_network(self):
         with patch.object(setup, 'load', side_effect=AssertionError('Settings read')):
             self.assertEqual(json.loads(self.call(['phone', 'verify'])[1])['result']['error'], 'send_required')
-            with patch('sys.stdin.isatty', return_value=False):
-                self.assertEqual(json.loads(self.call(['phone', 'verify', '--send'])[1])['result']['error'], 'interactive_input_required')
         self.assertEqual(self.call(['phone', 'verify', '--help'])[0], 0)
 
     def test_interactive_cli_displays_sms_values_on_prompt_and_keeps_json_private(self):
@@ -191,7 +189,7 @@ class PhoneTests(PrivateHome):
         self.prepare()
         self.replies.append(reply({'rstCS5': '000', 'respTelnoS20': 'SYN-PHONE'}))
         original = phone.verify
-        with patch('sys.stdin.isatty', return_value=True), patch('getpass.getpass', return_value='') as prompt, \
+        with patch('sys.stdin.isatty', return_value=True), patch('builtins.input', return_value='') as prompt, \
              patch.object(phone, 'verify', side_effect=lambda exchange, send: original(exchange, send, fallback_seconds=0)):
             code, output, error = self.call(['phone', 'verify', '--send'])
         self.assertEqual(code, 0)
@@ -201,20 +199,21 @@ class PhoneTests(PrivateHome):
         self.assertEqual(files[0].stat().st_mode & 0o777, 0o600)
         self.assertEqual(storage.read_json(files[0]), {'destination': 'SYN-DESTINATION', 'message': 'A9b2-Cd'})
         prompt.assert_called_once()
-        displayed = prompt.call_args.args[0]
+        displayed = error
         self.assertIn('받는 번호: SYN-DESTINATION\n', displayed)
         self.assertIn('다음 한 줄만 그대로 보내세요):\nA9b2-Cd\n', displayed)
         self.assertNotIn('파일', displayed)
-        for secret in ('SYN-PHONE', 'SYN-DESTINATION', 'A9b2-Cd'):
-            self.assertNotIn(secret, output+error)
+        self.assertNotIn('SYN-PHONE', output+error)
+        for secret in ('SYN-DESTINATION', 'A9b2-Cd'):
+            self.assertNotIn(secret, output)
 
     def test_issuance_prompt_uses_same_sms_display_without_file_dependency(self):
         with patch.object(storage, 'write_new', side_effect=OSError('Synthetic write failure')), \
-             patch('getpass.getpass', return_value='') as prompt:
+             patch('builtins.input', return_value='') as prompt, patch('sys.stderr', new_callable=io.StringIO) as stderr:
             answer = issuance_input.factory(self.exchange)('send_phone_sms',
                 {'destination': 'SYN-DESTINATION', 'message': 'SYN-MESSAGE'})
         self.assertTrue(answer)
-        displayed = prompt.call_args.args[0]
+        displayed = stderr.getvalue()
         self.assertIn('받는 번호: SYN-DESTINATION\n', displayed)
         self.assertIn('\nSYN-MESSAGE\n', displayed)
         self.assertIn('phone_sms_instructions_save_error', self.exchange.report['warnings'])

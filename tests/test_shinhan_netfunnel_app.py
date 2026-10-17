@@ -192,6 +192,6 @@ class GateTests(PrivateHome):
     def test_cli_choice_only_uses_presented_button_and_progress_goes_to_stderr(self):
         value = notice.parse(json.dumps(block('continue')))
         with patch('sys.stdin.isatty', return_value=False), patch('getpass.getpass') as prompt:
-            self.assertIsNone(cli.queue_choice(value, None)); prompt.assert_not_called()
+            self.assertEqual(cli.queue_choice(value, None), 'continue'); prompt.assert_not_called()
         with patch('sys.stdin.isatty', return_value=True), patch('getpass.getpass', return_value='1'), patch('sys.stderr'):
             self.assertEqual(cli.queue_choice(value, None), 'continue')

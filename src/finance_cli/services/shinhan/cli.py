@@ -7,6 +7,7 @@ from finance_cli.cli.output import ArgumentParser, emit
 from finance_cli.core import storage
 from finance_cli.credentials.shinhan import Registry, SelectionRequired
 from . import accounts, device_phone, history, history_protocol, history_screen, issuance, issuance_input, loan_detail, loan_documents, login, session, setup
+from .enrollment import Pending
 
 
 class Parser(ArgumentParser):
@@ -31,27 +32,17 @@ def queue_progress(remaining, count):
 
 
 def queue_choice(notice, path):
-    if not sys.stdin.isatty():
-        return None
     print(notice['message'], file=sys.stderr)
     button = notice['button']
-    if button['type'] not in ('continue', 'exit'):
-        return None
-    selected = getpass.getpass(f"{button['title']} 선택: 1 (취소: Enter): ").strip()
-    return button['type'] if selected == '1' else None
+    return button['type'] if button['type'] in ('continue', 'exit') else None
 
 
 def acknowledge_program_notice(content, path, blocking):
-    if not sys.stdin.isatty():
-        return None
     if path is not None:
         print(f'은행 안내를 확인하세요: {path}', file=sys.stderr)
     else:
         print(content, file=sys.stderr)
-    if blocking:
-        getpass.getpass('은행 안내로 조회가 중단됩니다. 확인 후 Enter를 누르세요. ')
-        return False
-    return getpass.getpass('안내를 확인하고 조회를 계속할까요? [y/n]: ').strip().lower() == 'y'
+    return not blocking
 
 
 def main(argv=None):
@@ -67,13 +58,16 @@ def main(argv=None):
     issuing.add_argument('--send', action='store_true')
     issuing.add_argument('--apk', help='첫 설정 또는 발급 설정 갱신에 사용할 기본 설치 패키지')
     issuing.add_argument('--device-input', help='선택 사항: 최초 설정용 기기 JSON; 기본은 자동 생성')
+    issuance_input.add_arguments(issuing)
     auth = commands.add_parser('login', help='공통 저장소의 발급된 신한인증서로 PIN 로그인')
     auth.add_argument('--credential', help='인증서 참조; 하나만 있으면 자동 선택')
     auth.add_argument('--password-stdin', action='store_true', help='보관 암호 한 줄만 stdin으로 입력')
     auth.add_argument('--pin-file', help='소유자만 읽을 수 있는 PIN 한 줄 파일; 생략 시 숨김 입력')
     auth.add_argument('--send', action='store_true')
     phone = commands.add_parser('phone', help='문자 발신으로 휴대폰 번호 확인').add_subparsers(dest='action', required=True)
-    phone.add_parser('verify', help='본인 휴대폰으로 안내된 문자를 전송하고 은행 확인').add_argument('--send', action='store_true')
+    phone_verify = phone.add_parser('verify', help='본인 휴대폰으로 안내된 문자를 전송하고 은행 확인')
+    phone_verify.add_argument('--send', action='store_true')
+    issuance_input.add_arguments(phone_verify, phone_only=True)
     for name, description in (('accounts', '표시 가능한 신한 계좌 목록'), ('loans', '표시 가능한 신한 대출 목록')):
         item = commands.add_parser(name, help=description)
         item.add_argument('--send', action='store_true')
@@ -124,10 +118,8 @@ def main(argv=None):
         elif args.command == 'certificate':
             if args.action == 'list':
                 result = {'certificates': Registry().list(), 'network_used': False}
-            elif not sys.stdin.isatty():
-                result = {'error': 'interactive_input_required', 'network_used': False,
-                          'processing_status': 'incomplete', 'message': '최초 발급은 터미널에서 실행하세요.'}
             else:
+                values = issuance_input.options(args)
                 configured = (setup.root()/'settings.json').exists()
                 if args.apk:
                     if configured:
@@ -139,7 +131,8 @@ def main(argv=None):
                           'message': '첫 실행에는 --apk로 기본 설치 패키지를 지정하세요.'}, 2)
                     return 2
                 network_used = None
-                result = issuance.run(issuance_input.factory, queue_input=queue_choice, queue_progress=queue_progress)
+                result = issuance.run(lambda exchange: issuance_input.factory(exchange, values, no_input=args.no_input),
+                                      queue_input=queue_choice, queue_progress=queue_progress)
         elif args.command == 'login':
             reference = login.select(args.credential)
             password = sys.stdin.buffer.readline().removesuffix(b'\n').removesuffix(b'\r') if args.password_stdin else getpass.getpass('신한인증서 보관 암호: ').encode()
@@ -177,10 +170,8 @@ def main(argv=None):
             result = loan_detail.run(args.loan, acknowledge=acknowledge_program_notice, queue_progress=queue_progress)
         elif args.command == 'loan-documents':
             def acknowledge(path):
-                if not sys.stdin.isatty():
-                    return False
                 print(f'은행 안내를 확인하세요: {path}', file=sys.stderr)
-                return getpass.getpass('안내를 확인하고 조회를 계속할까요? [y/n]: ').strip().lower() == 'y'
+                return True
             if args.action == 'list':
                 loan_documents.dates(args.start_date, args.end_date)
                 network_used = None
@@ -191,12 +182,11 @@ def main(argv=None):
                 network_used = None
                 result = loan_documents.run('download', index=args.document)
         elif args.command == 'phone':
-            if not sys.stdin.isatty():
-                emit({'error': 'interactive_input_required', 'network_used': False,
-                      'message': '문자 발신 확인을 위해 터미널에서 실행하세요.'}, 2)
-                return 2
+            values = issuance_input.options(args)
             network_used = None
-            result = device_phone.run(issuance_input.send_phone_sms)
+            result = device_phone.run(lambda exchange, destination, message:
+                issuance_input.factory(exchange, values, no_input=args.no_input)('send_phone_sms',
+                    {'destination': destination, 'message': message}))
         elif args.action == 'status':
             result = session.status()
         else:
@@ -214,6 +204,9 @@ def main(argv=None):
                          and result.get('processing_status') == 'complete' and result.get('local_status', 'complete') == 'complete') else 2
         if result.get('error') == 'interrupted':
             code = 130
+    except Pending as exc:
+        result, code = {'required_action': exc.action, 'processing_status': 'incomplete',
+                        'bank_result': 'unknown', 'network_used': network_used}, 2
     except SelectionRequired as exc:
         result, code = {'error': 'credential_selection_required', 'network_used': False,
                         'message': ('보관된 신한인증서가 필요합니다. certificate issue --send로 최초 발급을 진행하세요.' if exc.count == 0 else
