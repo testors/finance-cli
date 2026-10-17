@@ -6,7 +6,7 @@ import sys
 from finance_cli.cli.output import ArgumentParser, emit
 from finance_cli.core import storage
 from finance_cli.credentials.shinhan import Registry, SelectionRequired
-from . import accounts, device_phone, issuance, issuance_input, loan_detail, loan_documents, login, session, setup
+from . import accounts, device_phone, history, history_protocol, history_screen, issuance, issuance_input, loan_detail, loan_documents, login, session, setup
 
 
 class Parser(ArgumentParser):
@@ -41,8 +41,21 @@ def queue_choice(notice, path):
     return button['type'] if selected == '1' else None
 
 
+def acknowledge_program_notice(content, path, blocking):
+    if not sys.stdin.isatty():
+        return None
+    if path is not None:
+        print(f'은행 안내를 확인하세요: {path}', file=sys.stderr)
+    else:
+        print(content, file=sys.stderr)
+    if blocking:
+        getpass.getpass('은행 안내로 조회가 중단됩니다. 확인 후 Enter를 누르세요. ')
+        return False
+    return getpass.getpass('안내를 확인하고 조회를 계속할까요? [y/n]: ').strip().lower() == 'y'
+
+
 def main(argv=None):
-    parser = Parser(prog='fin shinhan', description='신한은행 기동·인증서 로그인·계좌·대출 목록 (실서버 미검증)')
+    parser = Parser(prog='fin shinhan', description='신한은행 기동·인증서 로그인·계좌·대출·거래내역 (실서버 미검증)')
     commands = parser.add_subparsers(dest='command', required=True)
     install = commands.add_parser('setup', help='서비스 자료와 새 형식 기기 정보를 로컬에 설치')
     install.add_argument('--apk', required=True, help='버전 20.0.40 기본 설치 패키지')
@@ -65,6 +78,17 @@ def main(argv=None):
         item = commands.add_parser(name, help=description)
         item.add_argument('--send', action='store_true')
         item.add_argument('--refresh', action='store_true', help='은행에 목록 새로고침을 요청')
+    transactions = commands.add_parser('transactions', help='최근 계좌 목록에서 선택한 계좌의 거래내역')
+    transactions.add_argument('--account', type=int, help='accounts 목록의 순번; 한 건이면 자동 선택')
+    transactions.add_argument('--next', action='store_true', help='직전 조회 조건을 유지하고 다음 페이지 조회')
+    transactions.add_argument('--start-date', help='조회 시작일 YYYY-MM-DD; 기간 생략 시 최근 3개월')
+    transactions.add_argument('--end-date', help='조회 종료일 YYYY-MM-DD; 시작일과 함께 지정')
+    transactions.add_argument('--type', choices=('all', 'deposit', 'withdrawal', 'atm'), default='all')
+    transactions.add_argument('--sort', choices=('latest', 'oldest'), default='latest')
+    transactions.add_argument('--min-amount', type=int)
+    transactions.add_argument('--max-amount', type=int)
+    transactions.add_argument('--keyword', default='')
+    transactions.add_argument('--send', action='store_true')
     detail = commands.add_parser('loan-detail', help='최근 대출 목록에서 선택한 계좌의 금액·금리·기간 조회')
     detail.add_argument('--loan', type=int, help='대출 목록의 순번; 한 건이면 자동 선택')
     detail.add_argument('--send', action='store_true')
@@ -87,7 +111,7 @@ def main(argv=None):
             item.add_argument('--device-input', help='선택 사항: 최초 설정용 기기 JSON; 기본은 자동 생성')
     args = parser.parse_args(argv)
     issue_requested = args.command == 'certificate' and args.action == 'issue'
-    if (issue_requested or args.command in ('login', 'accounts', 'loans', 'phone', 'loan-documents', 'loan-detail') or args.command == 'session' and args.action != 'status') and not args.send:
+    if (issue_requested or args.command in ('login', 'accounts', 'loans', 'transactions', 'phone', 'loan-documents', 'loan-detail') or args.command == 'session' and args.action != 'status') and not args.send:
         emit({'error': 'send_required', 'network_used': False,
               'message': '기관 연결에는 --send가 필요합니다.'}, 2)
         return 2
@@ -128,21 +152,28 @@ def main(argv=None):
         elif args.command in ('accounts', 'loans'):
             network_used = None
             result = accounts.run(loans=args.command == 'loans', refresh=args.refresh)
+        elif args.command == 'transactions':
+            if args.account is not None and args.account < 1:
+                parser.error('invalid_account_index')
+            if args.next and (args.account is not None or args.start_date is not None or args.end_date is not None or
+                             args.type != 'all' or args.sort != 'latest' or args.min_amount is not None or
+                             args.max_amount is not None or args.keyword):
+                parser.error('conflicting_history_page_options')
+            options = {'transaction_type': {'all': 'DEFAULT', 'deposit': 'DEPOSIT', 'withdrawal': 'WITHDRAWAL', 'atm': 'SHINHAN_ATM'}[args.type],
+                       'sort': 'LATEST_ORDER' if args.sort == 'latest' else 'PAST_ORDER',
+                       'min_amount': history_protocol.MIN_AMOUNT if args.min_amount is None else args.min_amount,
+                       'max_amount': history_protocol.MAX_AMOUNT if args.max_amount is None else args.max_amount,
+                       'keyword': args.keyword}
+            history_protocol.Query('', **options)
+            if args.start_date is not None or args.end_date is not None:
+                history_screen.period(args.start_date, args.end_date)
+            network_used = None
+            result = history.run(args.account, next_page=args.next, start=args.start_date, end=args.end_date,
+                                 acknowledge=acknowledge_program_notice, queue_progress=queue_progress, **options)
         elif args.command == 'loan-detail':
             if args.loan is not None and args.loan < 1:
                 parser.error('invalid_loan_index')
             network_used = None
-            def acknowledge_program_notice(content, path, blocking):
-                if not sys.stdin.isatty():
-                    return None
-                if path is not None:
-                    print(f'은행 안내를 확인하세요: {path}', file=sys.stderr)
-                else:
-                    print(content, file=sys.stderr)
-                if blocking:
-                    getpass.getpass('은행 안내로 조회가 중단됩니다. 확인 후 Enter를 누르세요. ')
-                    return False
-                return getpass.getpass('안내를 확인하고 조회를 계속할까요? [y/n]: ').strip().lower() == 'y'
             result = loan_detail.run(args.loan, acknowledge=acknowledge_program_notice, queue_progress=queue_progress)
         elif args.command == 'loan-documents':
             def acknowledge(path):
@@ -202,7 +233,7 @@ def main(argv=None):
     except (ValueError, OSError, TypeError, KeyError):
         result, code = {'error': 'local_input_or_processing_error', 'network_used': network_used,
                         'bank_result': 'unknown',
-                        'message': '설치 자료·기기 입력·파일 권한을 확인하세요. 입력값은 출력하지 않습니다.'}, 2
+                        'message': '설치 자료·입력값·파일 권한을 확인하세요. 입력값은 출력하지 않습니다.'}, 2
     except (EOFError, KeyboardInterrupt):
         # Cancellation does not establish whether a bank request was accepted.
         result, code = {'error': 'interrupted', 'bank_result': 'unknown',

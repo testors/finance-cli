@@ -36,17 +36,17 @@ def run(*, loans=False, refresh=False):
                 body = document['dataBody']
                 categories = protocol.categories(body)
                 selected = protocol.visible(categories, loans=loans)
+                scope = 'visible_shinhan_loans' if loans else 'visible_shinhan_accounts'
                 state['accounts'] = {'attempt': exchange.attempt, 'credential': state.get('credential'),
-                                     'categories': categories, 'summary': protocol.summary(body['totalSummary'])}
+                                     'selection_scope': scope, 'categories': categories, 'summary': protocol.summary(body['totalSummary'])}
                 count = sum(len(category['assetList']) for category in selected)
-                if loans:
-                    index = 0
-                    selected = [{**category, 'assetList': [dict(row) for row in category['assetList']]} for category in selected]
-                    for category in selected:
-                        for row in category['assetList']:
-                            index += 1
-                            row['index'] = index
-                report.update(processing_status='complete', selection_scope='visible_shinhan_loans' if loans else 'visible_shinhan_accounts', count=count)
+                index = 0
+                selected = [{**category, 'assetList': [dict(row) for row in category['assetList']]} for category in selected]
+                for category in selected:
+                    for row in category['assetList']:
+                        index += 1
+                        row['index'] = index
+                report.update(processing_status='complete', selection_scope=scope, count=count)
                 # Product data stays separate from the shareable diagnostic report.
                 output = exchange.run / 'accounts.json'
                 try:

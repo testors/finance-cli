@@ -1,8 +1,9 @@
 """Native account and program notice checks before opening a banking page."""
 import json
+import re
 
 from finance_cli.core import storage
-from . import account_protocol as codec, menu_protocol, transport
+from . import account_protocol as codec, menu_protocol, netfunnel, transport
 from .enrollment import Pending
 
 NOTICE = codec.strings('notiType notiTitle notiMsg1 notiMsg2 notiMsg3 notiMsg4 notiMsg5 notiMsg6 imgUrl linkId')
@@ -108,7 +109,7 @@ def notice_info(intro, name):
     return {row['prId']: row for row in value['programNotiList']}.get(name)
 
 
-def notice(exchange, intro, name, done, acknowledge):
+def notice(exchange, intro, name, done, acknowledge, *, stage="loan_program_notice"):
     info = notice_info(intro, name)
     if info is None:
         return False
@@ -116,7 +117,7 @@ def notice(exchange, intro, name, done, acknowledge):
         raise Pending('loan_netfunnel_required')
     if exchange is None:
         raise Pending('loan_program_notice_required')
-    verdict, document = exchange.bank('loan_program_notice', 'RSMCM9007A11', {'notiSeq': info['notiSeq']}, response_parser=parse_reply)
+    verdict, document = exchange.bank(stage, 'RSMCM9007A11', {'notiSeq': info['notiSeq']}, response_parser=parse_reply)
     exchange.report.update(bank_result=verdict['bank_result'], notice_lookup_result=verdict['bank_result'],
                            notice_result=verdict['notice_result'])
     if verdict['notice_result'] == 'unverified':
@@ -145,3 +146,53 @@ def notice(exchange, intro, name, done, acknowledge):
     # The native navigator checks the same copied ProgramEntity again. Notice
     # lookup is performed again, even with donePreCheckNotice=true.
     return True
+
+
+def prechecks(settings, state, found, exchange):
+    minimum = found.get('AND_MIN_APP_VER', '')
+    if minimum:
+        versions = [value.replace('.', '') for value in (settings['version'], minimum)]
+        if any(not re.fullmatch(r'[+-]?[0-9]+', value) or not -2**31 <= int(value) < 2**31 for value in versions) or int(versions[0]) < int(versions[1]):
+            raise Pending('loan_program_version_required')
+    user = (state.get('login') or {}).get('user')
+    if user is None:
+        user = {}
+    if not isinstance(user, dict):
+        raise Pending('loan_login_state_unverified')
+    if state.get('emergency'):
+        raise Pending('loan_banking_login_required')
+    grade = found.get('LOGIN_LEVEL', '')
+    if grade != '0':
+        if grade != '1' and user.get('membGdS2') == '01':
+            raise Pending('loan_banking_grade_required')
+        if user.get('loginLevS2') == '2' and found.get('ID_USABLE_YN') != 'Y':
+            raise Pending('loan_other_login_required')
+    if found.get('LONGTERM_TRANSFER_CHK_YN') == 'Y' and user.get('cusSangtaeS2') == '05':
+        raise Pending('loan_long_term_transfer_notice')
+    account(found, user, exchange)
+
+
+def open_program(settings, state, found, exchange=None, acknowledge=None, queue_progress=None, *, scope="loan"):
+    intro = state.get("intro") or {}
+    name = found.get("PR_ID")
+    try:
+        done = False
+        while True:
+            prechecks(settings, state, found, exchange)
+            info = notice_info(intro, name)
+            if info is not None and info['popType'] == '99' and exchange is not None:
+                netfunnel.program(exchange, info['popLinkId'], progress=queue_progress)
+                # The native NetFunnel reason resumes this destination directly,
+                # without running the remaining group guard or repeating checks.
+                return name
+            if notice(exchange, intro, name, done, acknowledge, stage=scope+"_program_notice"):
+                done = True
+                continue
+            user = (state.get('login') or {}).get('user') or {}
+            if found.get('GRP_AGREE_YN') == '1' and user.get('superAgreeYn') != 'Y':
+                raise Pending('loan_group_agreement_required')
+            return name
+    except Pending as error:
+        if scope != "loan" and error.action.startswith("loan_"):
+            raise Pending(scope+error.action[4:]) from None
+        raise

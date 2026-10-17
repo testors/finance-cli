@@ -1,14 +1,14 @@
 """Selected loan account information, preserving each page's request order."""
 import copy
 import json
-import re
 
 from finance_cli.core import storage
-from . import account_protocol, legacy_web, menu as navigation, menu_protocol, navigation_guard, netfunnel, setup
+from . import account_protocol, legacy_web, menu as navigation, menu_protocol, navigation_guard, setup
 from .accounts import LoginRequired
 from .enrollment import Pending
 from .exchange import Exchange
 from .session import SessionRequired
+from .navigation_guard import prechecks
 
 PROGRAMS = {'BM0302S0404F01': 'installment', 'BM0310S0402F01': 'overdraft', 'BM0302S0403F01': 'current'}
 
@@ -52,46 +52,7 @@ def program(settings, state, row, exchange=None, acknowledge=None, queue_progres
         raise Pending('loan_destination_not_implemented')
     if found.get('MOVE_URL') != f'/web/pages/BM/BM03/{name[:6]}/{name}.html':
         raise Pending('loan_destination_path_not_implemented')
-    done = False
-    while True:
-        prechecks(settings, state, found, exchange)
-        info = navigation_guard.notice_info(intro, name)
-        if info is not None and info['popType'] == '99' and exchange is not None:
-            netfunnel.program(exchange, info['popLinkId'], progress=queue_progress)
-            # The native NetFunnel reason resumes this destination directly,
-            # without running the remaining group guard or repeating checks.
-            return name
-        if navigation_guard.notice(exchange, intro, name, done, acknowledge):
-            done = True
-            continue
-        user = (state.get('login') or {}).get('user') or {}
-        if found.get('GRP_AGREE_YN') == '1' and user.get('superAgreeYn') != 'Y':
-            raise Pending('loan_group_agreement_required')
-        return name
-
-
-def prechecks(settings, state, found, exchange):
-    minimum = found.get('AND_MIN_APP_VER', '')
-    if minimum:
-        versions = [value.replace('.', '') for value in (settings['version'], minimum)]
-        if any(not re.fullmatch(r'[+-]?[0-9]+', value) or not -2**31 <= int(value) < 2**31 for value in versions) or int(versions[0]) < int(versions[1]):
-            raise Pending('loan_program_version_required')
-    user = (state.get('login') or {}).get('user')
-    if user is None:
-        user = {}
-    if not isinstance(user, dict):
-        raise Pending('loan_login_state_unverified')
-    if state.get('emergency'):
-        raise Pending('loan_banking_login_required')
-    grade = found.get('LOGIN_LEVEL', '')
-    if grade != '0':
-        if grade != '1' and user.get('membGdS2') == '01':
-            raise Pending('loan_banking_grade_required')
-        if user.get('loginLevS2') == '2' and found.get('ID_USABLE_YN') != 'Y':
-            raise Pending('loan_other_login_required')
-    if found.get('LONGTERM_TRANSFER_CHK_YN') == 'Y' and user.get('cusSangtaeS2') == '05':
-        raise Pending('loan_long_term_transfer_notice')
-    navigation_guard.account(found, user, exchange)
+    return navigation_guard.open_program(settings, state, found, exchange, acknowledge, queue_progress)
 
 
 def parameters(value, kind):

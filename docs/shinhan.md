@@ -103,6 +103,29 @@ fin --format json-v1 shinhan loans --send
 
 성공한 조회에서 `count: 0`은 현재 표시 조건에 맞는 목록이 비었다는 뜻입니다. 숨김 계좌까지 포함한 전체 대출 부재를 뜻하지 않습니다. 실패·미확인·본문 해석 오류에는 건수를 반환하지 않습니다. 자료 저장 오류가 은행 성공을 취소하거나 요청을 다시 실행하지 않습니다.
 
+## 선택한 계좌의 거래내역
+
+최근 `accounts` 결과 파일의 `index`로 계좌를 선택합니다. 한 건이면 `--account`를 생략할 수 있습니다. 기본 조회 기간은 한국 시각 기준 최근 3개월입니다.
+
+```sh
+fin --format json-v1 shinhan accounts --send
+fin --format json-v1 shinhan transactions --send
+# 계좌가 여러 개일 때
+fin --format json-v1 shinhan transactions --account 1 --start-date 2026-01-01 --end-date 2026-10-17 --send
+# has_next가 true일 때 다음 페이지
+fin --format json-v1 shinhan transactions --next --send
+```
+
+`--type all|deposit|withdrawal|atm`, `--sort latest|oldest`, `--min-amount`, `--max-amount`, `--keyword`로 조회 조건을 지정합니다. `--next`는 직전 조건과 커서를 재사용하며 다른 조회 옵션과 함께 쓰지 않습니다. 페이지는 자동으로 넘기지 않습니다. ATM 필터로 현재 페이지가 비어도 `has_next: true`이면 이어조회할 수 있습니다.
+
+계좌 행 또는 화면에 표시되는 첫 버튼이 은행 앱의 신한 거래내역 화면으로 연결될 때 지원합니다. 해당 이동 정보의 계좌번호를 사용하며 일반 계좌 순번과 `loans` 순번을 혼용하지 않습니다. 새 목록을 조회하거나 인증서가 바뀌면 이전 이어조회는 사용할 수 없습니다.
+
+`data_file`에는 계좌 정보 `header`와 지금까지 받은 `pages`를 권한 `0600`으로 저장합니다. 각 페이지의 `data` 첫 항목은 잔액 안내이고 그 뒤가 거래 행입니다. `count`는 누적 거래 건수이며 페이지별 안내 항목을 제외합니다. 거래 순서·중복·취소 표시와 은행 앱의 금액 변환을 보존합니다. 계좌·거래 데이터와 응답 원문은 공유하지 마세요.
+
+계좌 정보 조회와 거래 목록 조회의 판정은 `header_result`, `page_result`로 나눕니다. 계좌 정보 조회가 실패해도 거래 목록 조회는 진행하며, 일부만 성공하면 `bank_result: partial_success`입니다. 다음 페이지나 파일 저장이 실패해도 앞서 받은 페이지와 확인된 은행 성공을 보존합니다. `processing_status`와 `local_status`는 은행 판정과 별개입니다.
+
+화면의 로그인·계좌 보유·공지·접속 대기 조건도 적용합니다. 단축 진입 조회, 계좌 버튼 확인 팝업, 고객확인 안내, 그룹 동의와 장기 미이체 안내는 `required_action`으로 표시하며 아직 연결 중입니다. 고객확인 안내는 은행 앱처럼 조회와 별개로 발생하므로 받은 조회 결과를 함께 보존합니다. 이 명령은 합성 검증까지 완료했으며 실서버 수락은 아직 확인하지 않았습니다.
+
 ## 선택한 대출 계좌 상세
 
 `loans` 결과 파일의 각 행에 있는 `index`로 선택합니다. 대출이 한 건이면 `--loan`을 생략할 수 있습니다.

@@ -37,6 +37,7 @@ for args, source in (
     (['--format','json-v1','shinhan','session','status'], ''),
     (['shinhan','accounts','--help'], ''),
     (['shinhan','loans','--help'], ''),
+    (['shinhan','transactions','--help'], ''),
     (['shinhan','loan-detail','--help'], ''),
     (['shinhan','phone','verify','--help'], ''),
     (['shinhan','certificate','issue','--help'], ''),

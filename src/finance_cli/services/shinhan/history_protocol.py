@@ -41,7 +41,7 @@ def decode(text, schema=BODY):
     return value
 
 
-def parse_reply(reply):
+def parse_reply(reply, *, schema=BODY, body_error='history_body_unavailable'):
     # A malformed success body is a local processing problem, not bank FAIL.
     try:
         text = reply.body.decode('utf-8-sig')
@@ -51,11 +51,11 @@ def parse_reply(reply):
     verdict, _ = transport.parse(transport.Reply(reply.status, reply.headers, json.dumps(document).encode(), reply.error))
     if verdict['bank_result'] == 'success':
         try:
-            document = decode(text, {'dataHeader': (account_protocol.HEADER, None), 'dataBody': (BODY, None)})
+            document = decode(text, {'dataHeader': (account_protocol.HEADER, None), 'dataBody': (schema, None)})
             if document['dataBody'] is None:
                 raise ValueError('history_body_null')
         except (ValueError, ArithmeticError, RecursionError):
-            verdict.update(processing_status='incomplete', error='history_body_unavailable')
+            verdict.update(processing_status='incomplete', error=body_error)
             document['dataBody'] = None
     return verdict, document
 
