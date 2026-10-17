@@ -6,7 +6,7 @@ import sys
 from finance_cli.cli.output import ArgumentParser, emit
 from finance_cli.core import storage
 from finance_cli.credentials.shinhan import Registry, SelectionRequired
-from . import accounts, device_phone, issuance, issuance_input, login, session, setup
+from . import accounts, device_phone, issuance, issuance_input, loan_documents, login, session, setup
 
 
 class Parser(ArgumentParser):
@@ -50,6 +50,15 @@ def main(argv=None):
         item = commands.add_parser(name, help=description)
         item.add_argument('--send', action='store_true')
         item.add_argument('--refresh', action='store_true', help='은행에 목록 새로고침을 요청')
+    documents = commands.add_parser('loan-documents', help='발급된 대출 증빙 조회').add_subparsers(dest='action', required=True)
+    document_list = documents.add_parser('list', help='금리산정내역서 또는 여신증명서 신청 목록')
+    document_list.add_argument('--type', choices=('rate', 'credit'), default='rate', help='기본: rate(금리산정내역서); credit(여신증명서 신청내역)')
+    document_list.add_argument('--start-date', help='조회 시작일 YYYY-MM-DD; 기간 생략 시 최근 1주일')
+    document_list.add_argument('--end-date', help='조회 종료일 YYYY-MM-DD')
+    document_list.add_argument('--send', action='store_true')
+    document_download = documents.add_parser('download', help='조회한 금리산정내역서를 선택해 PDF 저장')
+    document_download.add_argument('--document', type=int, help='최근 금리산정내역서 목록의 순번; 한 건이면 자동 선택')
+    document_download.add_argument('--send', action='store_true')
     sessions = commands.add_parser('session').add_subparsers(dest='action', required=True)
     sessions.add_parser('status', help='로컬 상태만 확인; 은행 로그인 유효성 확인 아님')
     for action in ('start', 'extend'):
@@ -60,7 +69,7 @@ def main(argv=None):
             item.add_argument('--device-input', help='선택 사항: 최초 설정용 기기 JSON; 기본은 자동 생성')
     args = parser.parse_args(argv)
     issue_requested = args.command == 'certificate' and args.action == 'issue'
-    if (issue_requested or args.command in ('login', 'accounts', 'loans', 'phone') or args.command == 'session' and args.action != 'status') and not args.send:
+    if (issue_requested or args.command in ('login', 'accounts', 'loans', 'phone', 'loan-documents') or args.command == 'session' and args.action != 'status') and not args.send:
         emit({'error': 'send_required', 'network_used': False,
               'message': '기관 연결에는 --send가 필요합니다.'}, 2)
         return 2
@@ -101,6 +110,21 @@ def main(argv=None):
         elif args.command in ('accounts', 'loans'):
             network_used = None
             result = accounts.run(loans=args.command == 'loans', refresh=args.refresh)
+        elif args.command == 'loan-documents':
+            def acknowledge(path):
+                if not sys.stdin.isatty():
+                    return False
+                print(f'은행 안내를 확인하세요: {path}', file=sys.stderr)
+                return getpass.getpass('안내를 확인하고 조회를 계속할까요? [y/n]: ').strip().lower() == 'y'
+            if args.action == 'list':
+                loan_documents.dates(args.start_date, args.end_date)
+                network_used = None
+                result = loan_documents.run('list', kind=args.type, start=args.start_date, end=args.end_date, acknowledge=acknowledge)
+            else:
+                if args.document is not None and args.document < 1:
+                    parser.error('invalid_document_index')
+                network_used = None
+                result = loan_documents.run('download', index=args.document)
         elif args.command == 'phone':
             if not sys.stdin.isatty():
                 emit({'error': 'interactive_input_required', 'network_used': False,
@@ -140,7 +164,7 @@ def main(argv=None):
                         'message': '저장된 신한 세션이 없습니다. 먼저 session start를 실행하세요.'}, 2
     except accounts.LoginRequired:
         result, code = {'error': 'login_required', 'network_used': False,
-                        'message': '계좌 조회에는 로그인된 세션이 필요합니다. 먼저 login을 실행하세요.'}, 2
+                        'message': '조회에는 로그인된 세션이 필요합니다. 먼저 login을 실행하세요.'}, 2
     except (ValueError, OSError, TypeError, KeyError):
         result, code = {'error': 'local_input_or_processing_error', 'network_used': network_used,
                         'bank_result': 'unknown',

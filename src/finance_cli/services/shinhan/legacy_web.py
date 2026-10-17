@@ -1,4 +1,4 @@
-"""Bank web callbacks used by additional telephone authentication."""
+"""Bank web callbacks, including telephone authentication and loan inquiries."""
 from . import transport, web
 from .enrollment import Pending
 
@@ -36,7 +36,7 @@ def update_challenges(state, document):
             return
 
 
-def request(exchange, stage, transaction, body, *, program, header=None, show_message=True):
+def call(exchange, stage, transaction, body, *, program, header=None, show_message=True):
     payload = web.encode(transaction, body, exchange.settings, program, header=header)
     recorded = exchange.reserve(stage, transaction=transaction)
     reply = transport.post_web(payload, exchange.state.get('cookie', ''), show_message=show_message)
@@ -58,6 +58,12 @@ def request(exchange, stage, transaction, body, *, program, header=None, show_me
         exchange.warning('web_state_update_error')
     exchange.record_response(reply)
     exchange.save()
+    return verdict, document
+
+
+def request(exchange, stage, transaction, body, *, program, header=None, show_message=True):
+    verdict, document = call(exchange, stage, transaction, body, program=program,
+                             header=header, show_message=show_message)
     if not verdict['callback_ready']:
         raise Pending(verdict['required_action'])
     if not verdict['bridge_success']:

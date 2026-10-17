@@ -39,6 +39,8 @@ for args, source in (
     (['shinhan','loans','--help'], ''),
     (['shinhan','phone','verify','--help'], ''),
     (['shinhan','certificate','issue','--help'], ''),
+    (['shinhan','loan-documents','list','--help'], ''),
+    (['shinhan','loan-documents','download','--help'], ''),
     (['hana','encode-header'], '{"CHNL_SYS_HDPT":{"synthetic":true}}'),
     (['hana','session','list'], ''),
     (['hana','corporate','login','--session','synthetic','--credential','synthetic'], ''),
