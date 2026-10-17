@@ -84,9 +84,10 @@ class Fixtures:
         if attrs == 'default':
             attrs = [attribute(MESSAGE_DIGEST, _tlv(4, digest_bytes(digest, content))), attribute(CONTENT_TYPE, oid(content_type))]
         signed_bytes = content if attrs is None else aset(*attrs)
-        signature = self.keys[0].sign(signed_bytes, padding.PKCS1v15(), hashes.SHA256())
-        if corrupt:
-            signature = bytes([signature[0] ^ 1]) + signature[1:]
+        # A different signed message guarantees a digest mismatch while
+        # keeping a valid PKCS#1/DigestInfo structure. Flipping signature bytes
+        # can instead land in a random ASN.1 parsing boundary for some keys.
+        signature = self.keys[0].sign(signed_bytes + (b'\x00' if corrupt else b''), padding.PKCS1v15(), hashes.SHA256())
         fields = [number(signer_version), seq(signer.issuer_der, number(signer.serial)), algorithm(digest)]
         if attrs is not None:
             fields.append(_tlv(160, b''.join(attrs)))
