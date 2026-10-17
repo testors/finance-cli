@@ -20,7 +20,7 @@ from Crypto.Util.Padding import unpad
 
 from finance_cli.cli.main import main
 from finance_cli.core import storage
-from finance_cli.services.shinhan import session, setup, transport
+from finance_cli.services.shinhan import netfunnel_http, session, setup, transport
 
 
 def settings():
@@ -38,6 +38,9 @@ class PrivateHome(unittest.TestCase):
         self.temp = self.enterContext(tempfile.TemporaryDirectory())
         self.home = Path(self.temp).resolve() / 'home'
         self.enterContext(patch.dict(os.environ, {'FINANCE_HOME': str(self.home)}))
+        # Queue admission is a separate HTTP service. Existing bank fixtures
+        # supply its no-key completion explicitly; gate cases override this.
+        self.enterContext(patch.object(netfunnel_http, 'get', return_value='200:'))
 
     def install(self):
         folder = setup.prepare_directory()

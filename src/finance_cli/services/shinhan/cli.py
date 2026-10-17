@@ -26,6 +26,21 @@ def device_input(path):
     return None
 
 
+def queue_progress(remaining, count):
+    print(f'접속 대기: {count}명, 예상 {remaining}초', file=sys.stderr)
+
+
+def queue_choice(notice, path):
+    if not sys.stdin.isatty():
+        return None
+    print(notice['message'], file=sys.stderr)
+    button = notice['button']
+    if button['type'] not in ('continue', 'exit'):
+        return None
+    selected = getpass.getpass(f"{button['title']} 선택: 1 (취소: Enter): ").strip()
+    return button['type'] if selected == '1' else None
+
+
 def main(argv=None):
     parser = Parser(prog='fin shinhan', description='신한은행 기동·인증서 로그인·계좌·대출 목록 (실서버 미검증)')
     commands = parser.add_subparsers(dest='command', required=True)
@@ -100,7 +115,7 @@ def main(argv=None):
                           'message': '첫 실행에는 --apk로 기본 설치 패키지를 지정하세요.'}, 2)
                     return 2
                 network_used = None
-                result = issuance.run(issuance_input.factory)
+                result = issuance.run(issuance_input.factory, queue_input=queue_choice, queue_progress=queue_progress)
         elif args.command == 'login':
             reference = login.select(args.credential)
             password = sys.stdin.buffer.readline().removesuffix(b'\n').removesuffix(b'\r') if args.password_stdin else getpass.getpass('신한인증서 보관 암호: ').encode()
@@ -128,7 +143,7 @@ def main(argv=None):
                     getpass.getpass('은행 안내로 조회가 중단됩니다. 확인 후 Enter를 누르세요. ')
                     return False
                 return getpass.getpass('안내를 확인하고 조회를 계속할까요? [y/n]: ').strip().lower() == 'y'
-            result = loan_detail.run(args.loan, acknowledge=acknowledge_program_notice)
+            result = loan_detail.run(args.loan, acknowledge=acknowledge_program_notice, queue_progress=queue_progress)
         elif args.command == 'loan-documents':
             def acknowledge(path):
                 if not sys.stdin.isatty():
@@ -167,7 +182,7 @@ def main(argv=None):
                     return 2
                 setup.install(args.apk, device_input(args.device_input))
             network_used = None  # An unexpected exception cannot prove no request was sent.
-            result = session.execute(args.action)
+            result = session.execute(args.action, queue_input=queue_choice, queue_progress=queue_progress)
         code = 0 if result.get('bank_result', 'success') == 'success' and result.get('processing_status', 'complete') == 'complete' and result.get('local_status', 'complete') == 'complete' else 2
         if issue_requested:
             code = 0 if (result.get('certificate_issuance') == 'success' and result.get('certificate_registration') == 'success'

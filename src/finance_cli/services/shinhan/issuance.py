@@ -59,7 +59,7 @@ def perform(exchange, ask):
     return issue.complete(exchange, reference, password, unique, salt)
 
 
-def run(input_factory):
+def run(input_factory, *, queue_input=None, queue_progress=None):
     settings = setup.load()
     if not all(isinstance(settings.get(name), str) for name in ('pin_check_key', 'keypad_alphabet', 'e2e_key')):
         return {'operation': 'certificate_issue', 'network_used': False, 'processing_status': 'incomplete',
@@ -69,7 +69,7 @@ def run(input_factory):
     previous = storage.read_json(path) if path.exists() else {}
     startup = None
     if not previous.get('cookie'):
-        startup = session.execute('start')
+        startup = session.execute('start', queue_input=queue_input, queue_progress=queue_progress)
         if startup['bank_result'] != 'success':
             return {'operation': 'certificate_issue', 'startup': startup, 'network_used': startup['network_used'],
                     'bank_result': startup['bank_result'], 'processing_status': 'incomplete', 'error': 'startup_incomplete'}

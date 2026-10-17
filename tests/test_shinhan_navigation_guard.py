@@ -8,7 +8,7 @@ from Crypto.Cipher import AES
 from Crypto.Util.Padding import unpad
 
 from finance_cli.core import storage
-from finance_cli.services.shinhan import account_protocol, loan_detail, menu_protocol, navigation_guard as guard, setup, transport
+from finance_cli.services.shinhan import account_protocol, loan_detail, menu_protocol, navigation_guard as guard, netfunnel_http, setup, transport
 from test_shinhan import PrivateHome, response
 from test_shinhan_loan_detail import menu
 
@@ -180,10 +180,29 @@ class NavigationTests(PrivateHome):
             self.assertEqual(caught.exception.action, 'loan_account_state_unverified')
 
     def test_duplicate_intro_last_wins_and_netfunnel_does_not_query_ordinary_notice(self):
-        self.state['intro']['programNotiList'].append({'prId': 'BM0302S0404F01', 'popType': '99'})
+        self.state['intro']['programNotiList'].append({'prId': 'BM0302S0404F01', 'popType': '99', 'popLinkId': 'SYN-ACTION'})
         self.save()
-        self.assertEqual(loan_detail.run()['required_action'], 'loan_netfunnel_required')
+        self.detail()
+        result = loan_detail.run()
+        self.assertEqual(result['detail_result'], 'success')
+        self.assertEqual(result['netfunnel'][0]['state'], 'END')
+        self.assertEqual(result['netfunnel'][0]['action'], 'SYN-ACTION')
+        self.assertEqual([call[0] for call in self.calls], ['RSMLO1002A01', 'RSMCM9000A03'])
+
+    def test_program_queue_block_does_not_open_detail_or_prompt_intro_continue(self):
+        self.state['intro']['programNotiList'] = [{'prId': 'BM0302S0404F01', 'popType': '99', 'popLinkId': 'SYN-ACTION'}]
+        self.save()
+        with patch.object(netfunnel_http, 'get', side_effect=['301:', '{}']):
+            result = loan_detail.run(acknowledge=Mock(side_effect=AssertionError('Unexpected prompt')))
+        self.assertEqual(result['required_action'], 'loan_netfunnel_blocked')
         self.assertEqual(self.calls, [])
+
+    def test_program_queue_end_directly_opens_destination_without_group_recheck(self):
+        self.state['intro']['programNotiList'] = [{'prId': 'BM0302S0404F01', 'popType': '99'}]
+        self.settings['menu']['R'][0]['GRP_AGREE_YN'] = '1'
+        storage.atomic_json(setup.root()/'settings.json', self.settings)
+        self.save(); self.detail()
+        self.assertEqual(loan_detail.run()['detail_result'], 'success')
 
     def test_cli_notice_prompts_only_when_needed_and_keeps_stdout_redacted(self):
         self.reply({'notiTitle': 'SYN-PRIVATE'}); self.reply({}); self.detail()

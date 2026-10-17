@@ -5,7 +5,8 @@ import json
 import uuid
 
 from finance_cli.core import storage
-from . import menu, setup, transport
+from . import menu, netfunnel, setup, transport
+from .enrollment import Pending
 
 
 class SessionRequired(ValueError):
@@ -24,7 +25,7 @@ def status():
     return result
 
 
-def execute(action):
+def execute(action, *, queue_input=None, queue_progress=None):
     settings = setup.load()
     folder = setup.prepare_directory()
     with storage.lock(folder / '.lock'):
@@ -50,6 +51,21 @@ def execute(action):
                   'authentication': 'unverified', 'network_used': False,
                   'automatic_retry': False}
         storage.write_new(run / 'report.json', (json.dumps(result)+'\n').encode())
+        if action == 'start':
+            try:
+                netfunnel.start(result, run, state, choose=queue_input, progress=queue_progress)
+            except Pending as error:
+                result.update(processing_status='incomplete', required_action=error.action)
+            except (KeyboardInterrupt, EOFError):
+                result.update(processing_status='incomplete', error='interrupted')
+            except Exception:
+                result.update(processing_status='incomplete', error='netfunnel_processing_error')
+            if result['processing_status'] == 'incomplete':
+                try: storage.atomic_json(run/'report.json', result)
+                except Exception:
+                    result.setdefault('warnings', []).append('report_save_error')
+                    result['local_status'] = 'incomplete'
+                return result
         menus = menu.Store(settings, state, result, run) if action == 'start' else None
         if menus is not None:
             body['pgmVerS10'] = menus.before_start()

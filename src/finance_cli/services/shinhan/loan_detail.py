@@ -4,7 +4,7 @@ import json
 import re
 
 from finance_cli.core import storage
-from . import account_protocol, legacy_web, menu as navigation, menu_protocol, navigation_guard, setup
+from . import account_protocol, legacy_web, menu as navigation, menu_protocol, navigation_guard, netfunnel, setup
 from .accounts import LoginRequired
 from .enrollment import Pending
 from .exchange import Exchange
@@ -25,7 +25,7 @@ def select(state, index):
     return rows[index-1], saved['attempt']
 
 
-def program(settings, state, row, exchange=None, acknowledge=None):
+def program(settings, state, row, exchange=None, acknowledge=None, queue_progress=None):
     # Only the selected row supplies navigation. Buttons and account prefixes
     # do not substitute for a row's destination.
     identity = row.get('programId', '').strip().upper().replace(' ', '')
@@ -55,6 +55,12 @@ def program(settings, state, row, exchange=None, acknowledge=None):
     done = False
     while True:
         prechecks(settings, state, found, exchange)
+        info = navigation_guard.notice_info(intro, name)
+        if info is not None and info['popType'] == '99' and exchange is not None:
+            netfunnel.program(exchange, info['popLinkId'], progress=queue_progress)
+            # The native NetFunnel reason resumes this destination directly,
+            # without running the remaining group guard or repeating checks.
+            return name
         if navigation_guard.notice(exchange, intro, name, done, acknowledge):
             done = True
             continue
@@ -214,7 +220,7 @@ def save(exchange, data):
         exchange.warning('loan_detail_data_save_error')
 
 
-def run(index=None, *, acknowledge=None):
+def run(index=None, *, acknowledge=None, queue_progress=None):
     settings = setup.load()
     folder = setup.prepare_directory()
     with storage.lock(folder/'.lock'):
@@ -228,7 +234,7 @@ def run(index=None, *, acknowledge=None):
         try:
             row, attempt = select(state, index)
             exchange.report['list_attempt'] = attempt
-            name = program(settings, state, row, exchange, acknowledge)
+            name = program(settings, state, row, exchange, acknowledge, queue_progress)
             params = parameters(row.get('programParam'), PROGRAMS[name])
             inquiry(exchange, name, params)
         except Pending as error:
