@@ -17,7 +17,12 @@ def capabilities():
     from finance_cli.core.live_verification import HANA_LEVEL, REVIEWED_ON, hana_report, giro_report, corporate_report, hometax_report
     return {'schema_version': 1, 'services': {
         'shinhan': {'offline': ['user-package-settings-extraction', 'local-session-status'],
-                    'live': ['startup-request', 'explicit-session-extension', 'device-phone-sms-verification', 'certificate-issuance-account-security', 'shinhan-account-list', 'shinhan-loan-list', 'selected-account-transactions', 'selected-loan-detail', 'selected-loan-transactions', 'loan-document-list', 'loan-rate-statement-pdf', 'native-immediate-transfer'],
+                    'live': ['startup-request', 'explicit-session-extension', 'device-phone-sms-verification', 'certificate-issuance-account-security', 'shinhan-account-list', 'shinhan-loan-list', 'selected-account-transactions', 'selected-loan-detail', 'selected-loan-transactions', 'loan-document-list', 'loan-rate-statement-pdf', 'native-immediate-transfer', 'long-unused-transfer-unlock'],
+                    'transfer_unlock': {'command': 'fin shinhan transfer unlock', 'verification': 'synthetic_only',
+                                        'scope': 'long-unused transfer service release through registered-phone ARS',
+                                        'requires': 'authenticated session, suspended status and registered withdrawal account',
+                                        'inputs': ['interactive ARS completion', 'separate request and completion commands'],
+                                        'pending': ['live verification', 'non-face identity route']},
                     'transfer': {'commands': ['fin shinhan transfer accounts', 'fin shinhan transfer prepare',
                                                'fin shinhan transfer show', 'fin shinhan transfer execute'],
                                  'verification': 'synthetic_only', 'requires': 'authenticated session and a fresh single-use preparation',

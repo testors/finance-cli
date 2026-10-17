@@ -237,6 +237,26 @@ fin --format json-v1 shinhan loan-documents list --type credit --send
 `bank_result`는 은행 응답 판정이며 `detail_result`, `document_result`, `document_available`, `document_saved`는 상세 조회·PDF 뷰어 전달 분기·데이터 수신·파일 저장 상태를 구분합니다. 상세가 비어 있거나 PDF 저장이 실패해도 확인된 은행 성공을 실패로 바꾸지 않습니다. 터미널 JSON과 `report.json`만 공유하고 목록·상세·PDF·응답 원문은 공유하지 마세요.
 
 
+## 장기미사용 이체 정지 해제
+
+로그인 후 등록 전화번호의 ARS 인증으로 이체 정지를 해제합니다. 등록 출금계좌가 있어야 하며, 비대면 실명확인 경로는 지원하지 않습니다. 계좌번호·계좌 비밀번호·인증서 PIN을 별도로 입력하지 않습니다.
+
+```sh
+fin --format json-v1 shinhan transfer unlock --send
+```
+
+수신 전화가 여러 개면 선택하고, ARS 안내에 따라 인증한 뒤 터미널에서 Enter를 누릅니다. `--auth-phone 0`은 휴대폰, `1`은 자택, `2`는 회사입니다. 은행에 등록된 사용 가능한 번호만 선택합니다.
+
+입력 대기 없이 실행하려면 요청과 완료 확인을 나눕니다. 첫 명령은 ARS를 요청하고 `ars_pending: true`, `required_action: additional_ars_response_required`로 종료합니다. 실제 전화 인증을 마친 뒤 두 번째 명령을 실행하세요. 중간에 재로그인하면 새 ARS 요청이 필요합니다.
+
+```sh
+fin --format json-v1 shinhan transfer unlock --auth-phone 0 --no-input --send
+# 전화 인증을 완료한 다음:
+fin --format json-v1 shinhan transfer unlock --ars-completed --send
+```
+
+`unlock_result: success`는 은행의 해제 성공이며 이체 실행과 별개입니다. 이어서 `transfer prepare`로 이체 테스트를 진행할 수 있습니다. `not_sent`는 해제 요청 전 중단, `unknown`은 해제 결과 미확인입니다. 완료 확인은 한 번만 전송하며 자동 재시도하지 않습니다. 해제 성공 후 로컬 저장 실패가 발생해도 은행 성공을 유지합니다. 현재 합성 검증을 마쳤고 실서버 해제 수락은 미확인입니다.
+
 ## 일반 즉시 이체
 
 로그인된 신한 계좌에서 원화 한 건을 이체합니다. 수취인·수수료·필요 인증을 먼저 조회하고, 그 결과를 한 번만 사용해 실행합니다. 아래 계좌번호는 합성 예시입니다.

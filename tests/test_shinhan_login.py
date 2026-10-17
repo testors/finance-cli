@@ -209,11 +209,13 @@ class LoginTests(PrivateHome):
         for body in ({}, None):
             state = storage.read_json(setup.root()/'session.json')
             state['transfer_pending'] = {'attempt': 'SYN-OLD-PREPARE'}
+            state['transfer_unlock'] = {'attempt': 'SYN-OLD-AUTH', 'status': 'awaiting_ars'}
             storage.atomic_json(setup.root()/'session.json', state)
             self.login_body = body
             result = self.run_login()
             self.assertEqual(result['bank_result'], 'success')
             self.assertNotIn('transfer_pending', storage.read_json(setup.root()/'session.json'))
+            self.assertNotIn('transfer_unlock', storage.read_json(setup.root()/'session.json'))
 
     def test_pisp_reuses_pin_and_nonce_without_relogging_in(self):
         from finance_cli.services.shinhan import transfer

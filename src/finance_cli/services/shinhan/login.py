@@ -71,6 +71,7 @@ def run(reference, password, pin_input):
                 return finish(exchange, 'bank_login_unavailable')
             report['authentication'] = 'bank_accepted'
             state.pop('transfer_pending', None)
+            state.pop('transfer_unlock', None)
             data = document.get('dataBody')
             if not isinstance(data, dict):
                 return finish(exchange, 'login_body_unavailable')

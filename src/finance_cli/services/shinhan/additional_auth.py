@@ -257,12 +257,21 @@ def authenticate(exchange, params, select, respond, *, login_info=None, monotoni
         raise Pending('additional_auth_cancelled')
     if method == 'ars':
         sleep(max(0, 3-(monotonic()-started)))
-    transaction, body = verify_body(params, method, logged_in, reference, answer, 180-(monotonic()-started))
+    return complete(exchange, context, answer, logged_in=logged_in, remaining=180-(monotonic()-started))
+
+
+def complete(exchange, context, answer, *, logged_in, remaining=180):
+    """Verify one already requested authentication, without requesting it again."""
+    params, method = context['params'], context['method']
+    transaction, body = verify_body(params, method, logged_in, context['reference'], answer, remaining)
+    header = {'isNative': True, 'addMsg': '1'}
+    if str(params.get('certTp')) == '1':
+        header.update(certTp=params['certTp'], serviceType='AA')
     data = legacy.request(exchange, 'additional_auth_verify', transaction, body, program=AUTH_PROGRAM, header=header)
     flag = data.get('addAuthCpltYnS1')
     verdict = 'success' if flag == 'Y' else 'failure'
     context['verification'] = exchange.report['additional_authentication'] = verdict
-    result = {**params, '휴대폰번호': phone['number'], 'trdtC8': '', 'ltrtmC6': ''}
+    result = {**params, '휴대폰번호': context['phone']['number'], 'trdtC8': '', 'ltrtmC6': ''}
     optional(result, data, [('인증여부', 'addAuthCpltYnS1')])
     if not legacy.nullish(data.get('trdtC8')) and not legacy.nullish(data.get('ltrtmC6')):
         result.update(trdtC8=data['trdtC8'], ltrtmC6=data['ltrtmC6'])

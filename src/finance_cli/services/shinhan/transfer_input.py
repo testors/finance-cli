@@ -8,6 +8,12 @@ from .enrollment import Pending
 
 def add_arguments(commands):
     actions = commands.add_parser('transfer', help='신한 출금계좌의 즉시 이체 준비·실행').add_subparsers(dest='action', required=True)
+    unlock = actions.add_parser('unlock', help='등록 전화번호 ARS로 장기미사용 이체 정지 해제')
+    unlock.add_argument('--send', action='store_true')
+    unlock.add_argument('--auth-phone', choices=('0', '1', '2'), help='ARS 수신: 휴대폰 0, 자택 1, 회사 2')
+    unlock.add_argument('--ars-completed', action='store_true', help='직전 unlock의 ARS 응답 완료 후 검증·해제만 실행')
+    unlock.add_argument('--no-input', action='store_true', help='ARS를 요청해 저장하고 완료 입력을 기다리지 않음')
+    unlock.set_defaults(auth_method='ars')
     actions.add_parser('show', help='직전 이체 준비의 계좌·예금주·금액·수수료를 로컬에서 표시')
     accounts = actions.add_parser('accounts', help='이체 가능한 출금계좌 목록 조회')
     accounts.add_argument('--send', action='store_true')

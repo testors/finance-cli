@@ -8,7 +8,7 @@ from finance_cli.core import storage
 from finance_cli.credentials.shinhan import Registry, SelectionRequired
 from . import accounts, device_phone, history, history_protocol, history_screen, issuance, issuance_input, loan_detail, loan_documents, loan_history, loan_history_protocol, login, session, setup
 from .enrollment import Pending
-from . import transfer, transfer_input
+from . import transfer, transfer_input, transfer_unlock
 
 
 class Parser(ArgumentParser):
@@ -133,7 +133,10 @@ def main(argv=None):
             elif args.action == 'execute':
                 options['input_provider'] = transfer_input.factory(args)
             network_used = False if args.action == 'show' else None
-            result = transfer.run(args.action, **options)
+            if args.action == 'unlock':
+                result = transfer_unlock.run(transfer_input.factory(args), ars_completed=args.ars_completed)
+            else:
+                result = transfer.run(args.action, **options)
         elif args.command == 'setup':
             if args.refresh and args.device_input:
                 parser.error('conflicting_device_input')
