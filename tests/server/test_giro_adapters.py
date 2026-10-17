@@ -219,7 +219,8 @@ class GiroTests(ServerCase):
     def test_tampered_draft_or_expired_confirmation_sends_no_payment(self):
         job = self.prepare()
         path = worker.job_directory(job['id']) / 'giro.sealed'
-        path.write_bytes(path.read_bytes()[:-1] + b'x')
+        sealed = path.read_bytes()
+        path.write_bytes(sealed[:-1] + bytes([sealed[-1] ^ 1]))
         result = self.confirm(job)
         self.assertEqual(result['local']['stopped'], 'giro_preparation_changed')
         self.assertNotIn('national.payment', [n for n, _ in self.calls])
